@@ -1,0 +1,4 @@
+FROM dalibo/pandocker:latest
+RUN tlmgr update --self && \
+    tlmgr update --all && \
+    tlmgr install tagpdf luamml

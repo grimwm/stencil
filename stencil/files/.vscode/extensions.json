@@ -1,0 +1,12 @@
+{
+  "recommendations": [
+    "bmewburn.vscode-intelephense-client",
+    "formulahendry.auto-close-tag",
+    "esbenp.prettier-vscode",
+    "ecmel.vscode-html-css",
+    "christian-kohler.path-intellisense",
+    "neilbrayfield.php-docblocker",
+    "xabikos.JavaScriptSnippets",
+    "dbaeumer.vscode-eslint"
+  ]
+}

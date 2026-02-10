@@ -1,0 +1,212 @@
+services:
+{% if has_web %}
+  web:
+    build: .
+    container_name: php-fpm
+    volumes:
+      - ./htdocs:/var/www/html
+{% if has_mysql %}
+    depends_on:
+      - mysql
+{% endif %}
+    networks:
+      - app-network
+
+  nginx:
+    image: docker.io/library/nginx:latest
+    container_name: nginx
+    ports:
+      - "8000:80"
+    volumes:
+      - ./htdocs:/var/www/html:z
+      - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro,z
+    depends_on:
+      - web
+    networks:
+      - app-network
+
+{% endif %}
+{% if has_mysql %}
+  mysql:
+    image: docker.io/library/mysql:9.5
+    container_name: mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: rootsecret
+      MYSQL_USER: app
+      MYSQL_PASSWORD: secret
+      MYSQL_DATABASE: app_db
+    volumes:
+      - mysql_data:/var/lib/mysql
+    ports:
+      - "3306:3306"
+    networks:
+      - app-network
+
+{% endif %}
+{% if has_web %}
+  lint-html:
+    image: docker.io/library/node:lts-alpine
+    container_name: html-linter
+    volumes:
+      - ./htdocs:/workspace:ro,z
+    working_dir: /workspace
+    environment:
+      - NPM_CONFIG_UPDATE_NOTIFIER=false
+    entrypoint:
+      - sh
+      - -c
+      - |
+        if find . -name "*.html" -type f | grep -q .; then
+          echo '{"extends":["html-validate:standard"],"rules":{"void-style":["error",{"style":"omit"}],"no-trailing-whitespace":"error","attr-quotes":["error",{"unquoted":false}],"attribute-allowed-values":"off"}}' > /tmp/.htmlvalidate.json
+          npx --yes html-validate --config /tmp/.htmlvalidate.json "**/*.html"
+        else
+          echo "No HTML files found to lint"
+        fi
+    restart: "no"
+
+  fix-html:
+    image: docker.io/library/node:lts-alpine
+    container_name: html-fixer
+    volumes:
+      - ./htdocs:/workspace:z
+    working_dir: /workspace
+    environment:
+      - NPM_CONFIG_UPDATE_NOTIFIER=false
+    entrypoint:
+      - sh
+      - -c
+      - |
+        if find . -name "*.html" -type f | grep -q .; then
+          echo "Formatting HTML files with js-beautify..."
+          npx --yes js-beautify --type html --replace --indent-size 2 --wrap-line-length 120 \
+            --indent-inner-html --no-preserve-newlines --max-preserve-newlines 1 \
+            --file "**/*.html"
+        else
+          echo "No HTML files found to format"
+        fi
+    restart: "no"
+
+  lint-php:
+    image: docker.io/library/php:8.3-cli
+    container_name: php-linter
+    volumes:
+      - ./htdocs:/workspace:ro,z
+    working_dir: /workspace
+    entrypoint:
+      - sh
+      - -c
+      - |
+        if find . -name "*.php" -type f | grep -q .; then
+          # Syntax check all PHP files
+          find . -name "*.php" -print0 | xargs -0 -n1 php -l && \
+          # Run PHP_CodeSniffer
+          curl -sL https://squizlabs.github.io/PHP_CodeSniffer/phpcs.phar -o /tmp/phpcs.phar && \
+          php /tmp/phpcs.phar --standard=PSR12 --extensions=php .
+        else
+          echo "No PHP files found to lint"
+        fi
+    restart: "no"
+
+  fix-php:
+    image: docker.io/library/php:8.3-cli
+    container_name: php-fixer
+    volumes:
+      - ./htdocs:/workspace:z
+    working_dir: /workspace
+    entrypoint:
+      - sh
+      - -c
+      - |
+        if find . -name "*.php" -type f | grep -q .; then
+          # Syntax check first (can't auto-fix syntax errors)
+          echo "Checking PHP syntax..."
+          find . -name "*.php" -print0 | xargs -0 -n1 php -l || exit 1
+          # Run PHP Code Beautifier and Fixer
+          echo "Fixing PHP style issues..."
+          curl -sL https://squizlabs.github.io/PHP_CodeSniffer/phpcbf.phar -o /tmp/phpcbf.phar && \
+          php /tmp/phpcbf.phar --standard=PSR12 --extensions=php . || true
+        else
+          echo "No PHP files found to fix"
+        fi
+    restart: "no"
+
+{% endif %}
+{% if has_mysql %}
+  lint-sql:
+    image: docker.io/sqlfluff/sqlfluff:latest
+    container_name: sql-linter
+    volumes:
+      - ./db:/project/db:ro,z
+      - ./.sqlfluff:/project/.sqlfluff:ro,z
+    working_dir: /project
+    entrypoint:
+      - sh
+      - -c
+      - |
+        sqlfluff lint --config .sqlfluff --ignore parsing db/p*.sql
+    restart: "no"
+
+  fix-sql:
+    image: docker.io/sqlfluff/sqlfluff:latest
+    container_name: sql-fixer
+    volumes:
+      - ./db:/project/db:z
+      - ./.sqlfluff:/project/.sqlfluff:ro,z
+    working_dir: /project
+    entrypoint:
+      - sh
+      - -c
+      - |
+        sqlfluff fix --config .sqlfluff --ignore parsing db/p*.sql 2>&1 | grep -v "templating/parsing"
+    restart: "no"
+
+{% endif %}
+  format-md:
+    image: docker.io/library/node:lts-alpine
+    container_name: md-formatter
+    volumes:
+      - .:/workspace:z
+    working_dir: /workspace
+    environment:
+      - NPM_CONFIG_UPDATE_NOTIFIER=false
+    entrypoint:
+      - sh
+      - -c
+      - |
+        echo "Formatting markdown files..."
+        npx --yes prettier --prose-wrap always --print-width 100 --write "*.md"
+    restart: "no"
+
+  pdf:
+    build:
+      context: .
+      dockerfile: Dockerfile.pdf
+    platform: linux/amd64
+    container_name: pdf-generator
+    volumes:
+      - .:/workspace:z
+    working_dir: /workspace
+    entrypoint:
+      - pandoc
+      - --pdf-engine=lualatex
+      - --template=pandoc-template.latex
+      - --include-in-header=pandoc-header.tex
+      - --lua-filter=table-style.lua
+      - --variable
+      - geometry:left=1in,right=1in,top=1in,bottom=1in
+      - --variable
+      - mainfont:DejaVu Sans
+      - --variable
+      - monofont:DejaVu Sans Mono
+    restart: "no"
+
+{% if has_services %}
+networks:
+  app-network:
+    driver: bridge
+
+{% endif %}
+{% if has_mysql %}
+volumes:
+  mysql_data:
+{% endif %}

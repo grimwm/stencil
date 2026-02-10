@@ -1,0 +1,21 @@
+FROM php:8.3-fpm
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    libpq-dev \
+    libsqlite3-dev \
+    libzip-dev \
+    unzip \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install PHP extensions for MySQL, PostgreSQL, and SQLite
+RUN docker-php-ext-install \
+    pdo \
+    pdo_mysql \
+    pdo_pgsql \
+    pdo_sqlite \
+    pgsql \
+    mysqli \
+    zip
+
+WORKDIR /var/www/html

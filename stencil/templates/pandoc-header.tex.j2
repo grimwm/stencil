@@ -1,0 +1,19 @@
+% Safety net: wrap long code lines instead of running off the page.
+\usepackage{fvextra}
+\fvset{breaklines, breaksymbol={}}
+
+% Table styling – colors, row padding (layout handled by table-style.lua filter).
+\usepackage{longtable}
+\usepackage{colortbl}
+\definecolor{tableheader}{RGB}{210, 222, 242}
+\definecolor{tableaccent}{RGB}{41, 65, 122}
+\definecolor{tablestripe}{RGB}{245, 247, 250}
+\definecolor{cellborder}{RGB}{200, 200, 200}
+\renewcommand{\arraystretch}{1.4}
+
+% Suppress all tagpdf tagging inside Pandoc's code block environments
+% to prevent struct-faulty-nesting errors with native syntax highlighting.
+\ExplSyntaxOn
+\AddToHook{env/Shaded/begin}{\tagpdfparaOff \tag_stop:}
+\AddToHook{env/Shaded/end}{\tag_start: \tagpdfparaOn}
+\ExplSyntaxOff

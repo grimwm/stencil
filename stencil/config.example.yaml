@@ -1,0 +1,100 @@
+# Example configuration for the package generator (_generator/generate.py).
+#
+# The generator renders Jinja2 templates and copies static files to produce
+# per-package scaffolding (Makefiles, docker-compose files, linter configs, etc).
+#
+# Usage:
+#   python generate.py --config config.yaml --list        # list packages
+#   python generate.py --config config.yaml hs6           # generate hs6
+#   python generate.py --config config.yaml hs6 --dry-run # preview only
+
+# --- Template search paths ---
+#
+# Where to find Jinja2 template files. Paths are relative to this config file.
+# Can be a single path:
+#   templates_dir: templates
+# or a list of paths searched in order (first match wins), like -I include dirs:
+#   templates_dir:
+#     - ./local-overrides
+#     - ../shared/templates
+templates_dir: templates
+
+# --- Output directory ---
+#
+# Base directory for generated output. Relative paths are relative to the
+# current working directory (not this config file). Absolute paths are used
+# as-is. If omitted, defaults to CWD.
+output_dir: ../assignments
+
+# --- Templates ---
+#
+# Jinja2 templates to render into each package's output directory.
+#
+# Fields:
+#   src:  Template filename to look up in templates_dir (required)
+#   dest: Output filename (optional; defaults to src with the .j2 suffix removed)
+#   when: A context variable name, or list of names, that must all be truthy
+#         for this template to be rendered (optional). Available context
+#         variables derived from each package's config include:
+#           has_web      - true if "web" is in services
+#           has_mysql    - true if "mysql" is in services
+#           has_services - true if any services are defined
+#           has_pdfs     - true if pdfs list is non-empty
+templates:
+  - src: Makefile.j2
+  - src: docker-compose.yml.j2
+  - src: pandoc-header.tex.j2
+  - src: pandoc-template.latex.j2
+  - src: Dockerfile.pdf.j2
+  - src: Dockerfile.j2
+    when: has_web
+  - src: nginx.conf.j2
+    when: has_web
+  - src: .sqlfluff.j2
+    when: has_mysql
+
+# --- Packages ---
+#
+# Each key is a package ID (e.g., "hs6") passed as a positional argument to
+# the generator. Templates are rendered with a context built from these fields.
+#
+# Required:
+#   package_type:   "zip" or "pdf"
+#                     zip: generates pkg target (zip submission)
+#                     pdf: pdf-only package (no pkg target, no package_name needed)
+#   package_name:   Submission filename, required for zip type (e.g., hs3.zip)
+#
+# Optional:
+#   pdfs:           List of markdown files to convert to individual PDFs.
+#                   Each file produces a PDF with the same basename (e.g., Session1.md -> Session1.pdf).
+#                   Works with both package types. Zip packages typically include README.md here.
+#   name:           Display name shown by --list (defaults to package ID)
+#   dir:            Output subdirectory under output_dir (defaults to package ID)
+#   services:       List of Docker Compose services to include. Supported values:
+#                     - web:   nginx reverse proxy + php-fpm, HTML/PHP linting
+#                     - mysql: MySQL database, SQL linting with sqlfluff
+#   package_folder: Which folder to include in the submission archive
+#                   (default: htdocs). Examples: htdocs, db, md
+#   copy_files:     Static files/directories to copy from _generator/files/.
+#                   Two formats:
+#                     - "name"                      copies name -> name
+#                     - {src: "name", dest: "path"} copies name -> path
+#   deps_script:    OS-specific dependency install scripts from _generator/scripts/.
+#                   Keyed by OS identifier:
+#                     Windows_NT: [install-docker.ps1]
+#                     default:    [install-docker.sh]
+#   sql_import:     Generates a make target to import a SQL file into MySQL.
+#                     target:   make target name (e.g., import-world)
+#                     database: MySQL database name to create/import into
+#                     file:     path to the SQL file relative to the package dir
+packages:
+  workspace:
+    name: Workspace
+    package_type: zip
+    package_name: workspace.zip
+    pdfs: [README.md]
+    services:
+      - web
+      - mysql
+    copy_files:
+      - .vscode
