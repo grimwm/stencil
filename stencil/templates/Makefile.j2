@@ -105,10 +105,7 @@ prune: down ## Remove all unused Docker resources (containers, images, volumes, 
 endif
 
 {% endif %}
-format-md: ## Format markdown files
-	$(DC) pull format-md
-	$(DC) run --rm format-md
-
+{% include 'Makefile-pdf.j2' %}
 {% if has_mysql %}
 # Note: Credentials should match MYSQL_USER and MYSQL_PASSWORD in docker-compose.yml
 mysql: ## Open MySQL shell (usage: `make mysql` or `make mysql ARGS="-e 'SHOW DATABASES'"`)
@@ -160,15 +157,6 @@ lint: fix ## Auto-fix then lint HTML and PHP files
 	$(DC) pull lint-html lint-php
 	$(DC) run --rm lint-html
 	$(DC) run --rm lint-php
-
-{% endif %}
-{% if has_pdfs %}
-pdf: format-md ## Generate PDFs from markdown files
-	$(DC) build pdf
-{% for md in pdfs %}
-	$(DC) run --rm pdf --metadata title="{{ md.split('/')[-1] | replace('.md', '') }}" {{ md }} -o {{ md | replace('.md', '.pdf') }}
-{% endfor %}
-	@echo "Generated PDFs"
 
 {% endif %}
 {% if package_type == "zip" %}

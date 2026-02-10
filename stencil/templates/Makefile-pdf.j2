@@ -1,0 +1,13 @@
+format-md: ## Format markdown files
+	$(DC) pull format-md
+	$(DC) run --rm format-md
+
+{% if has_pdfs %}
+pdf: format-md ## Generate PDFs from markdown files
+	$(DC) build pdf
+{% for md in pdfs %}
+	$(DC) run --rm pdf --metadata title="{{ md.split('/')[-1] | replace('.md', '') }}" {{ md }} -o {{ md | replace('.md', '.pdf') }}
+{% endfor %}
+	@echo "Generated PDFs"
+
+{% endif %}

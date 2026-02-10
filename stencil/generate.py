@@ -225,7 +225,6 @@ def main():
         return
 
     # Resolve templates_dir relative to config file location (string or list)
-    # Defaults to the package's bundled templates if omitted
     templates_dir_raw = config.get("templates_dir")
 
     if templates_dir_raw:
@@ -233,7 +232,12 @@ def main():
             templates_dir_raw = [templates_dir_raw]
         template_dirs = [(config_dir / d).resolve() for d in templates_dir_raw]
     else:
-        template_dirs = [SCRIPT_DIR / "templates"]
+        template_dirs = []
+
+    # Always append bundled templates as fallback search path
+    bundled = SCRIPT_DIR / "templates"
+    if bundled.resolve() not in [d.resolve() for d in template_dirs]:
+        template_dirs.append(bundled)
 
     # Resolve output_dir relative to CWD (defaults to CWD if omitted)
     output_dir_raw = config.get("output_dir")
