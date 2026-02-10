@@ -1,0 +1,19 @@
+{% if package_type == "zip" %}
+ifeq ($(OS),Windows_NT)
+pkg: ## Create submission zip file
+	@echo Creating submission zip file...
+	powershell.exe -Command "Compress-Archive -Path {{ package_folder }} -DestinationPath \"$(PKG)\" -Force"
+	@echo Created $(PKG)
+	@echo Upload $(PKG) to the course website.
+else
+pkg: ## Create submission zip file
+	@echo "Creating submission zip file..."
+	zip -r $(PKG) {{ package_folder }}
+	@echo "Created $(PKG)"
+	@echo "Upload $(PKG) to the course website."
+endif
+
+{% endif %}
+clean-pkg: ## Remove generated files
+	rm -f {% if package_type == "zip" %}$(PKG) {% endif %}{% for md in pdfs %}{{ md | replace('.md', '.pdf') }} {% endfor %}
+
