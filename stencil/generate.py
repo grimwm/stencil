@@ -105,7 +105,7 @@ def render_templates(env: Environment, template_defs: list, context: dict, outpu
             if dry_run:
                 print(f"Would write: {output_path}")
                 print("-" * 40)
-                print(content[:500] + "..." if len(content) > 500 else content)
+                print(content)
                 print()
             else:
                 # Create parent directories if needed (for scripts/)
