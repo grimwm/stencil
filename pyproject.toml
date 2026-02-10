@@ -13,6 +13,11 @@ dependencies = [
     "pyyaml>=6.0",
 ]
 
+[project.optional-dependencies]
+dev = [
+    "pre-commit",
+]
+
 [project.scripts]
 stencil = "stencil.generate:main"
 
