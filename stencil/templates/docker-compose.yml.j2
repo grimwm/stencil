@@ -77,12 +77,9 @@ services:
       - -c
       - |
         if find . -name "*.html" -type f | grep -q .; then
-          echo "Formatting HTML files with js-beautify..."
-          npx --yes js-beautify --type html --replace --indent-size 2 --wrap-line-length 120 \
-            --indent-inner-html --no-preserve-newlines --max-preserve-newlines 1 \
-            --file "**/*.html"
-          echo "Removing self-closing slashes from void elements..."
-          find . -name "*.html" -type f -exec sed -i 's| />|>|g' {} +
+          echo "Formatting HTML files..."
+          npx --yes prettier --plugin @awmottaz/prettier-plugin-void-html \
+            --print-width 120 --write "**/*.html"
         else
           echo "No HTML files found to format"
         fi
