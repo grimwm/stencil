@@ -6,7 +6,7 @@ format-md: ## Format markdown files
 pdf: format-md ## Generate PDFs from markdown files
 	$(DC) build pdf
 {% for md in pdfs %}
-	$(DC) run --rm pdf --metadata title="{{ md.split('/')[-1] | replace('.md', '') }}" {{ md }} -o {{ md | replace('.md', '.pdf') }}
+	$(DC) run --rm pdf --metadata title="{{ name }}" {{ md }} -o {{ md | replace('.md', '.pdf') }}
 {% endfor %}
 	@echo "Generated PDFs"
 

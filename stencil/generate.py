@@ -58,6 +58,7 @@ def get_template_context(package_id: str, config: dict) -> dict:
     # Build context
     context = {
         "package_id": package_id,
+        "name": package.get("name", package_id),
         "package_name": package_name,
         "package_dir": package.get("dir", f"{package_id}"),
         "package_type": package_type,
