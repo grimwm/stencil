@@ -1,8 +1,7 @@
 {% raw %}
 -- Pandoc Lua filter: styled tables with alternating row colors and cell borders.
 -- Set min-col-width in document metadata or via --metadata to override the default.
--- Supports spacer columns: columns with empty headers and all empty cells get no
--- borders and white background, acting as visual separators between table sections.
+-- Supports side-by-side tables using ::: {.side-by-side} fenced divs.
 
 local MIN_WIDTH = 0.12
 
@@ -12,47 +11,123 @@ local function cell_to_latex(cell)
   return (result:gsub('%s+$', ''))
 end
 
-local function is_cell_empty(cell)
-  local content = cell_to_latex(cell)
-  return content:match('^%s*$') ~= nil
-end
-
-local function detect_spacer_columns(tbl)
+local function render_table_latex(tbl, use_longtable)
   local ncols = #tbl.colspecs
-  local spacers = {}
 
-  for i = 1, ncols do
-    spacers[i] = true
+  -- Enforce minimum column width and redistribute from widest columns.
+  local widths = {}
+  local has_widths = false
+  for i, cs in ipairs(tbl.colspecs) do
+    widths[i] = cs[2] or 0
+    if widths[i] > 0 then has_widths = true end
   end
-
-  -- Check header cells
-  for _, row in ipairs(tbl.head.rows) do
-    for i, cell in ipairs(row.cells) do
-      if i <= ncols and not is_cell_empty(cell) then
-        spacers[i] = false
+  if has_widths then
+    local deficit = 0
+    local donor_total = 0
+    for i = 1, ncols do
+      if widths[i] > 0 and widths[i] < MIN_WIDTH then
+        deficit = deficit + (MIN_WIDTH - widths[i])
+        widths[i] = MIN_WIDTH
+      elseif widths[i] > MIN_WIDTH then
+        donor_total = donor_total + widths[i]
       end
     end
-  end
-
-  -- Check body cells
-  for _, body in ipairs(tbl.bodies) do
-    for _, row in ipairs(body.body) do
-      for i, cell in ipairs(row.cells) do
-        if i <= ncols and not is_cell_empty(cell) then
-          spacers[i] = false
+    if deficit > 0 and donor_total > 0 then
+      for i = 1, ncols do
+        if widths[i] > MIN_WIDTH then
+          widths[i] = widths[i] - deficit * (widths[i] / donor_total)
         end
       end
     end
   end
 
-  return spacers
-end
-
-local function has_any_spacer(spacers, ncols)
-  for i = 1, ncols do
-    if spacers[i] then return true end
+  -- Build column spec with vertical borders
+  local parts = {}
+  for i, cs in ipairs(tbl.colspecs) do
+    local alignment = cs[1]
+    local width = widths[i]
+    local part
+    if width and width > 0 then
+      local align_cmd = '\\raggedright'
+      if alignment == pandoc.AlignCenter then
+        align_cmd = '\\centering'
+      elseif alignment == pandoc.AlignRight then
+        align_cmd = '\\raggedleft'
+      end
+      local w = string.format(
+        '(\\linewidth - %d\\tabcolsep - %d\\arrayrulewidth) * \\real{%.4f}',
+        2 * ncols, ncols + 1, width
+      )
+      part = string.format('>{%s\\arraybackslash}p{%s}', align_cmd, w)
+    else
+      if alignment == pandoc.AlignCenter then part = 'c'
+      elseif alignment == pandoc.AlignRight then part = 'r'
+      else part = 'l'
+      end
+    end
+    table.insert(parts, part)
   end
-  return false
+
+  local colspec = '|' .. table.concat(parts, '|') .. '|'
+
+  local lines = {}
+  table.insert(lines, '{\\arrayrulecolor{cellborder}')
+
+  if use_longtable then
+    table.insert(lines, string.format('\\begin{longtable}[]{%s}', colspec))
+  else
+    table.insert(lines, string.format('\\begin{tabular}[t]{%s}', colspec))
+  end
+
+  -- Top rule: accent color
+  table.insert(lines, '\\arrayrulecolor{tableaccent}\\hline')
+
+  -- Header rows
+  for _, row in ipairs(tbl.head.rows) do
+    table.insert(lines, '\\rowcolor{tableheader}')
+    local cells = {}
+    for _, cell in ipairs(row.cells) do
+      table.insert(cells, cell_to_latex(cell))
+    end
+    table.insert(lines, table.concat(cells, ' & ') .. ' \\\\')
+    table.insert(lines, '\\hline')
+  end
+  table.insert(lines, '\\arrayrulecolor{cellborder}')
+
+  if use_longtable then
+    table.insert(lines, '\\endhead')
+  end
+
+  -- Body rows with alternating stripe
+  local rownum = 0
+  for _, body in ipairs(tbl.bodies) do
+    for _, row in ipairs(body.body) do
+      rownum = rownum + 1
+      if rownum % 2 == 0 then
+        table.insert(lines, '\\rowcolor{tablestripe}')
+      end
+      local cells = {}
+      for _, cell in ipairs(row.cells) do
+        table.insert(cells, cell_to_latex(cell))
+      end
+      table.insert(lines, table.concat(cells, ' & ') .. ' \\\\')
+      table.insert(lines, '\\hline')
+    end
+  end
+
+  -- Replace last body \hline with accent-colored bottom rule
+  if #lines > 0 and lines[#lines] == '\\hline' then
+    lines[#lines] = '\\arrayrulecolor{tableaccent}\\hline'
+  end
+
+  if use_longtable then
+    table.insert(lines, '\\end{longtable}')
+  else
+    table.insert(lines, '\\end{tabular}')
+  end
+  table.insert(lines, '}')
+
+  return table.concat(lines, '\n')
 end
 
 return {
@@ -64,174 +139,46 @@ return {
     end
   },
 
-  -- Second pass: process tables.
+  -- Second pass: process side-by-side divs (must come before Table filter).
+  { Div = function(div)
+      if not FORMAT:match('latex') then return nil end
+      if not div.classes:includes('side-by-side') then return nil end
+
+      -- Collect all tables from this div
+      local tables = {}
+      for _, block in ipairs(div.content) do
+        if block.t == 'Table' then
+          table.insert(tables, block)
+        end
+      end
+
+      if #tables == 0 then return nil end
+
+      -- Calculate width for each table (equal distribution with gaps)
+      local gap = 0.03  -- 3% gap between tables
+      local total_gap = gap * (#tables - 1)
+      local width_each = (1.0 - total_gap) / #tables
+
+      local latex_parts = {}
+      table.insert(latex_parts, '\\noindent')
+
+      for i, tbl in ipairs(tables) do
+        if i > 1 then
+          table.insert(latex_parts, string.format('\\hspace{%.3f\\linewidth}', gap))
+        end
+        table.insert(latex_parts, string.format('\\begin{minipage}[t]{%.3f\\linewidth}', width_each))
+        table.insert(latex_parts, render_table_latex(tbl, false))
+        table.insert(latex_parts, '\\end{minipage}')
+      end
+
+      return pandoc.RawBlock('latex', table.concat(latex_parts, '\n'))
+    end
+  },
+
+  -- Third pass: process standalone tables.
   { Table = function(tbl)
       if not FORMAT:match('latex') then return nil end
-
-      local ncols = #tbl.colspecs
-      local spacers = detect_spacer_columns(tbl)
-      local use_spacers = has_any_spacer(spacers, ncols)
-
-      -- Enforce minimum column width and redistribute from widest columns.
-      local widths = {}
-      local has_widths = false
-      for i, cs in ipairs(tbl.colspecs) do
-        widths[i] = cs[2] or 0
-        if widths[i] > 0 then has_widths = true end
-      end
-      if has_widths then
-        local deficit = 0
-        local donor_total = 0
-        for i = 1, ncols do
-          if widths[i] > 0 and widths[i] < MIN_WIDTH then
-            deficit = deficit + (MIN_WIDTH - widths[i])
-            widths[i] = MIN_WIDTH
-          elseif widths[i] > MIN_WIDTH then
-            donor_total = donor_total + widths[i]
-          end
-        end
-        if deficit > 0 and donor_total > 0 then
-          for i = 1, ncols do
-            if widths[i] > MIN_WIDTH then
-              widths[i] = widths[i] - deficit * (widths[i] / donor_total)
-            end
-          end
-        end
-      end
-
-      -- Build column spec with vertical borders
-      local parts = {}
-      for i, cs in ipairs(tbl.colspecs) do
-        local alignment = cs[1]
-        local width = widths[i]
-        local part
-
-        if use_spacers and spacers[i] then
-          -- Spacer column: plain centered, no width
-          part = 'c'
-        elseif width and width > 0 then
-          local align_cmd = '\\raggedright'
-          if alignment == pandoc.AlignCenter then
-            align_cmd = '\\centering'
-          elseif alignment == pandoc.AlignRight then
-            align_cmd = '\\raggedleft'
-          end
-          local w = string.format(
-            '(\\linewidth - %d\\tabcolsep - %d\\arrayrulewidth) * \\real{%.4f}',
-            2 * ncols, ncols + 1, width
-          )
-          part = string.format('>{%s\\arraybackslash}p{%s}', align_cmd, w)
-        else
-          if alignment == pandoc.AlignCenter then part = 'c'
-          elseif alignment == pandoc.AlignRight then part = 'r'
-          else part = 'l'
-          end
-        end
-        table.insert(parts, part)
-      end
-
-      -- Build colspec: add borders, but not around spacer columns
-      local colspec
-      if use_spacers then
-        local colspec_parts = {}
-        for i, part in ipairs(parts) do
-          local prefix = ''
-          local suffix = ''
-          if not spacers[i] then
-            -- Add left border if first column or previous is spacer
-            if i == 1 or spacers[i - 1] then
-              prefix = '|'
-            end
-            -- Add right border always for non-spacer columns
-            suffix = '|'
-          end
-          table.insert(colspec_parts, prefix .. part .. suffix)
-        end
-        colspec = table.concat(colspec_parts, '')
-      else
-        colspec = '|' .. table.concat(parts, '|') .. '|'
-      end
-
-      -- Always use \hline - cline causes issues with tagpdf accessibility
-      local hline_cmd = '\\hline'
-
-      local lines = {}
-      -- Scope arrayrulecolor for light cell borders
-      table.insert(lines, '{\\arrayrulecolor{cellborder}')
-      table.insert(lines, string.format('\\begin{longtable}[]{%s}', colspec))
-
-      -- Top rule: accent color
-      table.insert(lines, '\\arrayrulecolor{tableaccent}' .. hline_cmd)
-
-      -- Header rows
-      for _, row in ipairs(tbl.head.rows) do
-        if use_spacers then
-          -- Use cellcolor instead of rowcolor to skip spacer cells
-          local cells = {}
-          for i, cell in ipairs(row.cells) do
-            if spacers[i] then
-              table.insert(cells, '')
-            else
-              table.insert(cells, '\\cellcolor{tableheader}' .. cell_to_latex(cell))
-            end
-          end
-          table.insert(lines, table.concat(cells, ' & ') .. ' \\\\')
-        else
-          table.insert(lines, '\\rowcolor{tableheader}')
-          local cells = {}
-          for _, cell in ipairs(row.cells) do
-            table.insert(cells, cell_to_latex(cell))
-          end
-          table.insert(lines, table.concat(cells, ' & ') .. ' \\\\')
-        end
-        table.insert(lines, hline_cmd)
-      end
-      table.insert(lines, '\\arrayrulecolor{cellborder}')
-      table.insert(lines, '\\endhead')
-
-      -- Body rows with alternating stripe
-      local rownum = 0
-      for _, body in ipairs(tbl.bodies) do
-        for _, row in ipairs(body.body) do
-          rownum = rownum + 1
-          if use_spacers then
-            -- Use cellcolor for non-spacer cells only
-            local cells = {}
-            for i, cell in ipairs(row.cells) do
-              if spacers[i] then
-                table.insert(cells, '')
-              else
-                if rownum % 2 == 0 then
-                  table.insert(cells, '\\cellcolor{tablestripe}' .. cell_to_latex(cell))
-                else
-                  table.insert(cells, cell_to_latex(cell))
-                end
-              end
-            end
-            table.insert(lines, table.concat(cells, ' & ') .. ' \\\\')
-          else
-            if rownum % 2 == 0 then
-              table.insert(lines, '\\rowcolor{tablestripe}')
-            end
-            local cells = {}
-            for _, cell in ipairs(row.cells) do
-              table.insert(cells, cell_to_latex(cell))
-            end
-            table.insert(lines, table.concat(cells, ' & ') .. ' \\\\')
-          end
-          table.insert(lines, hline_cmd)
-        end
-      end
-
-      -- Replace last body \hline with accent-colored bottom rule
-      if #lines > 0 and (lines[#lines] == '\\hline' or lines[#lines]:match('^\\cline')) then
-        lines[#lines] = '\\arrayrulecolor{tableaccent}' .. hline_cmd
-      end
-
-      table.insert(lines, '\\end{longtable}')
-      table.insert(lines, '}') -- close arrayrulecolor scope
-
-      return pandoc.RawBlock('latex', table.concat(lines, '\n'))
+      return pandoc.RawBlock('latex', render_table_latex(tbl, true))
     end
   },
 }
