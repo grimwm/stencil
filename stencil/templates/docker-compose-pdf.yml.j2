@@ -11,7 +11,7 @@
       - -c
       - |
         echo "Formatting markdown files..."
-        npx --yes prettier --prose-wrap always --print-width 100 --write "*.md"
+        npx --yes prettier --prose-wrap always --print-width 100 --embedded-language-formatting=off --write "*.md"
     restart: "no"
 
   pdf:
