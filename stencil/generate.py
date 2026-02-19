@@ -6,9 +6,11 @@ Usage:
     python generate.py hs6            # Generate files for hs6
     python generate.py hs6 --dry-run  # Show what would be generated
     python generate.py --list         # List available packages
+    python generate.py install        # Install .gitignore entries
 """
 
 import argparse
+import re
 import shutil
 import sys
 from pathlib import Path
@@ -18,6 +20,10 @@ from jinja2 import Environment, FileSystemLoader
 
 # Script directory
 SCRIPT_DIR = Path(__file__).parent
+
+# Gitignore markers
+GITIGNORE_START = "# >>> stencil >>>"
+GITIGNORE_END = "# <<< stencil <<<"
 
 
 def load_config(config_path: Path) -> dict:
@@ -199,9 +205,76 @@ def list_packages(config: dict):
         print(f"  {package_id:8} - {name:20} ({dir_name})")
 
 
+def get_generated_files(config: dict) -> list[str]:
+    """Determine what files stencil will generate based on templates config."""
+    entries = []
+
+    templates = config.get("templates", [])
+    for tdef in templates:
+        src = tdef.get("src", "")
+        dest = tdef.get("dest", src.removesuffix(".j2"))
+        if dest:
+            entries.append(dest)
+
+    return entries
+
+
+def install_gitignore(config: dict, dry_run: bool = False):
+    """Install or update .gitignore with stencil-managed entries.
+
+    Uses marker comments to manage a section within .gitignore, allowing
+    stencil to update its entries without disturbing user entries.
+    """
+    gitignore_path = Path.cwd() / ".gitignore"
+
+    # Derive ignore entries from templates config
+    entries = get_generated_files(config)
+
+    # Build the stencil section
+    stencil_section = f"{GITIGNORE_START}\n"
+    for entry in entries:
+        stencil_section += f"{entry}\n"
+    stencil_section += f"{GITIGNORE_END}\n"
+
+    if gitignore_path.exists():
+        content = gitignore_path.read_text()
+
+        # Pattern to find existing stencil section (including markers)
+        pattern = re.compile(
+            rf"^{re.escape(GITIGNORE_START)}$.*?^{re.escape(GITIGNORE_END)}$\n?",
+            re.MULTILINE | re.DOTALL,
+        )
+
+        if pattern.search(content):
+            # Replace existing section
+            new_content = pattern.sub(stencil_section, content)
+            action = "Updated"
+        else:
+            # Append section (with blank line separator if file doesn't end with newlines)
+            if content and not content.endswith("\n\n"):
+                if not content.endswith("\n"):
+                    content += "\n"
+                content += "\n"
+            new_content = content + stencil_section
+            action = "Added stencil section to"
+    else:
+        new_content = stencil_section
+        action = "Created"
+
+    if dry_run:
+        print(f"Would write to {gitignore_path}:")
+        print("-" * 40)
+        print(new_content)
+    else:
+        gitignore_path.write_text(new_content)
+        print(f"{action} {gitignore_path}")
+        for entry in entries:
+            print(f"  {entry}")
+
+
 def main():
     parser = argparse.ArgumentParser(description="Generate package scaffolding from templates")
-    parser.add_argument("package", nargs="?", help="Package ID (e.g., hs6)")
+    parser.add_argument("package", nargs="?", help="Package ID (e.g., hs6) or 'install' to setup .gitignore")
     parser.add_argument("--list", action="store_true", help="List available packages")
     parser.add_argument("--dry-run", action="store_true", help="Show what would be generated")
     parser.add_argument(
@@ -216,6 +289,11 @@ def main():
 
     # Load configuration
     config = load_config(config_path)
+
+    # Handle 'install' command (doesn't require packages in config)
+    if args.package == "install":
+        install_gitignore(config, args.dry_run)
+        return
 
     if "packages" not in config:
         print("Error: 'packages' is required in config", file=sys.stderr)

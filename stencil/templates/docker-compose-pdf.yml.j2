@@ -18,6 +18,7 @@
     build:
       context: .
       dockerfile: Dockerfile.pdf
+    image: localhost/{{ package_id }}_pdf:latest
     platform: linux/amd64
     container_name: pdf-generator
     volumes:
