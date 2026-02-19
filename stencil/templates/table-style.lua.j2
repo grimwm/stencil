@@ -154,22 +154,19 @@ return {
 
       if #tables == 0 then return nil end
 
-      -- Calculate width for each table (equal distribution with gaps)
-      local gap = 0.03  -- 3% gap between tables
-      local total_gap = gap * (#tables - 1)
-      local width_each = (1.0 - total_gap) / #tables
-
       local latex_parts = {}
-      table.insert(latex_parts, '\\noindent')
+      table.insert(latex_parts, '\\begin{center}')
 
       for i, tbl in ipairs(tables) do
         if i > 1 then
-          table.insert(latex_parts, string.format('\\hspace{%.3f\\linewidth}', gap))
+          table.insert(latex_parts, '\\hspace{2em}')  -- fixed gap between tables
         end
-        table.insert(latex_parts, string.format('\\begin{minipage}[t]{%.3f\\linewidth}', width_each))
+        table.insert(latex_parts, '\\begin{minipage}[t]{0.4\\linewidth}')
         table.insert(latex_parts, render_table_latex(tbl, false))
         table.insert(latex_parts, '\\end{minipage}')
       end
+
+      table.insert(latex_parts, '\\end{center}')
 
       return pandoc.RawBlock('latex', table.concat(latex_parts, '\n'))
     end
