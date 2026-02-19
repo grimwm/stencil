@@ -30,3 +30,39 @@
       - --lua-filter=hidden-filter.lua
       - --mathml
     restart: "no"
+
+  check-access:
+    image: docker.io/library/node:lts-alpine
+    container_name: accessibility-checker
+    volumes:
+      - .:/workspace:z
+    working_dir: /workspace
+    environment:
+      - NPM_CONFIG_UPDATE_NOTIFIER=false
+      - PUPPETEER_SKIP_DOWNLOAD=true
+      - PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium-browser
+    entrypoint:
+      - sh
+      - -c
+      - |
+        apk add --no-cache chromium > /dev/null 2>&1
+        npm install --prefix /tmp/pa11y pa11y > /dev/null 2>&1
+        cat > /tmp/pa11y.json << 'CONF'
+        {
+          "chromeLaunchConfig": {
+            "args": ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"]
+          }
+        }
+        CONF
+        failed=0
+        for f in *.html; do
+          [ -f "$$f" ] || continue
+          [ "$$f" = "html-template.html" ] && continue
+          echo "Checking $$f..."
+          /tmp/pa11y/node_modules/.bin/pa11y \
+            --config /tmp/pa11y.json \
+            --standard WCAG2AA \
+            "file:///workspace/$$f" || failed=1
+        done
+        exit $$failed
+    restart: "no"

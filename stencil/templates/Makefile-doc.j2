@@ -22,4 +22,8 @@ doc: format-md ## Generate HTML docs (use with=hidden to include hidden sections
 {% endfor %}
 	@echo "Generated docs$(if $(WITH), with features: $(WITH),)"
 
+check-access: ## Check HTML accessibility (WCAG 2.1 AA)
+	@docker images -q docker.io/library/node:lts-alpine | grep -q . || $(DC) pull check-access
+	$(DC) run --rm check-access
+
 {% endif %}

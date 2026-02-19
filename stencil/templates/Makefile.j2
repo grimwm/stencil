@@ -2,7 +2,7 @@
 
 {% set phony = ['help'] %}
 {% do phony.append('format-md') %}
-{% if has_docs %}{% do phony.append('doc') %}{% endif %}
+{% if has_docs %}{% do phony.extend(['doc', 'check-access']) %}{% endif %}
 {% do phony.extend(['clean', 'clean-pkg']) %}
 .PHONY: {{ phony | join(' ') }}
 
