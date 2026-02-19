@@ -1,6 +1,8 @@
 {% raw %}
 -- Pandoc Lua filter: styled tables with alternating row colors and cell borders.
 -- Set min-col-width in document metadata or via --metadata to override the default.
+-- Supports spacer columns: columns with empty headers and all empty cells get no
+-- borders and white background, acting as visual separators between table sections.
 
 local MIN_WIDTH = 0.12
 
@@ -8,6 +10,49 @@ local function cell_to_latex(cell)
   local doc = pandoc.Pandoc(cell.contents)
   local result = pandoc.write(doc, 'latex')
   return (result:gsub('%s+$', ''))
+end
+
+local function is_cell_empty(cell)
+  local content = cell_to_latex(cell)
+  return content:match('^%s*$') ~= nil
+end
+
+local function detect_spacer_columns(tbl)
+  local ncols = #tbl.colspecs
+  local spacers = {}
+
+  for i = 1, ncols do
+    spacers[i] = true
+  end
+
+  -- Check header cells
+  for _, row in ipairs(tbl.head.rows) do
+    for i, cell in ipairs(row.cells) do
+      if i <= ncols and not is_cell_empty(cell) then
+        spacers[i] = false
+      end
+    end
+  end
+
+  -- Check body cells
+  for _, body in ipairs(tbl.bodies) do
+    for _, row in ipairs(body.body) do
+      for i, cell in ipairs(row.cells) do
+        if i <= ncols and not is_cell_empty(cell) then
+          spacers[i] = false
+        end
+      end
+    end
+  end
+
+  return spacers
+end
+
+local function has_any_spacer(spacers, ncols)
+  for i = 1, ncols do
+    if spacers[i] then return true end
+  end
+  return false
 end
 
 return {
@@ -24,6 +69,8 @@ return {
       if not FORMAT:match('latex') then return nil end
 
       local ncols = #tbl.colspecs
+      local spacers = detect_spacer_columns(tbl)
+      local use_spacers = has_any_spacer(spacers, ncols)
 
       -- Enforce minimum column width and redistribute from widest columns.
       local widths = {}
@@ -58,7 +105,11 @@ return {
         local alignment = cs[1]
         local width = widths[i]
         local part
-        if width and width > 0 then
+
+        if use_spacers and spacers[i] then
+          -- Spacer column: plain centered, no width
+          part = 'c'
+        elseif width and width > 0 then
           local align_cmd = '\\raggedright'
           if alignment == pandoc.AlignCenter then
             align_cmd = '\\centering'
@@ -79,7 +130,30 @@ return {
         table.insert(parts, part)
       end
 
-      local colspec = '|' .. table.concat(parts, '|') .. '|'
+      -- Build colspec: add borders, but not around spacer columns
+      local colspec
+      if use_spacers then
+        local colspec_parts = {}
+        for i, part in ipairs(parts) do
+          local prefix = ''
+          local suffix = ''
+          if not spacers[i] then
+            -- Add left border if first column or previous is spacer
+            if i == 1 or spacers[i - 1] then
+              prefix = '|'
+            end
+            -- Add right border always for non-spacer columns
+            suffix = '|'
+          end
+          table.insert(colspec_parts, prefix .. part .. suffix)
+        end
+        colspec = table.concat(colspec_parts, '')
+      else
+        colspec = '|' .. table.concat(parts, '|') .. '|'
+      end
+
+      -- Always use \hline - cline causes issues with tagpdf accessibility
+      local hline_cmd = '\\hline'
 
       local lines = {}
       -- Scope arrayrulecolor for light cell borders
@@ -87,17 +161,30 @@ return {
       table.insert(lines, string.format('\\begin{longtable}[]{%s}', colspec))
 
       -- Top rule: accent color
-      table.insert(lines, '\\arrayrulecolor{tableaccent}\\hline')
+      table.insert(lines, '\\arrayrulecolor{tableaccent}' .. hline_cmd)
 
       -- Header rows
       for _, row in ipairs(tbl.head.rows) do
-        table.insert(lines, '\\rowcolor{tableheader}')
-        local cells = {}
-        for _, cell in ipairs(row.cells) do
-          table.insert(cells, cell_to_latex(cell))
+        if use_spacers then
+          -- Use cellcolor instead of rowcolor to skip spacer cells
+          local cells = {}
+          for i, cell in ipairs(row.cells) do
+            if spacers[i] then
+              table.insert(cells, '')
+            else
+              table.insert(cells, '\\cellcolor{tableheader}' .. cell_to_latex(cell))
+            end
+          end
+          table.insert(lines, table.concat(cells, ' & ') .. ' \\\\')
+        else
+          table.insert(lines, '\\rowcolor{tableheader}')
+          local cells = {}
+          for _, cell in ipairs(row.cells) do
+            table.insert(cells, cell_to_latex(cell))
+          end
+          table.insert(lines, table.concat(cells, ' & ') .. ' \\\\')
         end
-        table.insert(lines, table.concat(cells, ' & ') .. ' \\\\')
-        table.insert(lines, '\\hline')
+        table.insert(lines, hline_cmd)
       end
       table.insert(lines, '\\arrayrulecolor{cellborder}')
       table.insert(lines, '\\endhead')
@@ -107,21 +194,38 @@ return {
       for _, body in ipairs(tbl.bodies) do
         for _, row in ipairs(body.body) do
           rownum = rownum + 1
-          if rownum % 2 == 0 then
-            table.insert(lines, '\\rowcolor{tablestripe}')
+          if use_spacers then
+            -- Use cellcolor for non-spacer cells only
+            local cells = {}
+            for i, cell in ipairs(row.cells) do
+              if spacers[i] then
+                table.insert(cells, '')
+              else
+                if rownum % 2 == 0 then
+                  table.insert(cells, '\\cellcolor{tablestripe}' .. cell_to_latex(cell))
+                else
+                  table.insert(cells, cell_to_latex(cell))
+                end
+              end
+            end
+            table.insert(lines, table.concat(cells, ' & ') .. ' \\\\')
+          else
+            if rownum % 2 == 0 then
+              table.insert(lines, '\\rowcolor{tablestripe}')
+            end
+            local cells = {}
+            for _, cell in ipairs(row.cells) do
+              table.insert(cells, cell_to_latex(cell))
+            end
+            table.insert(lines, table.concat(cells, ' & ') .. ' \\\\')
           end
-          local cells = {}
-          for _, cell in ipairs(row.cells) do
-            table.insert(cells, cell_to_latex(cell))
-          end
-          table.insert(lines, table.concat(cells, ' & ') .. ' \\\\')
-          table.insert(lines, '\\hline')
+          table.insert(lines, hline_cmd)
         end
       end
 
       -- Replace last body \hline with accent-colored bottom rule
-      if #lines > 0 and lines[#lines] == '\\hline' then
-        lines[#lines] = '\\arrayrulecolor{tableaccent}\\hline'
+      if #lines > 0 and (lines[#lines] == '\\hline' or lines[#lines]:match('^\\cline')) then
+        lines[#lines] = '\\arrayrulecolor{tableaccent}' .. hline_cmd
       end
 
       table.insert(lines, '\\end{longtable}')
