@@ -1,0 +1,25 @@
+-- Lua filter to conditionally include/exclude hidden sections.
+-- Mark content with ::: {.hidden} to hide by default.
+-- Build with --metadata include-hidden=true to include hidden content.
+
+local include_hidden = false
+
+return {
+  { Meta = function(meta)
+      if meta['include-hidden'] then
+        include_hidden = pandoc.utils.stringify(meta['include-hidden']) == 'true'
+      end
+    end
+  },
+
+  { Div = function(div)
+      if div.classes:includes('hidden') then
+        if include_hidden then
+          return div
+        else
+          return {}
+        end
+      end
+    end
+  },
+}
