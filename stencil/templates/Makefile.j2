@@ -1,0 +1,23 @@
+{% include 'Makefile-base.j2' %}
+
+{% set phony = ['help'] %}
+{% do phony.append('format-md') %}
+{% if has_pdfs %}{% do phony.append('pdf') %}{% endif %}
+{% do phony.extend(['clean', 'clean-pkg']) %}
+.PHONY: {{ phony | join(' ') }}
+
+# Default target
+ifeq ($(OS),Windows_NT)
+help: ## Show this help message
+	@echo Available targets:
+	@powershell -NoProfile -Command "Get-Content $(MAKEFILE_LIST) | Select-String '^[a-zA-Z_-]+:.*?## .*$$' | ForEach-Object { $$_ -match '^([a-zA-Z_-]+):.*?## (.*)$$' | Out-Null; '  {0,-15} {1}' -f $$matches[1], $$matches[2] } | Select-Object -Unique"
+else
+help: ## Show this help message
+	@echo "Available targets:"
+	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-15s %s\n", $$1, $$2}' | uniq
+endif
+
+{% include 'Makefile-pdf.j2' %}
+{% include 'Makefile-pkg.j2' %}
+
+clean: clean-pkg
