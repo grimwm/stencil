@@ -1,5 +1,5 @@
 format-md: ## Format markdown files
-	$(DC) pull format-md
+	@docker images -q docker.io/library/node:lts-alpine | grep -q . || $(DC) pull format-md
 	$(DC) run --rm format-md
 
 {% if has_docs %}
@@ -17,7 +17,7 @@ METADATA_FLAGS := $(foreach feat,$(subst $(comma), ,$(WITH)),--metadata include-
 OUTPUT_SUFFIX := $(if $(WITH),$(addprefix -,$(subst $(comma),-,$(WITH))),)
 
 doc: format-md ## Generate HTML docs (use WITH=hidden to include hidden sections)
-	$(DC) pull doc
+	@docker images -q docker.io/pandoc/core:latest | grep -q . || $(DC) pull doc
 {% for md in docs %}
 	$(DC) run --rm doc --metadata course="{{ name }}" $(METADATA_FLAGS) {{ md }} -o {{ md | replace('.md', '') }}$(OUTPUT_SUFFIX).html
 {% endfor %}
