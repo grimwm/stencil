@@ -206,47 +206,53 @@ def list_packages(config: dict):
 
 
 def get_generated_files(config: dict) -> list[str]:
-    """Determine what files stencil will generate based on templates config."""
-    entries = []
+    """Determine what files stencil will generate based on templates config.
+    
+    All entries are prefixed with the package directory so that .gitignore
+    only ignores files in subdirectories, not at the parent level.
+    """
+    entries = set()
 
-    # Add template output files
-    templates = config.get("templates", [])
-    for tdef in templates:
+    # Get template output filenames (these go into each package directory)
+    template_files = []
+    for tdef in config.get("templates", []):
         src = tdef.get("src", "")
         dest = tdef.get("dest", src.removesuffix(".j2"))
         if dest:
-            entries.append(dest)
+            template_files.append(dest)
 
-    # Collect per-package generated files
-    copied = set()
-    has_scripts = False
-    for package in config.get("packages", {}).values():
+    # Process each package
+    for package_id, package in config.get("packages", {}).items():
+        pkg_dir = package.get("dir", package_id)
+
+        # Add template files for this package
+        for f in template_files:
+            entries.add(f"{pkg_dir}/{f}")
+
         # copy_files entries
         for item in package.get("copy_files", []):
             if isinstance(item, str):
-                copied.add(item)
+                entries.add(f"{pkg_dir}/{item}")
             else:
-                copied.add(item.get("dest", item.get("src", "")))
+                dest = item.get("dest", item.get("src", ""))
+                if dest:
+                    entries.add(f"{pkg_dir}/{dest}")
 
         # deps_script creates scripts/ directory
         if package.get("deps_script"):
-            has_scripts = True
+            entries.add(f"{pkg_dir}/scripts/")
 
         # pdfs generates .pdf files from .md files
         for md in package.get("pdfs", []):
             if md.endswith(".md"):
-                copied.add(md.removesuffix(".md") + ".pdf")
+                entries.add(f"{pkg_dir}/{md.removesuffix('.md')}.pdf")
 
         # package_name is the zip file created by pkg target
         package_name = package.get("package_name")
         if package_name:
-            copied.add(package_name)
+            entries.add(f"{pkg_dir}/{package_name}")
 
-    entries.extend(sorted(copied))
-    if has_scripts:
-        entries.append("scripts/")
-
-    return entries
+    return sorted(entries)
 
 
 def install_gitignore(config: dict, dry_run: bool = False):
