@@ -11,7 +11,10 @@
       - -c
       - |
         echo "Formatting markdown files..."
-        npx --yes prettier --prose-wrap always --print-width 100 --embedded-language-formatting=off --write "*.md"
+        npm install --prefix /tmp/fmt prettier @awmottaz/prettier-plugin-void-html && \
+        /tmp/fmt/node_modules/.bin/prettier \
+          --plugin /tmp/fmt/node_modules/@awmottaz/prettier-plugin-void-html/prettier-plugin-void-html.js \
+          --prose-wrap always --print-width 100 --write "*.md"
     restart: "no"
 
   pdf:
