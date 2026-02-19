@@ -19,7 +19,7 @@ OUTPUT_SUFFIX := $(if $(WITH),$(addprefix -,$(subst $(comma),-,$(WITH))),)
 doc: format-md ## Generate HTML docs (use WITH=hidden to include hidden sections)
 	$(DC) pull doc
 {% for md in docs %}
-	$(DC) run --rm doc --metadata title="{{ name }}" $(METADATA_FLAGS) {{ md }} -o {{ md | replace('.md', '') }}$(OUTPUT_SUFFIX).html
+	$(DC) run --rm doc --metadata course="{{ name }}" $(METADATA_FLAGS) {{ md }} -o {{ md | replace('.md', '') }}$(OUTPUT_SUFFIX).html
 {% endfor %}
 	@echo "Generated docs$(if $(WITH), with features: $(WITH),)"
 
