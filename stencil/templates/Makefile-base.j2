@@ -1,2 +1,13 @@
 # Makefile for course activities
 DC = docker compose
+
+# Default target
+ifeq ($(OS),Windows_NT)
+help: ## Show this help message
+	@echo Available targets:
+	@powershell -NoProfile -Command "Get-Content $(MAKEFILE_LIST) | Select-String '^[a-zA-Z0-9_-]+:.*?## .*$$' | ForEach-Object { $$_ -match '^([a-zA-Z0-9_-]+):.*?## (.*)$$' | Out-Null; '  {0,-15} {1}' -f $$matches[1], $$matches[2] } | Select-Object -Unique"
+else
+help: ## Show this help message
+	@echo "Available targets:"
+	@grep -E '^[a-zA-Z0-9_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-15s %s\n", $$1, $$2}' | uniq
+endif
