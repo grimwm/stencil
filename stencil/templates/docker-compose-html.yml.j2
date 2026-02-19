@@ -17,27 +17,16 @@
           --prose-wrap always --print-width 100 --write "*.md"
     restart: "no"
 
-  pdf:
-    build:
-      context: .
-      dockerfile: Dockerfile.pdf
-    image: localhost/{{ package_id }}_pdf:latest
-    platform: linux/amd64
-    container_name: pdf-generator
+  doc:
+    image: docker.io/pandoc/core:latest
+    container_name: doc-generator
     volumes:
       - .:/workspace:z
     working_dir: /workspace
     entrypoint:
       - pandoc
-      - --pdf-engine=lualatex
-      - --template=pandoc-template.latex
-      - --include-in-header=pandoc-header.tex
+      - --standalone
+      - --template=html-template.html
       - --lua-filter=hidden-filter.lua
-      - --lua-filter=table-style.lua
-      - --variable
-      - geometry:left=1in,right=1in,top=1in,bottom=1in
-      - --variable
-      - mainfont:DejaVu Sans
-      - --variable
-      - monofont:DejaVu Sans Mono
+      - --mathml
     restart: "no"

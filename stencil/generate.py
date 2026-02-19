@@ -50,7 +50,7 @@ def get_template_context(package_id: str, config: dict) -> dict:
     package_type = package.get("package_type")
     if not package_type:
         raise ValueError(f"Package {package_id} is missing required 'package_type'")
-    if package_type not in ("pdf", "zip"):
+    if package_type not in ("doc", "zip"):
         raise ValueError(f"Package {package_id} has invalid package_type: {package_type}")
 
     # package_name is required for zip packages
@@ -58,8 +58,8 @@ def get_template_context(package_id: str, config: dict) -> dict:
     if package_type == "zip" and not package_name:
         raise ValueError(f"Package {package_id} is missing required 'package_name' (required for zip type)")
 
-    # pdfs list for pdf-type packages
-    pdfs = package.get("pdfs", [])
+    # docs list for doc-type packages (markdown files to convert to HTML)
+    docs = package.get("docs", [])
 
     # Build context
     context = {
@@ -69,8 +69,8 @@ def get_template_context(package_id: str, config: dict) -> dict:
         "package_dir": package.get("dir", f"{package_id}"),
         "package_type": package_type,
         "package_folder": package.get("package_folder", "htdocs"),
-        "pdfs": pdfs,
-        "has_pdfs": bool(pdfs),
+        "docs": docs,
+        "has_docs": bool(docs),
         "services": services,
         # Derived from services
         "has_web": has_web,
@@ -242,10 +242,10 @@ def get_generated_files(config: dict) -> list[str]:
         if package.get("deps_script"):
             entries.add(f"{pkg_dir}/scripts/")
 
-        # pdfs generates .pdf files from .md files
-        for md in package.get("pdfs", []):
+        # docs generates .html files from .md files (glob for feature variants)
+        for md in package.get("docs", []):
             if md.endswith(".md"):
-                entries.add(f"{pkg_dir}/{md.removesuffix('.md')}.pdf")
+                entries.add(f"{pkg_dir}/{md.removesuffix('.md')}*.html")
 
         # package_name is the zip file created by pkg target
         package_name = package.get("package_name")

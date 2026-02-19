@@ -1,0 +1,356 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>$title$</title>
+  
+  <!-- Bootstrap 5 -->
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+  
+  <!-- Highlight.js for code syntax highlighting -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github.min.css">
+  
+  <!-- Google Fonts: Crimson Pro (serif) + Inter (sans) -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Crimson+Pro:ital,wght@0,400;0,600;1,400&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  
+  <style>
+    /* ============================================
+       ACADEMIC DOCUMENT STYLING
+       ============================================ */
+    
+    :root {
+      --font-serif: 'Crimson Pro', Georgia, 'Times New Roman', serif;
+      --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      --font-mono: 'JetBrains Mono', 'Fira Code', Consolas, Monaco, monospace;
+      --text-color: #1a1a1a;
+      --muted-color: #6c757d;
+      --link-color: #2c5aa0;
+      --border-color: #dee2e6;
+      --bg-subtle: #f8f9fa;
+      --accent-color: #29417a;
+      --card-bg: #fffdf5;
+      --card-border: #c8b48c;
+    }
+    
+    body {
+      font-family: var(--font-serif);
+      font-size: 1.125rem;
+      line-height: 1.75;
+      color: var(--text-color);
+      background: #fff;
+    }
+    
+    .container {
+      max-width: 48rem;
+      padding: 2rem 1.5rem;
+    }
+    
+    /* Headings */
+    h1, h2, h3, h4, h5, h6 {
+      font-family: var(--font-sans);
+      font-weight: 600;
+      margin-top: 2.5rem;
+      margin-bottom: 1rem;
+      line-height: 1.3;
+      color: var(--text-color);
+    }
+    
+    h1 {
+      font-size: 2.25rem;
+      margin-top: 0;
+      padding-bottom: 0.75rem;
+      border-bottom: 2px solid var(--accent-color);
+    }
+    
+    h2 {
+      font-size: 1.75rem;
+      padding-bottom: 0.5rem;
+      border-bottom: 1px solid var(--border-color);
+    }
+    
+    h3 { font-size: 1.375rem; }
+    h4 { font-size: 1.175rem; }
+    h5, h6 { font-size: 1rem; }
+    
+    /* Links */
+    a {
+      color: var(--link-color);
+      text-decoration: none;
+    }
+    
+    a:hover {
+      text-decoration: underline;
+    }
+    
+    /* Paragraphs */
+    p {
+      margin-bottom: 1.25rem;
+    }
+    
+    /* Lists */
+    ul, ol {
+      margin-bottom: 1.25rem;
+      padding-left: 1.5rem;
+    }
+    
+    li {
+      margin-bottom: 0.5rem;
+    }
+    
+    /* Blockquotes (callout cards) */
+    blockquote {
+      background: var(--card-bg);
+      border: 1px solid var(--card-border);
+      border-radius: 6px;
+      padding: 1rem 1.25rem;
+      margin: 1.5rem 0;
+      font-style: italic;
+      font-size: 1rem;
+      box-shadow: 2px 2px 8px rgba(0,0,0,0.08);
+    }
+    
+    blockquote p:last-child {
+      margin-bottom: 0;
+    }
+    
+    blockquote strong {
+      font-style: normal;
+      color: var(--accent-color);
+    }
+    
+    /* Code blocks */
+    pre {
+      background: #f6f8fa;
+      border: 1px solid var(--border-color);
+      border-radius: 6px;
+      padding: 1rem;
+      overflow-x: auto;
+      font-size: 0.9rem;
+      line-height: 1.5;
+      margin: 1.25rem 0;
+    }
+    
+    pre code {
+      font-family: var(--font-mono);
+      background: none;
+      padding: 0;
+      border: none;
+      font-size: inherit;
+    }
+    
+    /* Inline code */
+    code {
+      font-family: var(--font-mono);
+      font-size: 0.875em;
+      background: #f0f0f0;
+      padding: 0.15em 0.4em;
+      border-radius: 4px;
+      color: #c7254e;
+    }
+    
+    /* Tables */
+    table {
+      width: 100%;
+      margin: 1.5rem 0;
+      border-collapse: collapse;
+      font-size: 1rem;
+    }
+    
+    thead {
+      background: #d2def2;
+    }
+    
+    th {
+      font-family: var(--font-sans);
+      font-weight: 600;
+      text-align: left;
+      padding: 0.75rem 1rem;
+      border: 1px solid #c8c8c8;
+    }
+    
+    td {
+      padding: 0.75rem 1rem;
+      border: 1px solid #c8c8c8;
+      vertical-align: top;
+    }
+    
+    tbody tr:nth-child(even) {
+      background: #f5f7fa;
+    }
+    
+    /* Math (MathML) */
+    math {
+      font-size: 1.1em;
+    }
+    
+    /* Horizontal rules */
+    hr {
+      border: none;
+      border-top: 1px solid var(--border-color);
+      margin: 2rem 0;
+    }
+    
+    /* Figure captions */
+    figcaption, .caption {
+      font-size: 0.9rem;
+      font-style: italic;
+      color: var(--muted-color);
+      text-align: center;
+      margin-top: 0.5rem;
+    }
+    
+    /* Definition lists */
+    dt {
+      font-weight: 600;
+      font-family: var(--font-sans);
+    }
+    
+    dd {
+      margin-left: 1.5rem;
+      margin-bottom: 1rem;
+    }
+    
+    /* Side-by-side tables */
+    .side-by-side {
+      display: flex;
+      justify-content: center;
+      gap: 2rem;
+      flex-wrap: wrap;
+    }
+    
+    .side-by-side table {
+      width: auto;
+      margin: 0;
+    }
+    
+    /* ============================================
+       PRINT STYLES - Match PDF appearance
+       ============================================ */
+    
+    @media print {
+      @page {
+        size: letter;
+        margin: 1in;
+      }
+      
+      body {
+        font-size: 11pt;
+        line-height: 1.5;
+        color: #000;
+        background: #fff;
+      }
+      
+      .container {
+        max-width: 100%;
+        padding: 0;
+      }
+      
+      /* Headings */
+      h1 {
+        font-size: 18pt;
+        page-break-after: avoid;
+      }
+      
+      h2 {
+        font-size: 14pt;
+        page-break-after: avoid;
+      }
+      
+      h3 {
+        font-size: 12pt;
+        page-break-after: avoid;
+      }
+      
+      h4, h5, h6 {
+        font-size: 11pt;
+        page-break-after: avoid;
+      }
+      
+      /* Prevent orphans/widows */
+      p, li, blockquote {
+        orphans: 3;
+        widows: 3;
+      }
+      
+      /* Code blocks */
+      pre {
+        font-size: 9pt;
+        page-break-inside: avoid;
+        border: 1px solid #ccc;
+        background: #f8f8f8 !important;
+        -webkit-print-color-adjust: exact;
+        print-color-adjust: exact;
+      }
+      
+      /* Tables */
+      table {
+        page-break-inside: avoid;
+        font-size: 10pt;
+      }
+      
+      thead {
+        background: #e8e8e8 !important;
+        -webkit-print-color-adjust: exact;
+        print-color-adjust: exact;
+      }
+      
+      tbody tr:nth-child(even) {
+        background: #f5f5f5 !important;
+        -webkit-print-color-adjust: exact;
+        print-color-adjust: exact;
+      }
+      
+      /* Blockquotes */
+      blockquote {
+        page-break-inside: avoid;
+        background: #fffef8 !important;
+        border: 1px solid #ccc;
+        box-shadow: none;
+        -webkit-print-color-adjust: exact;
+        print-color-adjust: exact;
+      }
+      
+      /* Links - show URL */
+      a[href^="http"]:after {
+        content: " (" attr(href) ")";
+        font-size: 0.8em;
+        color: #666;
+      }
+      
+      /* Hide non-essential elements */
+      .no-print {
+        display: none !important;
+      }
+      
+      /* Page breaks */
+      .page-break {
+        page-break-before: always;
+      }
+      
+      h1, h2 {
+        page-break-after: avoid;
+      }
+      
+      pre, blockquote, table, figure {
+        page-break-inside: avoid;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+$body$
+  </div>
+  
+  <!-- Highlight.js -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/sql.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/python.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/javascript.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/bash.min.js"></script>
+  <script>hljs.highlightAll();</script>
+</body>
+</html>

@@ -2,7 +2,7 @@ format-md: ## Format markdown files
 	$(DC) pull format-md
 	$(DC) run --rm format-md
 
-{% if has_pdfs %}
+{% if has_docs %}
 # WITH: Comma-separated features to include (e.g., WITH=hidden or WITH=hidden,draft)
 # Lowercase 'with' also works: with=hidden
 WITH ?= $(with)
@@ -16,11 +16,11 @@ METADATA_FLAGS := $(foreach feat,$(subst $(comma), ,$(WITH)),--metadata include-
 # Build output suffix from WITH variable (e.g., -hidden or -hidden-draft)
 OUTPUT_SUFFIX := $(if $(WITH),$(addprefix -,$(subst $(comma),-,$(WITH))),)
 
-pdf: format-md ## Generate PDFs (use WITH=hidden to include hidden sections)
-	$(DC) build pdf
-{% for md in pdfs %}
-	$(DC) run --rm pdf --metadata title="{{ name }}" $(METADATA_FLAGS) {{ md }} -o {{ md | replace('.md', '') }}$(OUTPUT_SUFFIX).pdf
+doc: format-md ## Generate HTML docs (use WITH=hidden to include hidden sections)
+	$(DC) pull doc
+{% for md in docs %}
+	$(DC) run --rm doc --metadata title="{{ name }}" $(METADATA_FLAGS) {{ md }} -o {{ md | replace('.md', '') }}$(OUTPUT_SUFFIX).html
 {% endfor %}
-	@echo "Generated PDFs$(if $(WITH), with features: $(WITH),)"
+	@echo "Generated docs$(if $(WITH), with features: $(WITH),)"
 
 {% endif %}

@@ -2,7 +2,7 @@
 
 {% set phony = ['help'] %}
 {% do phony.append('format-md') %}
-{% if has_pdfs %}{% do phony.append('pdf') %}{% endif %}
+{% if has_docs %}{% do phony.append('doc') %}{% endif %}
 {% do phony.extend(['clean', 'clean-pkg']) %}
 .PHONY: {{ phony | join(' ') }}
 
@@ -17,7 +17,7 @@ help: ## Show this help message
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-15s %s\n", $$1, $$2}' | uniq
 endif
 
-{% include 'Makefile-pdf.j2' %}
+{% include 'Makefile-doc.j2' %}
 {% include 'Makefile-pkg.j2' %}
 
 clean: clean-pkg
