@@ -209,12 +209,23 @@ def get_generated_files(config: dict) -> list[str]:
     """Determine what files stencil will generate based on templates config."""
     entries = []
 
+    # Add template output files
     templates = config.get("templates", [])
     for tdef in templates:
         src = tdef.get("src", "")
         dest = tdef.get("dest", src.removesuffix(".j2"))
         if dest:
             entries.append(dest)
+
+    # Add copied files/directories from all packages
+    copied = set()
+    for package in config.get("packages", {}).values():
+        for item in package.get("copy_files", []):
+            if isinstance(item, str):
+                copied.add(item)
+            else:
+                copied.add(item.get("dest", item.get("src", "")))
+    entries.extend(sorted(copied))
 
     return entries
 
