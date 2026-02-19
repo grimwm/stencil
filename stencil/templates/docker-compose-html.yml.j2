@@ -1,6 +1,5 @@
   format-md:
     image: docker.io/library/node:lts-alpine
-    container_name: md-formatter
     volumes:
       - .:/workspace:z
     working_dir: /workspace
@@ -19,7 +18,6 @@
 
   doc:
     image: docker.io/pandoc/core:latest
-    container_name: doc-generator
     volumes:
       - .:/workspace:z
     working_dir: /workspace
@@ -33,7 +31,6 @@
 
   check-access:
     image: docker.io/library/node:lts-alpine
-    container_name: accessibility-checker
     volumes:
       - .:/workspace:z
     working_dir: /workspace
