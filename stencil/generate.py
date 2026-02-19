@@ -237,6 +237,11 @@ def get_generated_files(config: dict) -> list[str]:
             if md.endswith(".md"):
                 copied.add(md.removesuffix(".md") + ".pdf")
 
+        # package_name is the zip file created by pkg target
+        package_name = package.get("package_name")
+        if package_name:
+            copied.add(package_name)
+
     entries.extend(sorted(copied))
     if has_scripts:
         entries.append("scripts/")
