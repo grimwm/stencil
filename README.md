@@ -90,28 +90,28 @@ Each key under `packages` is a package ID passed as a positional argument to the
 | `package_folder` | `htdocs`   | Folder to include in the submission archive.                                                    |
 | `copy_files`     | `[]`       | Static files/directories to copy from bundled `files/`. Accepts strings or `{src, dest}` dicts. |
 | `deps_script`    |            | OS-keyed dependency install scripts from bundled `scripts/`.                                    |
-| `sql_import`     |            | SQL import config (`target`, `database`, `file`).                                               |
+| `sql_import`     |            | SQL import config: one dict or list of dicts with `target`, `database`, `file`.                 |
 
 ### Context variables
 
 Templates receive these context variables, derived from the package config:
 
-| Variable         | Source                               |
-| ---------------- | ------------------------------------ |
-| `package_id`     | The package key                      |
-| `package_name`   | `package_name` field                 |
-| `package_dir`    | `dir` field (defaults to package ID) |
-| `package_type`   | `package_type` field                 |
-| `package_folder` | `package_folder` field               |
-| `pdfs`           | `pdfs` list                          |
-| `has_pdfs`       | `true` if `pdfs` is non-empty        |
-| `services`       | `services` list                      |
-| `has_web`        | `true` if `"web"` in services        |
-| `has_mysql`      | `true` if `"mysql"` in services      |
-| `has_services`   | `true` if any services defined       |
-| `sql_import`     | `sql_import` dict                    |
-| `deps_script`    | `deps_script` dict                   |
-| `copy_files`     | `copy_files` list                    |
+| Variable         | Source                                                      |
+| ---------------- | ----------------------------------------------------------- |
+| `package_id`     | The package key                                             |
+| `package_name`   | `package_name` field                                        |
+| `package_dir`    | `dir` field (defaults to package ID)                        |
+| `package_type`   | `package_type` field                                        |
+| `package_folder` | `package_folder` field                                      |
+| `pdfs`           | `pdfs` list                                                 |
+| `has_pdfs`       | `true` if `pdfs` is non-empty                               |
+| `services`       | `services` list                                             |
+| `has_web`        | `true` if `"web"` in services                               |
+| `has_mysql`      | `true` if `"mysql"` in services                             |
+| `has_services`   | `true` if any services defined                              |
+| `sql_imports`    | List of `sql_import` dicts (normalized from single or list) |
+| `deps_script`    | `deps_script` dict                                          |
+| `copy_files`     | `copy_files` list                                           |
 
 ## Bundled templates
 

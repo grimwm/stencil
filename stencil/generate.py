@@ -61,6 +61,15 @@ def get_template_context(package_id: str, config: dict) -> dict:
     # docs list for doc-type packages (markdown files to convert to HTML)
     docs = package.get("docs", [])
 
+    # Normalize sql_import to a list of import configs (target, database, file)
+    raw_sql_import = package.get("sql_import")
+    if raw_sql_import is None:
+        sql_imports = []
+    elif isinstance(raw_sql_import, list):
+        sql_imports = raw_sql_import
+    else:
+        sql_imports = [raw_sql_import]
+
     # Build context
     context = {
         "package_id": package_id,
@@ -77,7 +86,7 @@ def get_template_context(package_id: str, config: dict) -> dict:
         "has_mysql": has_mysql,
         "has_services": has_services,
         # Explicit features
-        "sql_import": package.get("sql_import"),
+        "sql_imports": sql_imports,
         "deps_script": package.get("deps_script"),
         "copy_files": package.get("copy_files"),
     }
