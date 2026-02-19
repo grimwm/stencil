@@ -217,15 +217,29 @@ def get_generated_files(config: dict) -> list[str]:
         if dest:
             entries.append(dest)
 
-    # Add copied files/directories from all packages
+    # Collect per-package generated files
     copied = set()
+    has_scripts = False
     for package in config.get("packages", {}).values():
+        # copy_files entries
         for item in package.get("copy_files", []):
             if isinstance(item, str):
                 copied.add(item)
             else:
                 copied.add(item.get("dest", item.get("src", "")))
+
+        # deps_script creates scripts/ directory
+        if package.get("deps_script"):
+            has_scripts = True
+
+        # pdfs generates .pdf files from .md files
+        for md in package.get("pdfs", []):
+            if md.endswith(".md"):
+                copied.add(md.removesuffix(".md") + ".pdf")
+
     entries.extend(sorted(copied))
+    if has_scripts:
+        entries.append("scripts/")
 
     return entries
 
