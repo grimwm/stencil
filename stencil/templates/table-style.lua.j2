@@ -162,6 +162,7 @@ return {
           table.insert(latex_parts, '\\hspace{2em}')  -- fixed gap between tables
         end
         table.insert(latex_parts, '\\begin{minipage}[t]{0.4\\linewidth}')
+        table.insert(latex_parts, '\\centering')
         table.insert(latex_parts, render_table_latex(tbl, false))
         table.insert(latex_parts, '\\end{minipage}')
       end
