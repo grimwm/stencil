@@ -3,13 +3,10 @@
 Generate package scaffolding from Jinja2 templates.
 
 Usage:
-    python generate.py hs6              # Generate files for hs6
-    python generate.py hs6 --dry-run    # Show what would be generated
-    python generate.py --all            # Generate files for every package in config
-    python generate.py --list           # List available packages
-    python generate.py install          # Install .gitignore entries
-    python generate.py --clean          # Remove all generated files
-    python generate.py --clean hs6      # Remove generated files for hs6 only
+    stencil --config <path> gen [--all] [pkg]      # Generate (one pkg or --all)
+    stencil --config <path> clean [--all] [pkg]   # Remove generated files
+    stencil --config <path> install               # Install .gitignore entries
+    stencil --config <path> list                   # List packages
 """
 
 import argparse
@@ -348,11 +345,19 @@ def clean_generated(
                 path.unlink()
                 print(f"Removed {path}")
         else:
+            # Only remove directories if empty, so we don't delete user-added content
+            is_empty = not any(path.iterdir())
             if dry_run:
-                print(f"Would remove directory {path}")
+                if is_empty:
+                    print(f"Would remove directory {path}")
+                else:
+                    print(f"Would skip non-empty directory {path}")
             else:
-                shutil.rmtree(path)
-                print(f"Removed directory {path}")
+                if is_empty:
+                    path.rmdir()
+                    print(f"Removed directory {path}")
+                else:
+                    print(f"Skipped non-empty directory (leave as-is): {path}")
 
 
 def install_gitignore(config: dict, dry_run: bool = False):
@@ -410,26 +415,39 @@ def install_gitignore(config: dict, dry_run: bool = False):
 
 def main():
     parser = argparse.ArgumentParser(description="Generate package scaffolding from templates")
-    parser.add_argument("package", nargs="?", help="Package ID (e.g., hs6), 'install', or omit when using --all")
-    parser.add_argument("--all", action="store_true", help="Generate scaffolding for every package in the config")
-    parser.add_argument("--list", action="store_true", help="List available packages")
-    parser.add_argument("--clean", action="store_true", help="Remove generated files instead of generating (optionally specify a package, or omit to clean all)")
-    parser.add_argument("--dry-run", action="store_true", help="Show what would be generated")
-    parser.add_argument(
-        "--config",
-        help="Path to config file",
-        required=True,
-    )
+    parser.add_argument("--config", help="Path to config file")
+    parser.add_argument("--dry-run", action="store_true", help="Show what would be done without making changes")
+    sub = parser.add_subparsers(dest="command", required=True, metavar="COMMAND")
+
+    def _add_global_opts(p):
+        p.add_argument("--config", help="Path to config file")
+        p.add_argument("--dry-run", action="store_true", help="Show what would be done without making changes")
+
+    gen_p = sub.add_parser("gen", help="Generate scaffolding for a package or all packages")
+    gen_p.add_argument("pkg", nargs="?", help="Package ID (e.g. hs6); omit when using --all")
+    gen_p.add_argument("--all", action="store_true", help="Generate for every package in the config")
+    _add_global_opts(gen_p)
+
+    clean_p = sub.add_parser("clean", help="Remove generated files")
+    clean_p.add_argument("pkg", nargs="?", help="Package ID to clean; omit or use --all for all packages")
+    clean_p.add_argument("--all", action="store_true", help="Clean every package")
+    _add_global_opts(clean_p)
+
+    install_p = sub.add_parser("install", help="Install or update .gitignore with stencil-managed entries")
+    _add_global_opts(install_p)
+
+    list_p = sub.add_parser("list", help="List available packages")
+    _add_global_opts(list_p)
+
     args = parser.parse_args()
 
+    if not args.config:
+        parser.error("the following arguments are required: --config")
     config_path = Path(args.config)
     config_dir = config_path.parent
-
-    # Load configuration
     config = load_config(config_path)
 
-    # Handle 'install' command (doesn't require packages in config)
-    if args.package == "install":
+    if args.command == "install":
         install_gitignore(config, args.dry_run)
         return
 
@@ -437,46 +455,39 @@ def main():
         print("Error: 'packages' is required in config", file=sys.stderr)
         sys.exit(1)
 
-    if args.list:
+    if args.command == "list":
         list_packages(config)
         return
 
-    # Resolve templates_dir relative to config file location (string or list)
-    templates_dir_raw = config.get("templates_dir")
+    # Resolve output_dir relative to CWD (defaults to CWD if omitted)
+    output_dir_raw = config.get("output_dir")
+    output_base = Path(output_dir_raw).resolve() if output_dir_raw else Path.cwd()
 
+    if args.command == "clean":
+        package_id = None if (args.all or not args.pkg) else args.pkg
+        clean_generated(output_base, config, package_id=package_id, dry_run=args.dry_run)
+        return
+
+    if args.command != "gen":
+        return
+
+    # gen: require --all or pkg
+    if not args.all and not args.pkg:
+        gen_p.print_help()
+        return
+
+    # Resolve templates_dir for gen
+    templates_dir_raw = config.get("templates_dir")
     if templates_dir_raw:
         if isinstance(templates_dir_raw, str):
             templates_dir_raw = [templates_dir_raw]
         template_dirs = [(config_dir / d).resolve() for d in templates_dir_raw]
     else:
         template_dirs = []
-
-    # Always append bundled templates as fallback search path
     bundled = SCRIPT_DIR / "templates"
     if bundled.resolve() not in [d.resolve() for d in template_dirs]:
         template_dirs.append(bundled)
 
-    # Resolve output_dir relative to CWD (defaults to CWD if omitted)
-    output_dir_raw = config.get("output_dir")
-    output_base = Path(output_dir_raw).resolve() if output_dir_raw else Path.cwd()
-
-    if args.clean:
-        clean_generated(output_base, config, package_id=args.package, dry_run=args.dry_run)
-        return
-
-    if not args.package:
-        parser.print_help()
-        return
-
-    # Get package config
-    try:
-        context = get_template_context(args.package, config)
-    except ValueError as e:
-        print(f"Error: {e}", file=sys.stderr)
-        list_packages(config)
-        sys.exit(1)
-
-    # Setup Jinja2 environment
     env = Environment(
         loader=FileSystemLoader(template_dirs),
         extensions=["jinja2.ext.do"],
@@ -484,32 +495,23 @@ def main():
         lstrip_blocks=True,
         keep_trailing_newline=True,
     )
-
-    # Determine output directory
-    output_dir = output_base / context["package_dir"]
-
-    if not output_dir.exists():
-        if args.dry_run:
-            print(f"Would create directory: {output_dir}")
-        else:
-            output_dir.mkdir(parents=True)
-            print(f"Created directory: {output_dir}")
-
-    # Render templates
     template_defs = config.get("templates", [])
     if not template_defs:
         print("Error: No templates defined in config", file=sys.stderr)
         sys.exit(1)
-    render_templates(env, template_defs, context, output_dir, args.dry_run)
 
-    # Copy dependency scripts
-    copy_scripts(context, output_dir, args.dry_run)
+    if args.all:
+        for package_id in config["packages"]:
+            generate_package(env, config, output_base, package_id, args.dry_run)
+        return
 
-    # Copy static files/directories
-    copy_files(context, output_dir, args.dry_run)
-
+    package_id = args.pkg
+    out = generate_package(env, config, output_base, package_id, args.dry_run)
+    if out is None:
+        list_packages(config)
+        sys.exit(1)
     if not args.dry_run:
-        print(f"\nSuccessfully generated files for {args.package} in {output_dir}")
+        print(f"\nSuccessfully generated files for {package_id} in {out}")
 
 
 if __name__ == "__main__":
