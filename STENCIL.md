@@ -31,9 +31,9 @@ make doc with=hidden              # Lowercase also works
 
 ### Available Features
 
-| Feature  | Description                                    | Markdown Syntax           |
-| -------- | ---------------------------------------------- | ------------------------- |
-| `hidden` | Answer keys, solutions, instructor notes       | `::: {.hidden} ... :::`   |
+| Feature  | Description                              | Markdown Syntax         |
+| -------- | ---------------------------------------- | ----------------------- |
+| `hidden` | Answer keys, solutions, instructor notes | `::: {.hidden} ... :::` |
 
 ### Markdown Syntax for Features
 
@@ -85,6 +85,13 @@ SELECT * FROM users WHERE active = true;
 ```
 ````
 
+### Mermaid Diagrams
+
+Mermaid code blocks (```` ```mermaid ````) are rendered in the browser by Mermaid.js. The HTML template
+replaces each block with a `div.mermaid`, runs Mermaid, then dispatches `mermaid-ready` so that the
+nav-tabs script runs only after diagrams are rendered (avoiding layout errors from moving nodes
+into hidden tabs mid-render).
+
 ### Printing
 
 The HTML documents include print-optimized styles. Use your browser's print function (Ctrl+P / Cmd+P)
@@ -100,12 +107,12 @@ to generate a PDF that closely matches academic document formatting:
 Stencil generates files based on your `.config.yaml` template list. For document packages, the
 bundled templates produce:
 
-| File                   | Purpose                                      |
-| ---------------------- | -------------------------------------------- |
-| `Makefile`             | Build targets (doc, format-md, clean, etc.)  |
-| `docker-compose.yml`   | Container definitions for doc generation     |
-| `html-template.html`   | HTML template with Bootstrap 5 styling       |
-| `hidden-filter.lua`    | Pandoc filter for conditional content        |
+| File                 | Purpose                                     |
+| -------------------- | ------------------------------------------- |
+| `Makefile`           | Build targets (doc, format-md, clean, etc.) |
+| `docker-compose.yml` | Container definitions for doc generation    |
+| `html-template.html` | HTML template with Bootstrap 5 styling      |
+| `hidden-filter.lua`  | Pandoc filter for conditional content       |
 
 You can create custom templates for any project type. Templates are Jinja2 files (`.j2` suffix)
 that have access to the package context variables.
@@ -142,31 +149,31 @@ This allows projects to override or extend the default templates.
 
 ### Package Configuration
 
-| Field          | Required | Description                                        |
-| -------------- | -------- | -------------------------------------------------- |
-| `name`         | No       | Display name (defaults to package ID)              |
-| `dir`          | No       | Output subdirectory (defaults to package ID)       |
-| `package_type` | Yes      | `doc` for HTML documents, `zip` for submissions    |
-| `docs`         | No       | List of markdown files to convert to HTML          |
-| `package_name` | zip only | Filename for the submission zip                    |
-| `services`     | No       | Docker services: `web`, `mysql`                    |
-| `copy_files`   | No       | Static files/dirs to copy from a files directory   |
-| `deps_script`  | No       | Install scripts keyed by OS                        |
+| Field          | Required | Description                                      |
+| -------------- | -------- | ------------------------------------------------ |
+| `name`         | No       | Display name (defaults to package ID)            |
+| `dir`          | No       | Output subdirectory (defaults to package ID)     |
+| `package_type` | Yes      | `doc` for HTML documents, `zip` for submissions  |
+| `docs`         | No       | List of markdown files to convert to HTML        |
+| `package_name` | zip only | Filename for the submission zip                  |
+| `services`     | No       | Docker services: `web`, `mysql`                  |
+| `copy_files`   | No       | Static files/dirs to copy from a files directory |
+| `deps_script`  | No       | Install scripts keyed by OS                      |
 
 All package fields are available as template context variables. Custom fields can be added and
 accessed in your templates.
 
 ## Makefile Targets
 
-| Target       | Description                                         |
-| ------------ | --------------------------------------------------- |
-| `help`       | Show available targets                              |
-| `install`    | Create/update virtual environment                   |
-| `gen T=name` | Generate scaffolding for package `name`             |
-| `doc`        | Generate HTML docs (add `WITH=hidden` for extras)   |
-| `format-md`  | Format markdown files with prettier                 |
-| `clean`      | Remove generated files                              |
-| `clean-pkg`  | Remove package-specific generated files             |
+| Target       | Description                                       |
+| ------------ | ------------------------------------------------- |
+| `help`       | Show available targets                            |
+| `install`    | Create/update virtual environment                 |
+| `gen T=name` | Generate scaffolding for package `name`           |
+| `doc`        | Generate HTML docs (add `WITH=hidden` for extras) |
+| `format-md`  | Format markdown files with prettier               |
+| `clean`      | Remove generated files                            |
+| `clean-pkg`  | Remove package-specific generated files           |
 
 ## Extending Stencil
 
@@ -180,9 +187,9 @@ all package configuration fields plus derived variables like `has_web`, `has_mys
 To add a new conditional feature (e.g., `draft`):
 
 1. Create a Lua filter `draft-filter.lua.j2` in your templates directory
-2. Add it to the pandoc entrypoint in `docker-compose.yml.j2`
-3. Add template to your `.config.yaml`
-4. Use `::: {.draft}` in markdown
+1. Add it to the pandoc entrypoint in `docker-compose.yml.j2`
+1. Add template to your `.config.yaml`
+1. Use `::: {.draft}` in markdown
 
 The `WITH=` variable automatically passes `--metadata include-<feature>=true` to pandoc for any
 feature name.

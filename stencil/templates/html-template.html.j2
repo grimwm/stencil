@@ -160,10 +160,12 @@
       margin: 1rem 0;
     }
 
-    /* Mermaid diagrams */
+    /* Mermaid diagrams (client-side render) */
     .mermaid {
       margin: 1.5rem 0;
       overflow-x: auto;
+      min-width: 200px;
+      min-height: 100px;
     }
     
     /* Side-by-side tables */
@@ -303,24 +305,29 @@ $body$
   <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/bash.min.js"></script>
   <script>hljs.highlightAll();</script>
 
-  <!-- Mermaid.js for diagrams in ```mermaid code blocks -->
+  <!-- Mermaid.js: run first; nav-tabs waits for mermaid-ready so diagram layout has valid dimensions -->
   <script type="module">
     import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
     mermaid.initialize({ startOnLoad: false, theme: 'neutral' });
-    document.querySelectorAll('pre code.language-mermaid').forEach((code) => {
-      const pre = code.closest('pre');
+    document.querySelectorAll('pre code.language-mermaid, pre.mermaid').forEach((el) => {
+      const pre = el.tagName === 'PRE' ? el : el.closest('pre');
+      if (!pre) return;
+      const text = (el.tagName === 'PRE' ? el : el).textContent.replace(/^\n|\n$$/g, '');
       const div = document.createElement('div');
       div.className = 'mermaid';
-      div.textContent = code.textContent.replace(/^\n|\n$$/g, '');
+      div.textContent = text;
       pre.insertAdjacentElement('afterend', div);
       pre.remove();
     });
-    mermaid.run({ querySelector: '.mermaid' });
+    await mermaid.run({ querySelector: '.mermaid' });
+    window.__mermaidReady = true;
+    window.dispatchEvent(new Event('mermaid-ready'));
   </script>
-  
-  <!-- Convert nav-tabs to Bootstrap tabs -->
+
+  <!-- Convert nav-tabs to Bootstrap tabs (after Mermaid to avoid moving nodes mid-render) -->
   <script>
   (function() {
+    function initTabs() {
     const nav = document.querySelector('nav.nav-tabs');
     if (!nav) return;
     
@@ -370,6 +377,12 @@ $body$
     
     // Insert tab content after nav
     nav.parentNode.insertBefore(tabContent, nav.nextSibling);
+    }
+    if (window.__mermaidReady) {
+      initTabs();
+    } else {
+      window.addEventListener('mermaid-ready', initTabs, { once: true });
+    }
   })();
   </script>
 </body>
