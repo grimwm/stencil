@@ -3,10 +3,13 @@
 Generate package scaffolding from Jinja2 templates.
 
 Usage:
-    python generate.py hs6            # Generate files for hs6
-    python generate.py hs6 --dry-run  # Show what would be generated
-    python generate.py --list         # List available packages
-    python generate.py install        # Install .gitignore entries
+    python generate.py hs6              # Generate files for hs6
+    python generate.py hs6 --dry-run    # Show what would be generated
+    python generate.py --all            # Generate files for every package in config
+    python generate.py --list           # List available packages
+    python generate.py install          # Install .gitignore entries
+    python generate.py --clean          # Remove all generated files
+    python generate.py --clean hs6      # Remove generated files for hs6 only
 """
 
 import argparse
@@ -92,6 +95,41 @@ def get_template_context(package_id: str, config: dict) -> dict:
     }
 
     return context
+
+
+def generate_package(
+    env: Environment,
+    config: dict,
+    output_base: Path,
+    package_id: str,
+    dry_run: bool = False,
+) -> Path | None:
+    """Generate scaffolding for a single package. Returns output_dir on success, None on skip."""
+    try:
+        context = get_template_context(package_id, config)
+    except ValueError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return None
+
+    output_dir = output_base / context["package_dir"]
+
+    if not output_dir.exists():
+        if dry_run:
+            print(f"Would create directory: {output_dir}")
+        else:
+            output_dir.mkdir(parents=True)
+            print(f"Created directory: {output_dir}")
+
+    template_defs = config.get("templates", [])
+    if not template_defs:
+        print(f"Error: No templates defined in config", file=sys.stderr)
+        return None
+
+    render_templates(env, template_defs, context, output_dir, dry_run)
+    copy_scripts(context, output_dir, dry_run)
+    copy_files(context, output_dir, dry_run)
+
+    return output_dir
 
 
 def render_templates(env: Environment, template_defs: list, context: dict, output_dir: Path, dry_run: bool = False):
@@ -264,6 +302,59 @@ def get_generated_files(config: dict) -> list[str]:
     return sorted(entries)
 
 
+def clean_generated(
+    output_base: Path,
+    config: dict,
+    package_id: str | None = None,
+    dry_run: bool = False,
+) -> None:
+    """Remove files and directories that stencil generates.
+
+    If package_id is None, clean all packages; otherwise clean only that package.
+    """
+    entries = get_generated_files(config)
+
+    if package_id is not None:
+        if package_id not in config.get("packages", {}):
+            print(f"Error: Unknown package {package_id}", file=sys.stderr)
+            list_packages(config)
+            sys.exit(1)
+        pkg_dir = config["packages"][package_id].get("dir", package_id)
+        entries = [e for e in entries if e.startswith(f"{pkg_dir}/")]
+        if not entries:
+            print(f"No generated paths for package {package_id}", file=sys.stderr)
+            return
+
+    # Resolve to absolute paths; sort by depth descending so we remove files before parent dirs
+    paths_with_depth = []
+    for entry in entries:
+        path = (output_base / entry).resolve()
+        if "*" in path.name:
+            # Glob pattern: expand and collect matches
+            for p in path.parent.glob(path.name):
+                paths_with_depth.append((len(p.parts), p))
+        else:
+            paths_with_depth.append((len(path.parts), path))
+
+    paths_with_depth.sort(key=lambda x: -x[0])
+
+    for _, path in paths_with_depth:
+        if not path.exists():
+            continue
+        if path.is_file():
+            if dry_run:
+                print(f"Would remove {path}")
+            else:
+                path.unlink()
+                print(f"Removed {path}")
+        else:
+            if dry_run:
+                print(f"Would remove directory {path}")
+            else:
+                shutil.rmtree(path)
+                print(f"Removed directory {path}")
+
+
 def install_gitignore(config: dict, dry_run: bool = False):
     """Install or update .gitignore with stencil-managed entries.
 
@@ -319,8 +410,10 @@ def install_gitignore(config: dict, dry_run: bool = False):
 
 def main():
     parser = argparse.ArgumentParser(description="Generate package scaffolding from templates")
-    parser.add_argument("package", nargs="?", help="Package ID (e.g., hs6) or 'install' to setup .gitignore")
+    parser.add_argument("package", nargs="?", help="Package ID (e.g., hs6), 'install', or omit when using --all")
+    parser.add_argument("--all", action="store_true", help="Generate scaffolding for every package in the config")
     parser.add_argument("--list", action="store_true", help="List available packages")
+    parser.add_argument("--clean", action="store_true", help="Remove generated files instead of generating (optionally specify a package, or omit to clean all)")
     parser.add_argument("--dry-run", action="store_true", help="Show what would be generated")
     parser.add_argument(
         "--config",
@@ -366,6 +459,10 @@ def main():
     # Resolve output_dir relative to CWD (defaults to CWD if omitted)
     output_dir_raw = config.get("output_dir")
     output_base = Path(output_dir_raw).resolve() if output_dir_raw else Path.cwd()
+
+    if args.clean:
+        clean_generated(output_base, config, package_id=args.package, dry_run=args.dry_run)
+        return
 
     if not args.package:
         parser.print_help()
