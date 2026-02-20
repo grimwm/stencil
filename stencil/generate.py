@@ -415,10 +415,14 @@ def clean_generated(
         if dry_run:
             if is_empty:
                 print(f"Would remove directory {d}")
+            else:
+                print(f"Would skip non-empty directory (leave as-is): {d}")
         else:
             if is_empty:
                 d.rmdir()
                 print(f"Removed directory {d}")
+            else:
+                print(f"Skipped non-empty directory (leave as-is): {d}")
 
 
 def install_gitignore(config: dict, dry_run: bool = False):
