@@ -170,6 +170,7 @@
       margin-top: 0.5rem;
       font-size: 0.95em;
       color: #555;
+      white-space: normal;
     }
 
     /* Mermaid diagrams (client-side render) */
@@ -362,7 +363,7 @@ $body$
       svg.querySelectorAll('*').forEach((el) => {
         const xhref = el.getAttributeNS('http://www.w3.org/1999/xlink', 'href');
         if (xhref) el.setAttributeNS('http://www.w3.org/1999/xlink', 'href', updateRef(xhref));
-        ['fill', 'stroke', 'clip-path', 'mask', 'filter'].forEach((attr) => {
+        ['fill', 'stroke', 'clip-path', 'mask', 'filter', 'style'].forEach((attr) => {
           const val = el.getAttribute(attr);
           if (val) {
             const updated = updateUrlRefs(val);
