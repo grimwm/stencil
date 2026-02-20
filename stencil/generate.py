@@ -195,8 +195,20 @@ def copy_scripts(context: dict, output_dir: Path, dry_run: bool = False):
                 print(f"Warning: Script not found: {src_file}", file=sys.stderr)
 
 
+def _paths_under_dir(path: Path) -> list[tuple[Path, bool]]:
+    """Return [(relative_path, is_file), ...] for everything under path (depth-first)."""
+    result = []
+    for p in path.rglob("*"):
+        rel = p.relative_to(path)
+        result.append((rel, p.is_file()))
+    return result
+
+
 def copy_files(context: dict, output_dir: Path, dry_run: bool = False):
     """Copy static files/directories from _generator/files/ to the output directory.
+
+    For directories, only removes/copies paths that exist in the source (preserves
+    user-added files in the destination). For single files, overwrites as before.
 
     Supports two formats:
       - Simple string: "filename" (copies to same name)
@@ -231,9 +243,30 @@ def copy_files(context: dict, output_dir: Path, dry_run: bool = False):
                 print(f"Would copy file: {src_path} -> {dst_path}")
         else:
             if src_path.is_dir():
-                if dst_path.exists():
-                    shutil.rmtree(dst_path)
-                shutil.copytree(src_path, dst_path)
+                # Remove only paths we generate (so user-added files in dst are kept)
+                entries = _paths_under_dir(src_path)
+                # Process deepest first so we unlink files before considering parent dirs
+                entries.sort(key=lambda x: (-len(x[0].parts), str(x[0])))
+                for rel, is_file in entries:
+                    dst_item = dst_path / rel
+                    if dst_item.exists():
+                        if is_file:
+                            dst_item.unlink()
+                            print(f"Removed (to replace): {dst_item}")
+                        else:
+                            # Only remove dir if empty (user may have added sibling files)
+                            if not any(dst_item.iterdir()):
+                                dst_item.rmdir()
+                                print(f"Removed empty dir: {dst_item}")
+                # Copy source tree into dst
+                for rel, is_file in entries:
+                    if not is_file:
+                        continue
+                    src_file = src_path / rel
+                    dst_file = dst_path / rel
+                    dst_file.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(src_file, dst_file)
+                    print(f"Copied: {dst_file}")
                 print(f"Copied directory: {dst_path}")
             else:
                 dst_path.parent.mkdir(parents=True, exist_ok=True)
