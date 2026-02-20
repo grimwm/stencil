@@ -345,11 +345,30 @@ $body$
           el.setAttribute('id', newId);
         }
       });
+      function updateRef(attrValue) {
+        if (!attrValue || !attrValue.startsWith('#')) return attrValue;
+        const oldId = attrValue.slice(1);
+        return idMap[oldId] !== undefined ? '#' + idMap[oldId] : attrValue;
+      }
+      function updateUrlRefs(val) {
+        if (!val || !val.includes('url(#')) return val;
+        return val.replace(/url\(#([^)]+)\)/g, (_, id) =>
+          idMap[id] !== undefined ? 'url(#' + idMap[id] + ')' : 'url(#' + id + ')');
+      }
       svg.querySelectorAll('[href]').forEach((el) => {
         const href = el.getAttribute('href');
-        if (href && href.startsWith('#') && idMap[href.slice(1)] !== undefined) {
-          el.setAttribute('href', '#' + idMap[href.slice(1)]);
-        }
+        if (href) el.setAttribute('href', updateRef(href));
+      });
+      svg.querySelectorAll('*').forEach((el) => {
+        const xhref = el.getAttributeNS('http://www.w3.org/1999/xlink', 'href');
+        if (xhref) el.setAttributeNS('http://www.w3.org/1999/xlink', 'href', updateRef(xhref));
+        ['fill', 'stroke', 'clip-path', 'mask', 'filter'].forEach((attr) => {
+          const val = el.getAttribute(attr);
+          if (val) {
+            const updated = updateUrlRefs(val);
+            if (updated !== val) el.setAttribute(attr, updated);
+          }
+        });
       });
     });
     window.__mermaidReady = true;
