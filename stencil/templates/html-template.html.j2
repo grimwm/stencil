@@ -333,45 +333,48 @@ $body$
       pre.remove();
     });
     await mermaid.run({ querySelector: '.mermaid' });
-    document.querySelectorAll('.mermaid').forEach((container, i) => {
-      const prefix = 'mermaid-' + i + '-';
-      const svg = container.querySelector('svg');
-      if (!svg) return;
-      const idMap = {};
-      svg.querySelectorAll('[id]').forEach((el) => {
-        const oldId = el.getAttribute('id');
-        if (oldId) {
-          const newId = prefix + oldId;
-          idMap[oldId] = newId;
-          el.setAttribute('id', newId);
-        }
-      });
-      function updateRef(attrValue) {
-        if (!attrValue || !attrValue.startsWith('#')) return attrValue;
-        const oldId = attrValue.slice(1);
-        return idMap[oldId] !== undefined ? '#' + idMap[oldId] : attrValue;
-      }
-      function updateUrlRefs(val) {
-        if (!val || !val.includes('url(#')) return val;
-        return val.replace(/url\(#([^)]+)\)/g, (_, id) =>
-          idMap[id] !== undefined ? 'url(#' + idMap[id] + ')' : 'url(#' + id + ')');
-      }
-      svg.querySelectorAll('[href]').forEach((el) => {
-        const href = el.getAttribute('href');
-        if (href) el.setAttribute('href', updateRef(href));
-      });
-      svg.querySelectorAll('*').forEach((el) => {
-        const xhref = el.getAttributeNS('http://www.w3.org/1999/xlink', 'href');
-        if (xhref) el.setAttributeNS('http://www.w3.org/1999/xlink', 'href', updateRef(xhref));
-        ['fill', 'stroke', 'clip-path', 'mask', 'filter', 'style'].forEach((attr) => {
-          const val = el.getAttribute(attr);
-          if (val) {
-            const updated = updateUrlRefs(val);
-            if (updated !== val) el.setAttribute(attr, updated);
+    const mermaidContainers = document.querySelectorAll('.mermaid');
+    if (mermaidContainers.length > 1) {
+      document.querySelectorAll('.mermaid').forEach((container, i) => {
+        const prefix = 'mermaid-' + i + '-';
+        const svg = container.querySelector('svg');
+        if (!svg) return;
+        const idMap = {};
+        svg.querySelectorAll('[id]').forEach((el) => {
+          const oldId = el.getAttribute('id');
+          if (oldId) {
+            const newId = prefix + oldId;
+            idMap[oldId] = newId;
+            el.setAttribute('id', newId);
           }
         });
+        function updateRef(attrValue) {
+          if (!attrValue || !attrValue.startsWith('#')) return attrValue;
+          const oldId = attrValue.slice(1);
+          return idMap[oldId] !== undefined ? '#' + idMap[oldId] : attrValue;
+        }
+        function updateUrlRefs(val) {
+          if (!val || !val.includes('url(#')) return val;
+          return val.replace(/url\(#([^)]+)\)/g, (_, id) =>
+            idMap[id] !== undefined ? 'url(#' + idMap[id] + ')' : 'url(#' + id + ')');
+        }
+        svg.querySelectorAll('[href]').forEach((el) => {
+          const href = el.getAttribute('href');
+          if (href) el.setAttribute('href', updateRef(href));
+        });
+        svg.querySelectorAll('*').forEach((el) => {
+          const xhref = el.getAttributeNS('http://www.w3.org/1999/xlink', 'href');
+          if (xhref) el.setAttributeNS('http://www.w3.org/1999/xlink', 'href', updateRef(xhref));
+          ['fill', 'stroke', 'clip-path', 'mask', 'filter', 'style', 'marker-end', 'marker-start', 'marker-mid'].forEach((attr) => {
+            const val = el.getAttribute(attr);
+            if (val) {
+              const updated = updateUrlRefs(val);
+              if (updated !== val) el.setAttribute(attr, updated);
+            }
+          });
+        });
       });
-    });
+    }
     window.__mermaidReady = true;
     window.dispatchEvent(new Event('mermaid-ready'));
   </script>
