@@ -495,7 +495,7 @@ def main():
     _add_global_opts(gen_p)
 
     clean_p = sub.add_parser("clean", help="Remove generated files")
-    clean_p.add_argument("pkg", nargs="?", help="Package ID to clean; omit or use --all for all packages")
+    clean_p.add_argument("pkg", nargs="?", help="Package ID to clean (required unless --all)")
     clean_p.add_argument("--all", action="store_true", help="Clean every package")
     _add_global_opts(clean_p)
 
@@ -539,7 +539,9 @@ def main():
     output_base = Path(output_dir_raw).resolve() if output_dir_raw else Path.cwd()
 
     if args.command == "clean":
-        package_id = None if (args.all or not args.pkg) else args.pkg
+        if not args.all and not args.pkg:
+            parser.error("clean requires either --all or a package ID (e.g. stencil clean hs1)")
+        package_id = None if args.all else args.pkg
         clean_generated(output_base, config, package_id=package_id, dry_run=args.dry_run)
         return
 
