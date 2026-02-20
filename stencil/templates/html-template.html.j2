@@ -305,7 +305,7 @@ $body$
   <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/bash.min.js"></script>
   <script>hljs.highlightAll();</script>
 
-  <!-- Mermaid.js: run first; nav-tabs waits for mermaid-ready so diagram layout has valid dimensions -->
+  <!-- Mermaid.js: run first; nav-tabs waits for mermaid-ready. Post-process SVG ids so multiple diagrams do not duplicate ids (WCAG 4.1.1). -->
   <script type="module">
     import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
     mermaid.initialize({ startOnLoad: false, theme: 'neutral' });
@@ -320,6 +320,26 @@ $body$
       pre.remove();
     });
     await mermaid.run({ querySelector: '.mermaid' });
+    document.querySelectorAll('.mermaid').forEach((container, i) => {
+      const prefix = 'mermaid-' + i + '-';
+      const svg = container.querySelector('svg');
+      if (!svg) return;
+      const idMap = {};
+      svg.querySelectorAll('[id]').forEach((el) => {
+        const oldId = el.getAttribute('id');
+        if (oldId) {
+          const newId = prefix + oldId;
+          idMap[oldId] = newId;
+          el.setAttribute('id', newId);
+        }
+      });
+      svg.querySelectorAll('[href]').forEach((el) => {
+        const href = el.getAttribute('href');
+        if (href && href.startsWith('#') && idMap[href.slice(1)] !== undefined) {
+          el.setAttribute('href', '#' + idMap[href.slice(1)]);
+        }
+      });
+    });
     window.__mermaidReady = true;
     window.dispatchEvent(new Event('mermaid-ready'));
   </script>

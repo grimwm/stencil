@@ -118,7 +118,15 @@ def generate_package(
             output_dir.mkdir(parents=True)
             print(f"Created directory: {output_dir}")
 
-    template_defs = config.get("templates", [])
+    template_defs = list(config.get("templates", []))
+    # When package has docs, always include html template and Lua filters so config can't forget them
+    if context.get("has_docs"):
+        doc_templates = [
+            {"src": "html-template.html.j2"},
+            {"src": "hidden-filter.lua.j2"},
+            {"src": "mermaid-figure-filter.lua.j2"},
+        ]
+        template_defs = doc_templates + template_defs
     if not template_defs:
         print(f"Error: No templates defined in config", file=sys.stderr)
         return None
@@ -302,6 +310,13 @@ def get_generated_files(config: dict, files_src: Path | None = None) -> list[str
         if dest:
             template_files.append(dest)
 
+    # Doc templates always included when package has docs (injected in generate_package)
+    doc_template_files = [
+        "html-template.html",
+        "hidden-filter.lua",
+        "mermaid-figure-filter.lua",
+    ]
+
     # Process each package
     for package_id, package in config.get("packages", {}).items():
         pkg_dir = package.get("dir", package_id)
@@ -309,6 +324,10 @@ def get_generated_files(config: dict, files_src: Path | None = None) -> list[str
         # Add template files for this package
         for f in template_files:
             entries.add(f"{pkg_dir}/{f}")
+        # Add doc-only template outputs for packages with docs
+        if package.get("docs"):
+            for f in doc_template_files:
+                entries.add(f"{pkg_dir}/{f}")
 
         # copy_files entries (always expand dirs to file list)
         for item in package.get("copy_files", []):

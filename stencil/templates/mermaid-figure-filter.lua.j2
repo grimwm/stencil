@@ -1,0 +1,23 @@
+-- Wrap Mermaid code blocks in a Pandoc Figure so the HTML output has <figure>/<figcaption>
+-- for screen reader accessibility (WCAG 1.1.1). Use optional caption on the block:
+--   ``` {.mermaid caption="Diagram: table1 and table2 join on key"}
+--   flowchart LR
+--   ...
+--   ```
+
+local function string_to_inlines(s)
+  local doc = pandoc.read(s, 'markdown')
+  if doc.blocks[1] and doc.blocks[1].content then
+    return doc.blocks[1].content
+  end
+  return { pandoc.Str(s) }
+end
+
+function CodeBlock(block)
+  if block.classes:includes('mermaid') then
+    local caption_text = block.attr.attributes['caption'] or 'Diagram'
+    local short = string_to_inlines(caption_text)
+    local caption = pandoc.Caption(short, {})
+    return pandoc.Figure({ block }, caption)
+  end
+end
