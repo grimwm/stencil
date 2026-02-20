@@ -3,10 +3,10 @@
 Generate package scaffolding from Jinja2 templates.
 
 Usage:
-    stencil --config <path> gen [--all] [pkg]      # Generate (one pkg or --all)
-    stencil --config <path> clean [--all] [pkg]   # Remove generated files
-    stencil --config <path> install               # Install .gitignore entries
-    stencil --config <path> list                   # List packages
+    stencil [--config <path>] gen [--all] [pkg]   # Generate (default config: .config.yaml)
+    stencil [--config <path>] clean [--all] [pkg]
+    stencil [--config <path>] install
+    stencil [--config <path>] list
 """
 
 import argparse
@@ -415,12 +415,12 @@ def install_gitignore(config: dict, dry_run: bool = False):
 
 def main():
     parser = argparse.ArgumentParser(description="Generate package scaffolding from templates")
-    parser.add_argument("--config", help="Path to config file")
+    parser.add_argument("--config", default=".config.yaml", help="Path to config file (default: .config.yaml in working directory)")
     parser.add_argument("--dry-run", action="store_true", help="Show what would be done without making changes")
     sub = parser.add_subparsers(dest="command", required=True, metavar="COMMAND")
 
     def _add_global_opts(p):
-        p.add_argument("--config", help="Path to config file")
+        p.add_argument("--config", default=".config.yaml", help="Path to config file (default: .config.yaml)")
         p.add_argument("--dry-run", action="store_true", help="Show what would be done without making changes")
 
     gen_p = sub.add_parser("gen", help="Generate scaffolding for a package or all packages")
@@ -441,9 +441,7 @@ def main():
 
     args = parser.parse_args()
 
-    if not args.config:
-        parser.error("the following arguments are required: --config")
-    config_path = Path(args.config)
+    config_path = Path(args.config).resolve()
     config_dir = config_path.parent
     config = load_config(config_path)
 
