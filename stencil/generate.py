@@ -332,9 +332,16 @@ def get_generated_files(config: dict, files_src: Path | None = None) -> list[str
                             rel = p.relative_to(src_path)
                             entries.add(f"{pkg_dir}/{dest_name}/{rel}")
 
-        # deps_script creates scripts/ directory (contents listed via copy; no expansion here)
-        if package.get("deps_script"):
+        # deps_script creates scripts/ directory; when expanding for clean, add each script file
+        deps_script = package.get("deps_script")
+        if deps_script:
             entries.add(f"{pkg_dir}/scripts/")
+            if files_src is not None:
+                script_names = set()
+                for script_list in deps_script.values():
+                    script_names.update(script_list)
+                for name in script_names:
+                    entries.add(f"{pkg_dir}/scripts/{name}")
 
         # docs generates .html files from .md files (glob for feature variants)
         for md in package.get("docs", []):
