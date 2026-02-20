@@ -7,6 +7,7 @@ Usage:
     stencil [--config <path>] clean [--all] [pkg]
     stencil [--config <path>] install
     stencil [--config <path>] list
+    stencil help [COMMAND]                        # Same as -h / --help; optional COMMAND for subcommand help
 """
 
 import argparse
@@ -439,7 +440,18 @@ def main():
     list_p = sub.add_parser("list", help="List available packages")
     _add_global_opts(list_p)
 
+    help_p = sub.add_parser("help", help="Show help (optionally for a subcommand)")
+    help_p.add_argument("topic", nargs="?", help="Subcommand to show help for")
+
     args = parser.parse_args()
+
+    if args.command == "help":
+        topic = getattr(args, "topic", None)
+        if topic and topic in sub.choices:
+            sub.choices[topic].print_help()
+        else:
+            parser.print_help()
+        return
 
     config_path = Path(args.config).resolve()
     config_dir = config_path.parent
