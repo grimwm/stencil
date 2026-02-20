@@ -283,11 +283,16 @@ def list_packages(config: dict):
         print(f"  {package_id:8} - {name:20} ({dir_name})")
 
 
-def get_generated_files(config: dict) -> list[str]:
+def get_generated_files(config: dict, files_src: Path | None = None) -> list[str]:
     """Determine what files stencil will generate based on templates config.
-    
+
     All entries are prefixed with the package directory so that .gitignore
     only ignores files in subdirectories, not at the parent level.
+
+    When files_src is provided (e.g. SCRIPT_DIR / "files"), copy_files that
+    are directories are expanded to the individual file paths under them,
+    so clean can remove only those files and then remove the dir if empty
+    (same algo as scripts/).
     """
     entries = set()
 
@@ -310,13 +315,24 @@ def get_generated_files(config: dict) -> list[str]:
         # copy_files entries
         for item in package.get("copy_files", []):
             if isinstance(item, str):
-                entries.add(f"{pkg_dir}/{item}")
+                src_name, dest_name = item, item
             else:
-                dest = item.get("dest", item.get("src", ""))
-                if dest:
-                    entries.add(f"{pkg_dir}/{dest}")
+                src_name = item.get("src", "")
+                dest_name = item.get("dest", src_name)
+            if not dest_name:
+                continue
+            entry = f"{pkg_dir}/{dest_name}"
+            entries.add(entry)
+            # Expand dir to file list when files_src given (for clean: remove only what we generate)
+            if files_src is not None:
+                src_path = files_src / src_name
+                if src_path.is_dir():
+                    for p in src_path.rglob("*"):
+                        if p.is_file():
+                            rel = p.relative_to(src_path)
+                            entries.add(f"{pkg_dir}/{dest_name}/{rel}")
 
-        # deps_script creates scripts/ directory
+        # deps_script creates scripts/ directory (contents listed via copy; no expansion here)
         if package.get("deps_script"):
             entries.add(f"{pkg_dir}/scripts/")
 
@@ -343,7 +359,8 @@ def clean_generated(
 
     If package_id is None, clean all packages; otherwise clean only that package.
     """
-    entries = get_generated_files(config)
+    # Expand copy_files dirs to file list so we remove only what we generated (like scripts/)
+    entries = get_generated_files(config, files_src=SCRIPT_DIR / "files")
 
     if package_id is not None:
         if package_id not in config.get("packages", {}):
@@ -379,13 +396,14 @@ def clean_generated(
                 path.unlink()
                 print(f"Removed {path}")
         else:
-            # Only remove directories if empty, so we don't delete user-added content
+            # Only remove directories if empty (same as scripts/ and copy_files dirs).
+            # We already removed only the generated files; user-added content stays.
             is_empty = not any(path.iterdir())
             if dry_run:
                 if is_empty:
                     print(f"Would remove directory {path}")
                 else:
-                    print(f"Would skip non-empty directory {path}")
+                    print(f"Would skip non-empty directory (leave as-is): {path}")
             else:
                 if is_empty:
                     path.rmdir()
