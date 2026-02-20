@@ -286,14 +286,12 @@ def list_packages(config: dict):
 def get_generated_files(config: dict, files_src: Path | None = None) -> list[str]:
     """Determine what files stencil will generate based on templates config.
 
-    All entries are prefixed with the package directory so that .gitignore
-    only ignores files in subdirectories, not at the parent level.
-
-    When files_src is provided (e.g. SCRIPT_DIR / "files"), copy_files that
-    are directories are expanded to the individual file paths under them,
-    so clean can remove only those files and then remove the dir if empty
-    (same algo as scripts/).
+    All entries are prefixed with the package directory. copy_files dirs and
+    scripts/ are always expanded to individual file paths (using files_src,
+    default SCRIPT_DIR / "files") so users can add their own files in those dirs.
     """
+    if files_src is None:
+        files_src = SCRIPT_DIR / "files"
     entries = set()
 
     # Get template output filenames (these go into each package directory)
@@ -312,7 +310,7 @@ def get_generated_files(config: dict, files_src: Path | None = None) -> list[str
         for f in template_files:
             entries.add(f"{pkg_dir}/{f}")
 
-        # copy_files entries
+        # copy_files entries (always expand dirs to file list)
         for item in package.get("copy_files", []):
             if isinstance(item, str):
                 src_name, dest_name = item, item
@@ -322,26 +320,23 @@ def get_generated_files(config: dict, files_src: Path | None = None) -> list[str
             if not dest_name:
                 continue
             entry = f"{pkg_dir}/{dest_name}"
-            entries.add(entry)
-            # Expand dir to file list when files_src given (for clean: remove only what we generate)
-            if files_src is not None:
-                src_path = files_src / src_name
-                if src_path.is_dir():
-                    for p in src_path.rglob("*"):
-                        if p.is_file():
-                            rel = p.relative_to(src_path)
-                            entries.add(f"{pkg_dir}/{dest_name}/{rel}")
+            src_path = files_src / src_name
+            if src_path.is_dir():
+                for p in src_path.rglob("*"):
+                    if p.is_file():
+                        rel = p.relative_to(src_path)
+                        entries.add(f"{pkg_dir}/{dest_name}/{rel}")
+            else:
+                entries.add(entry)
 
-        # deps_script creates scripts/ directory; when expanding for clean, add each script file
+        # deps_script: always expand to script file list
         deps_script = package.get("deps_script")
         if deps_script:
-            entries.add(f"{pkg_dir}/scripts/")
-            if files_src is not None:
-                script_names = set()
-                for script_list in deps_script.values():
-                    script_names.update(script_list)
-                for name in script_names:
-                    entries.add(f"{pkg_dir}/scripts/{name}")
+            script_names = set()
+            for script_list in deps_script.values():
+                script_names.update(script_list)
+            for name in script_names:
+                entries.add(f"{pkg_dir}/scripts/{name}")
 
         # docs generates .html files from .md files (glob for feature variants)
         for md in package.get("docs", []):
@@ -366,8 +361,7 @@ def clean_generated(
 
     If package_id is None, clean all packages; otherwise clean only that package.
     """
-    # Expand copy_files dirs to file list so we remove only what we generated (like scripts/)
-    entries = get_generated_files(config, files_src=SCRIPT_DIR / "files")
+    entries = get_generated_files(config)
 
     if package_id is not None:
         if package_id not in config.get("packages", {}):
@@ -402,21 +396,29 @@ def clean_generated(
             else:
                 path.unlink()
                 print(f"Removed {path}")
+        # (entries are file paths only; no dir entries in list)
+
+    # Remove empty directories (e.g. .vscode, scripts/) under package dirs
+    parent_dirs = set(p.parent for _, p in paths_with_depth)
+    # Only consider dirs at least one level below package root (don't remove hs1-Setup itself)
+    candidate_dirs = [
+        d for d in parent_dirs
+        if d.exists()
+        and d.is_dir()
+        and len(d.relative_to(output_base).parts) >= 2
+    ]
+    candidate_dirs.sort(key=lambda d: -len(d.parts))
+    for d in candidate_dirs:
+        if not d.exists():
+            continue
+        is_empty = not any(d.iterdir())
+        if dry_run:
+            if is_empty:
+                print(f"Would remove directory {d}")
         else:
-            # Only remove directories if empty (same as scripts/ and copy_files dirs).
-            # We already removed only the generated files; user-added content stays.
-            is_empty = not any(path.iterdir())
-            if dry_run:
-                if is_empty:
-                    print(f"Would remove directory {path}")
-                else:
-                    print(f"Would skip non-empty directory (leave as-is): {path}")
-            else:
-                if is_empty:
-                    path.rmdir()
-                    print(f"Removed directory {path}")
-                else:
-                    print(f"Skipped non-empty directory (leave as-is): {path}")
+            if is_empty:
+                d.rmdir()
+                print(f"Removed directory {d}")
 
 
 def install_gitignore(config: dict, dry_run: bool = False):
@@ -424,10 +426,11 @@ def install_gitignore(config: dict, dry_run: bool = False):
 
     Uses marker comments to manage a section within .gitignore, allowing
     stencil to update its entries without disturbing user entries.
+    Expands copy_files dirs and scripts/ to individual paths so users
+    can add their own files in those directories.
     """
     gitignore_path = Path.cwd() / ".gitignore"
 
-    # Derive ignore entries from templates config
     entries = get_generated_files(config)
 
     # Build the stencil section
