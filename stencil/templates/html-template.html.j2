@@ -159,6 +159,12 @@
       text-align: center;
       margin: 1rem 0;
     }
+
+    /* Mermaid diagrams */
+    .mermaid {
+      margin: 1.5rem 0;
+      overflow-x: auto;
+    }
     
     /* Side-by-side tables */
     .side-by-side {
@@ -296,6 +302,21 @@ $body$
   <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/javascript.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/bash.min.js"></script>
   <script>hljs.highlightAll();</script>
+
+  <!-- Mermaid.js for diagrams in ```mermaid code blocks -->
+  <script type="module">
+    import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+    mermaid.initialize({ startOnLoad: false, theme: 'neutral' });
+    document.querySelectorAll('pre code.language-mermaid').forEach((code) => {
+      const pre = code.closest('pre');
+      const div = document.createElement('div');
+      div.className = 'mermaid';
+      div.textContent = code.textContent.replace(/^\n|\n$/g, '');
+      pre.insertAdjacentElement('afterend', div);
+      pre.remove();
+    });
+    mermaid.run({ querySelector: '.mermaid' });
+  </script>
   
   <!-- Convert nav-tabs to Bootstrap tabs -->
   <script>
