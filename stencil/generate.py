@@ -594,7 +594,7 @@ def main():
         loader=FileSystemLoader(template_dirs),
         extensions=["jinja2.ext.do"],
         trim_blocks=True,
-        lstrip_blocks=True,
+        lstrip_blocks=False,  # keep indentation on lines after {% ... %} so templates stay readable
         keep_trailing_newline=True,
     )
     template_defs = config.get("templates", [])
