@@ -92,12 +92,11 @@ def get_template_context(package_id: str, config: dict) -> dict:
         "copy_files": package.get("copy_files"),
     }
 
-    # Custom template vars: use package.template_env if present, else gather non-reserved keys
-    reserved = set(context) | {"template_env"}
+    # Custom template vars: only from explicit package.template_env (no gathering of other keys)
     if "template_env" in package and isinstance(package.get("template_env"), dict):
         context["template_env"] = package["template_env"]
     else:
-        context["template_env"] = {k: v for k, v in package.items() if k not in reserved}
+        context["template_env"] = {}
 
     return context
 
