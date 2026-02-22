@@ -71,7 +71,7 @@ def get_template_context(package_id: str, config: dict) -> dict:
     else:
         sql_imports = [raw_sql_import]
 
-    # Build context
+    # Build context: standard + derived keys first
     context = {
         "package_id": package_id,
         "name": package.get("name", package_id),
@@ -91,6 +91,11 @@ def get_template_context(package_id: str, config: dict) -> dict:
         "deps_script": package.get("deps_script"),
         "copy_files": package.get("copy_files"),
     }
+
+    # Pass through any other package keys under template_env (e.g. testing, test_dir)
+    reserved = set(context)
+    template_env = {k: v for k, v in package.items() if k not in reserved}
+    context["template_env"] = template_env
 
     return context
 
