@@ -2,7 +2,7 @@
 
 Generate project scaffolding from Jinja2 templates and YAML configuration.
 
-Stencil renders Jinja2 templates into per-package output directories, driven by a YAML config file. It also copies static files and OS-specific scripts. Conditional rendering lets you include or skip templates based on package features.
+Stencil renders Jinja2 templates into per-package output directories, driven by a YAML config file. Conditional rendering lets you include or skip templates based on package features.
 
 ## Installation
 
@@ -31,7 +31,7 @@ stencil [--config PATH] COMMAND [OPTIONS]
 | `list`    | List available packages                           |
 | `gen`     | Generate scaffolding (`--all` for all packages)   |
 | `clean`   | Remove generated files (`--all` for all packages) |
-| `install` | Generate all packages and update `.gitignore`     |
+| `install` | Update `.gitignore` with stencil-managed entries  |
 | `help`    | Show help (optionally for a specific command)     |
 
 **Examples:**
@@ -41,7 +41,7 @@ stencil list                      # list packages (uses .config.yaml)
 stencil gen mypackage             # generate one package
 stencil gen --all                 # generate all packages
 stencil gen mypackage --dry-run   # preview without writing
-stencil install                   # generate all + update .gitignore
+stencil install                   # update .gitignore
 stencil --config other.yaml list  # use alternate config file
 ```
 
@@ -51,14 +51,12 @@ Stencil is driven by a YAML config file (default: `.config.yaml`). See [`config.
 
 ### Top-level fields
 
-| Field           | Description                                                           |
-| --------------- | --------------------------------------------------------------------- |
-| `templates_dir` | Path(s) to template directories, relative to config. String or list.  |
-| `output_dir`    | Base output directory, relative to CWD. Defaults to CWD.              |
-| `files_dir`     | Path to static files directory, relative to config. For `copy_files`. |
-| `scripts_dir`   | Path to scripts directory, relative to config. For `deps_script`.     |
-| `templates`     | List of template definitions to render.                               |
-| `packages`      | Dictionary of package configurations keyed by package ID.             |
+| Field           | Description                                                          |
+| --------------- | -------------------------------------------------------------------- |
+| `templates_dir` | Path(s) to template directories, relative to config. String or list. |
+| `output_dir`    | Base output directory, relative to CWD. Defaults to CWD.             |
+| `templates`     | List of template definitions to render.                              |
+| `packages`      | Dictionary of package configurations keyed by package ID.            |
 
 ### Template definitions
 
@@ -88,17 +86,15 @@ Each key under `packages` is a package ID passed to the CLI.
 
 **Optional:**
 
-| Field            | Default    | Description                                                      |
-| ---------------- | ---------- | ---------------------------------------------------------------- |
-| `name`           | package ID | Display name shown by `list`.                                    |
-| `dir`            | package ID | Output subdirectory under `output_dir`.                          |
-| `docs`           | `[]`       | Markdown files to convert to HTML.                               |
-| `services`       | `[]`       | Docker Compose services (`web`, `mysql`).                        |
-| `package_folder` | `htdocs`   | Folder to include in the submission archive.                     |
-| `copy_files`     | `[]`       | Static files/dirs to copy. Strings or `{src, dest}` dicts.       |
-| `deps_script`    |            | OS-keyed install scripts: `{Windows_NT: [...], default: [...]}`. |
-| `sql_import`     |            | SQL import config(s): `{target, database, file}` dict or list.   |
-| `template_env`   | `{}`       | Custom variables merged into template context.                   |
+| Field            | Default    | Description                                                   |
+| ---------------- | ---------- | ------------------------------------------------------------- |
+| `name`           | package ID | Display name shown by `list`.                                 |
+| `dir`            | package ID | Output subdirectory under `output_dir`.                       |
+| `docs`           | `[]`       | Markdown files to convert to HTML.                            |
+| `services`       | `[]`       | Docker Compose services (`web`, `mysql`).                     |
+| `package_folder` | `htdocs`   | Folder to include in the submission archive.                  |
+| `sql_import`     |            | SQL import config(s): `{target, database, file}` dict or list |
+| `template_env`   | `{}`       | Custom variables merged into template context.                |
 
 ### Package types
 
@@ -126,8 +122,6 @@ Templates receive these variables, derived from the package config:
 | `has_mysql`      | `true` if `"mysql"` in services                     |
 | `has_services`   | `true` if any services defined                      |
 | `sql_imports`    | Normalized list of `sql_import` dicts               |
-| `deps_script`    | `deps_script` dict                                  |
-| `copy_files`     | `copy_files` list                                   |
 | `template_env`   | Custom variables dict (also merged to top level)    |
 | *(custom)*       | All keys from `template_env` are available directly |
 

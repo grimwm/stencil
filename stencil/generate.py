@@ -12,7 +12,6 @@ Usage:
 
 import argparse
 import re
-import shutil
 import sys
 from pathlib import Path
 
@@ -88,8 +87,6 @@ def get_template_context(package_id: str, config: dict) -> dict:
         "has_services": has_services,
         # Explicit features
         "sql_imports": sql_imports,
-        "deps_script": package.get("deps_script"),
-        "copy_files": package.get("copy_files"),
     }
 
     # Custom template vars: merge into top-level context so `when` conditions and templates can access them directly
@@ -108,8 +105,6 @@ def generate_package(
     output_base: Path,
     package_id: str,
     dry_run: bool = False,
-    files_dir: Path | None = None,
-    scripts_dir: Path | None = None,
 ) -> Path | None:
     """Generate scaffolding for a single package. Returns output_dir on success, None on skip."""
     try:
@@ -141,8 +136,6 @@ def generate_package(
         return None
 
     render_templates(env, template_defs, context, output_dir, dry_run)
-    copy_scripts(context, output_dir, scripts_dir, dry_run)
-    copy_files(context, output_dir, files_dir, dry_run)
 
     return output_dir
 
@@ -176,7 +169,7 @@ def render_templates(env: Environment, template_defs: list, context: dict, outpu
                 print(content)
                 print()
             else:
-                # Create parent directories if needed (for scripts/)
+                # Create parent directories if needed (for nested paths like .vscode/settings.json)
                 output_path.parent.mkdir(parents=True, exist_ok=True)
                 output_path.write_text(content)
                 print(f"Generated: {output_path}")
@@ -184,118 +177,6 @@ def render_templates(env: Environment, template_defs: list, context: dict, outpu
         except Exception as e:
             print(f"Error rendering {template_name}: {e}", file=sys.stderr)
             raise
-
-
-def copy_scripts(context: dict, output_dir: Path, scripts_dir: Path | None = None, dry_run: bool = False):
-    """Copy dependency scripts to the output directory."""
-    deps_script = context.get("deps_script")
-    if not deps_script:
-        return
-
-    if scripts_dir is None:
-        print("Warning: deps_script specified but no scripts_dir configured", file=sys.stderr)
-        return
-
-    scripts_dst = output_dir / "scripts"
-
-    # Copy scripts for each OS type (each value is a list)
-    for _, script_list in deps_script.items():
-        for script_name in script_list:
-            src_file = scripts_dir / script_name
-            dst_file = scripts_dst / script_name
-
-            if src_file.exists():
-                if dry_run:
-                    print(f"Would copy: {src_file} -> {dst_file}")
-                else:
-                    scripts_dst.mkdir(parents=True, exist_ok=True)
-                    shutil.copy2(src_file, dst_file)
-                    print(f"Copied: {dst_file}")
-            else:
-                print(f"Warning: Script not found: {src_file}", file=sys.stderr)
-
-
-def _paths_under_dir(path: Path) -> list[tuple[Path, bool]]:
-    """Return [(relative_path, is_file), ...] for everything under path (depth-first)."""
-    result = []
-    for p in path.rglob("*"):
-        rel = p.relative_to(path)
-        result.append((rel, p.is_file()))
-    return result
-
-
-def copy_files(context: dict, output_dir: Path, files_dir: Path | None = None, dry_run: bool = False):
-    """Copy static files/directories to the output directory.
-
-    For directories, only removes/copies paths that exist in the source (preserves
-    user-added files in the destination). For single files, overwrites as before.
-
-    Supports two formats:
-      - Simple string: "filename" (copies to same name)
-      - Dict with src/dest: {src: "filename", dest: "path/to/dest"}
-    """
-    copy_list = context.get("copy_files")
-    if not copy_list:
-        return
-
-    if files_dir is None:
-        print("Warning: copy_files specified but no files_dir configured", file=sys.stderr)
-        return
-
-    files_src = files_dir
-
-    for item in copy_list:
-        # Handle both string and dict formats
-        if isinstance(item, str):
-            src_name = item
-            dst_name = item
-        else:
-            src_name = item.get("src")
-            dst_name = item.get("dest", src_name)
-
-        src_path = files_src / src_name
-        dst_path = output_dir / dst_name
-
-        if not src_path.exists():
-            print(f"Warning: File/directory not found: {src_path}", file=sys.stderr)
-            continue
-
-        if dry_run:
-            if src_path.is_dir():
-                print(f"Would copy directory: {src_path} -> {dst_path}")
-            else:
-                print(f"Would copy file: {src_path} -> {dst_path}")
-        else:
-            if src_path.is_dir():
-                # Remove only paths we generate (so user-added files in dst are kept)
-                entries = _paths_under_dir(src_path)
-                # Process deepest first so we unlink files before considering parent dirs
-                entries.sort(key=lambda x: (-len(x[0].parts), str(x[0])))
-                for rel, is_file in entries:
-                    dst_item = dst_path / rel
-                    if dst_item.exists():
-                        if is_file:
-                            dst_item.unlink()
-                            print(f"Removed (to replace): {dst_item}")
-                        else:
-                            # Only remove dir if empty (user may have added sibling files)
-                            if not any(dst_item.iterdir()):
-                                dst_item.rmdir()
-                                print(f"Removed empty dir: {dst_item}")
-                # Copy source tree into dst
-                for rel, is_file in entries:
-                    if not is_file:
-                        continue
-                    src_file = src_path / rel
-                    dst_file = dst_path / rel
-                    dst_file.parent.mkdir(parents=True, exist_ok=True)
-                    shutil.copy2(src_file, dst_file)
-                    print(f"Copied: {dst_file}")
-                print(f"Copied directory: {dst_path}")
-            else:
-                dst_path.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copy2(src_path, dst_path)
-                print(f"Copied: {dst_path}")
 
 
 def list_packages(config: dict):
@@ -307,22 +188,13 @@ def list_packages(config: dict):
         print(f"  {package_id:8} - {name:20} ({dir_name})")
 
 
-def get_generated_files(config: dict, files_dir: Path | None = None) -> list[str]:
+def get_generated_files(config: dict) -> list[str]:
     """Determine what files stencil will generate based on templates config.
 
-    All entries are prefixed with the package directory. copy_files dirs and
-    scripts/ are always expanded to individual file paths (using files_dir
-    if provided) so users can add their own files in those dirs.
+    All entries are prefixed with the package directory. Respects `when` conditions
+    on templates by checking against each package's context.
     """
     entries = set()
-
-    # Get template output filenames (these go into each package directory)
-    template_files = []
-    for tdef in config.get("templates", []):
-        src = tdef.get("src", "")
-        dest = tdef.get("dest", src.removesuffix(".j2"))
-        if dest:
-            template_files.append(dest)
 
     # Doc templates always included when package has docs (injected in generate_package)
     doc_template_files = [
@@ -335,42 +207,29 @@ def get_generated_files(config: dict, files_dir: Path | None = None) -> list[str
     for package_id, package in config.get("packages", {}).items():
         pkg_dir = package.get("dir", package_id)
 
-        # Add template files for this package
-        for f in template_files:
-            entries.add(f"{pkg_dir}/{f}")
+        # Build a minimal context for checking `when` conditions
+        try:
+            context = get_template_context(package_id, config)
+        except ValueError:
+            continue
+
+        # Check each template's `when` condition against this package's context
+        for tdef in config.get("templates", []):
+            when = tdef.get("when")
+            if when is not None:
+                if isinstance(when, str):
+                    when = [when]
+                if not all(context.get(k) for k in when):
+                    continue
+            src = tdef.get("src", "")
+            dest = tdef.get("dest", src.removesuffix(".j2"))
+            if dest:
+                entries.add(f"{pkg_dir}/{dest}")
+
         # Add doc-only template outputs for packages with docs
         if package.get("docs"):
             for f in doc_template_files:
                 entries.add(f"{pkg_dir}/{f}")
-
-        # copy_files entries (expand dirs to file list if files_dir provided)
-        for item in package.get("copy_files", []):
-            if isinstance(item, str):
-                src_name, dest_name = item, item
-            else:
-                src_name = item.get("src", "")
-                dest_name = item.get("dest", src_name)
-            if not dest_name:
-                continue
-            entry = f"{pkg_dir}/{dest_name}"
-            if files_dir:
-                src_path = files_dir / src_name
-                if src_path.is_dir():
-                    for p in src_path.rglob("*"):
-                        if p.is_file():
-                            rel = p.relative_to(src_path)
-                            entries.add(f"{pkg_dir}/{dest_name}/{rel}")
-                    continue
-            entries.add(entry)
-
-        # deps_script: always expand to script file list
-        deps_script = package.get("deps_script")
-        if deps_script:
-            script_names = set()
-            for script_list in deps_script.values():
-                script_names.update(script_list)
-            for name in script_names:
-                entries.add(f"{pkg_dir}/scripts/{name}")
 
         # docs generates .html files from .md files (glob for feature variants)
         for md in package.get("docs", []):
@@ -390,13 +249,12 @@ def clean_generated(
     config: dict,
     package_id: str | None = None,
     dry_run: bool = False,
-    files_dir: Path | None = None,
 ) -> None:
     """Remove files and directories that stencil generates.
 
     If package_id is None, clean all packages; otherwise clean only that package.
     """
-    entries = get_generated_files(config, files_dir=files_dir)
+    entries = get_generated_files(config)
 
     if package_id is not None:
         if package_id not in config.get("packages", {}):
@@ -460,17 +318,15 @@ def clean_generated(
                 print(f"Skipped non-empty directory (leave as-is): {d}")
 
 
-def install_gitignore(config: dict, dry_run: bool = False, files_dir: Path | None = None):
+def install_gitignore(config: dict, dry_run: bool = False):
     """Install or update .gitignore with stencil-managed entries.
 
     Uses marker comments to manage a section within .gitignore, allowing
     stencil to update its entries without disturbing user entries.
-    Expands copy_files dirs and scripts/ to individual paths so users
-    can add their own files in those directories.
     """
     gitignore_path = Path.cwd() / ".gitignore"
 
-    entries = get_generated_files(config, files_dir=files_dir)
+    entries = get_generated_files(config)
 
     # Build the stencil section
     stencil_section = f"{GITIGNORE_START}\n"
@@ -558,8 +414,7 @@ def main():
     config = load_config(config_path)
 
     if args.command == "install":
-        files_dir = (config_dir / config["files_dir"]).resolve() if config.get("files_dir") else None
-        install_gitignore(config, args.dry_run, files_dir=files_dir)
+        install_gitignore(config, args.dry_run)
         return
 
     if "packages" not in config:
@@ -578,8 +433,7 @@ def main():
         if not args.all and not args.pkg:
             parser.error("clean requires either --all or a package ID (e.g. stencil clean hs1)")
         package_id = None if args.all else args.pkg
-        files_dir = (config_dir / config["files_dir"]).resolve() if config.get("files_dir") else None
-        clean_generated(output_base, config, package_id=package_id, dry_run=args.dry_run, files_dir=files_dir)
+        clean_generated(output_base, config, package_id=package_id, dry_run=args.dry_run)
         return
 
     if args.command != "gen":
@@ -602,14 +456,6 @@ def main():
     if bundled.resolve() not in [d.resolve() for d in template_dirs]:
         template_dirs.append(bundled)
 
-    # Resolve files_dir and scripts_dir (relative to config file)
-    files_dir = None
-    scripts_dir = None
-    if config.get("files_dir"):
-        files_dir = (config_dir / config["files_dir"]).resolve()
-    if config.get("scripts_dir"):
-        scripts_dir = (config_dir / config["scripts_dir"]).resolve()
-
     env = Environment(
         loader=FileSystemLoader(template_dirs),
         extensions=["jinja2.ext.do"],
@@ -624,11 +470,11 @@ def main():
 
     if args.all:
         for package_id in config["packages"]:
-            generate_package(env, config, output_base, package_id, args.dry_run, files_dir, scripts_dir)
+            generate_package(env, config, output_base, package_id, args.dry_run)
         return
 
     package_id = args.pkg
-    out = generate_package(env, config, output_base, package_id, args.dry_run, files_dir, scripts_dir)
+    out = generate_package(env, config, output_base, package_id, args.dry_run)
     if out is None:
         list_packages(config)
         sys.exit(1)
