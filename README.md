@@ -51,12 +51,14 @@ Stencil is driven by a YAML config file (default: `.config.yaml`). See [`config.
 
 ### Top-level fields
 
-| Field           | Description                                                          |
-| --------------- | -------------------------------------------------------------------- |
-| `templates_dir` | Path(s) to template directories, relative to config. String or list. |
-| `output_dir`    | Base output directory, relative to CWD. Defaults to CWD.             |
-| `templates`     | List of template definitions to render.                              |
-| `packages`      | Dictionary of package configurations keyed by package ID.            |
+| Field           | Description                                                           |
+| --------------- | --------------------------------------------------------------------- |
+| `templates_dir` | Path(s) to template directories, relative to config. String or list.  |
+| `output_dir`    | Base output directory, relative to CWD. Defaults to CWD.              |
+| `files_dir`     | Path to static files directory, relative to config. For `copy_files`. |
+| `scripts_dir`   | Path to scripts directory, relative to config. For `deps_script`.     |
+| `templates`     | List of template definitions to render.                               |
+| `packages`      | Dictionary of package configurations keyed by package ID.             |
 
 ### Template definitions
 
@@ -131,30 +133,21 @@ Templates receive these variables, derived from the package config:
 
 ## Bundled templates
 
-Stencil includes templates for a Docker-based PHP/MySQL development environment:
+Stencil includes a minimal set of templates for document generation:
 
-| Template                       | Description                                      |
-| ------------------------------ | ------------------------------------------------ |
-| `Makefile.j2`                  | Build targets (Docker, linting, formatting, pkg) |
-| `Makefile-base.j2`             | Common Makefile variables and help target        |
-| `Makefile-doc.j2`              | HTML documentation generation via Pandoc         |
-| `Makefile-pkg.j2`              | Submission packaging (zip)                       |
-| `docker-compose.yml.j2`        | PHP-FPM, nginx, MySQL, linters                   |
-| `docker-compose-html.yml.j2`   | HTML generation service (Pandoc)                 |
-| `Dockerfile.j2`                | PHP-FPM container                                |
-| `nginx.conf.j2`                | Nginx reverse proxy config                       |
-| `html-template.html.j2`        | Pandoc HTML template with Bootstrap styling      |
-| `hidden-filter.lua.j2`         | Pandoc Lua filter for hidden content sections    |
-| `mermaid-figure-filter.lua.j2` | Pandoc Lua filter for Mermaid diagram captions   |
-| `.sqlfluff.j2`                 | SQLFluff linter config                           |
+| Template                       | Description                                    |
+| ------------------------------ | ---------------------------------------------- |
+| `Makefile.j2`                  | Build targets (clean, format, doc, pkg)        |
+| `Makefile-base.j2`             | Common Makefile variables and help target      |
+| `Makefile-doc.j2`              | HTML documentation generation via Pandoc       |
+| `Makefile-pkg.j2`              | Submission packaging (zip)                     |
+| `docker-compose.yml.j2`        | HTML generation service (Pandoc)               |
+| `docker-compose-html.yml.j2`   | HTML generation service definition             |
+| `html-template.html.j2`        | Pandoc HTML template with Bootstrap styling    |
+| `hidden-filter.lua.j2`         | Pandoc Lua filter for hidden content sections  |
+| `mermaid-figure-filter.lua.j2` | Pandoc Lua filter for Mermaid diagram captions |
 
-Also bundled:
-
-- `files/.vscode/` -- VS Code settings and extension recommendations
-- `scripts/install-docker.sh` -- Docker install script (Linux/macOS)
-- `scripts/install-docker.ps1` -- Docker install script (Windows)
-
-Override these by pointing `templates_dir` to your own directories. Directories are searched in order (first match wins).
+Override these by providing your own `templates_dir`. Directories are searched in order (first match wins).
 
 ## Development
 

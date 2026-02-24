@@ -108,6 +108,8 @@ def generate_package(
     output_base: Path,
     package_id: str,
     dry_run: bool = False,
+    files_dir: Path | None = None,
+    scripts_dir: Path | None = None,
 ) -> Path | None:
     """Generate scaffolding for a single package. Returns output_dir on success, None on skip."""
     try:
@@ -139,8 +141,8 @@ def generate_package(
         return None
 
     render_templates(env, template_defs, context, output_dir, dry_run)
-    copy_scripts(context, output_dir, dry_run)
-    copy_files(context, output_dir, dry_run)
+    copy_scripts(context, output_dir, scripts_dir, dry_run)
+    copy_files(context, output_dir, files_dir, dry_run)
 
     return output_dir
 
@@ -184,19 +186,22 @@ def render_templates(env: Environment, template_defs: list, context: dict, outpu
             raise
 
 
-def copy_scripts(context: dict, output_dir: Path, dry_run: bool = False):
+def copy_scripts(context: dict, output_dir: Path, scripts_dir: Path | None = None, dry_run: bool = False):
     """Copy dependency scripts to the output directory."""
     deps_script = context.get("deps_script")
     if not deps_script:
         return
 
-    scripts_src = SCRIPT_DIR / "scripts"
+    if scripts_dir is None:
+        print("Warning: deps_script specified but no scripts_dir configured", file=sys.stderr)
+        return
+
     scripts_dst = output_dir / "scripts"
 
     # Copy scripts for each OS type (each value is a list)
     for _, script_list in deps_script.items():
         for script_name in script_list:
-            src_file = scripts_src / script_name
+            src_file = scripts_dir / script_name
             dst_file = scripts_dst / script_name
 
             if src_file.exists():
@@ -219,8 +224,8 @@ def _paths_under_dir(path: Path) -> list[tuple[Path, bool]]:
     return result
 
 
-def copy_files(context: dict, output_dir: Path, dry_run: bool = False):
-    """Copy static files/directories from _generator/files/ to the output directory.
+def copy_files(context: dict, output_dir: Path, files_dir: Path | None = None, dry_run: bool = False):
+    """Copy static files/directories to the output directory.
 
     For directories, only removes/copies paths that exist in the source (preserves
     user-added files in the destination). For single files, overwrites as before.
@@ -233,7 +238,11 @@ def copy_files(context: dict, output_dir: Path, dry_run: bool = False):
     if not copy_list:
         return
 
-    files_src = SCRIPT_DIR / "files"
+    if files_dir is None:
+        print("Warning: copy_files specified but no files_dir configured", file=sys.stderr)
+        return
+
+    files_src = files_dir
 
     for item in copy_list:
         # Handle both string and dict formats
@@ -298,15 +307,13 @@ def list_packages(config: dict):
         print(f"  {package_id:8} - {name:20} ({dir_name})")
 
 
-def get_generated_files(config: dict, files_src: Path | None = None) -> list[str]:
+def get_generated_files(config: dict, files_dir: Path | None = None) -> list[str]:
     """Determine what files stencil will generate based on templates config.
 
     All entries are prefixed with the package directory. copy_files dirs and
-    scripts/ are always expanded to individual file paths (using files_src,
-    default SCRIPT_DIR / "files") so users can add their own files in those dirs.
+    scripts/ are always expanded to individual file paths (using files_dir
+    if provided) so users can add their own files in those dirs.
     """
-    if files_src is None:
-        files_src = SCRIPT_DIR / "files"
     entries = set()
 
     # Get template output filenames (these go into each package directory)
@@ -336,7 +343,7 @@ def get_generated_files(config: dict, files_src: Path | None = None) -> list[str
             for f in doc_template_files:
                 entries.add(f"{pkg_dir}/{f}")
 
-        # copy_files entries (always expand dirs to file list)
+        # copy_files entries (expand dirs to file list if files_dir provided)
         for item in package.get("copy_files", []):
             if isinstance(item, str):
                 src_name, dest_name = item, item
@@ -346,14 +353,15 @@ def get_generated_files(config: dict, files_src: Path | None = None) -> list[str
             if not dest_name:
                 continue
             entry = f"{pkg_dir}/{dest_name}"
-            src_path = files_src / src_name
-            if src_path.is_dir():
-                for p in src_path.rglob("*"):
-                    if p.is_file():
-                        rel = p.relative_to(src_path)
-                        entries.add(f"{pkg_dir}/{dest_name}/{rel}")
-            else:
-                entries.add(entry)
+            if files_dir:
+                src_path = files_dir / src_name
+                if src_path.is_dir():
+                    for p in src_path.rglob("*"):
+                        if p.is_file():
+                            rel = p.relative_to(src_path)
+                            entries.add(f"{pkg_dir}/{dest_name}/{rel}")
+                    continue
+            entries.add(entry)
 
         # deps_script: always expand to script file list
         deps_script = package.get("deps_script")
@@ -382,12 +390,13 @@ def clean_generated(
     config: dict,
     package_id: str | None = None,
     dry_run: bool = False,
+    files_dir: Path | None = None,
 ) -> None:
     """Remove files and directories that stencil generates.
 
     If package_id is None, clean all packages; otherwise clean only that package.
     """
-    entries = get_generated_files(config)
+    entries = get_generated_files(config, files_dir=files_dir)
 
     if package_id is not None:
         if package_id not in config.get("packages", {}):
@@ -451,7 +460,7 @@ def clean_generated(
                 print(f"Skipped non-empty directory (leave as-is): {d}")
 
 
-def install_gitignore(config: dict, dry_run: bool = False):
+def install_gitignore(config: dict, dry_run: bool = False, files_dir: Path | None = None):
     """Install or update .gitignore with stencil-managed entries.
 
     Uses marker comments to manage a section within .gitignore, allowing
@@ -461,7 +470,7 @@ def install_gitignore(config: dict, dry_run: bool = False):
     """
     gitignore_path = Path.cwd() / ".gitignore"
 
-    entries = get_generated_files(config)
+    entries = get_generated_files(config, files_dir=files_dir)
 
     # Build the stencil section
     stencil_section = f"{GITIGNORE_START}\n"
@@ -549,7 +558,8 @@ def main():
     config = load_config(config_path)
 
     if args.command == "install":
-        install_gitignore(config, args.dry_run)
+        files_dir = (config_dir / config["files_dir"]).resolve() if config.get("files_dir") else None
+        install_gitignore(config, args.dry_run, files_dir=files_dir)
         return
 
     if "packages" not in config:
@@ -568,7 +578,8 @@ def main():
         if not args.all and not args.pkg:
             parser.error("clean requires either --all or a package ID (e.g. stencil clean hs1)")
         package_id = None if args.all else args.pkg
-        clean_generated(output_base, config, package_id=package_id, dry_run=args.dry_run)
+        files_dir = (config_dir / config["files_dir"]).resolve() if config.get("files_dir") else None
+        clean_generated(output_base, config, package_id=package_id, dry_run=args.dry_run, files_dir=files_dir)
         return
 
     if args.command != "gen":
@@ -591,6 +602,14 @@ def main():
     if bundled.resolve() not in [d.resolve() for d in template_dirs]:
         template_dirs.append(bundled)
 
+    # Resolve files_dir and scripts_dir (relative to config file)
+    files_dir = None
+    scripts_dir = None
+    if config.get("files_dir"):
+        files_dir = (config_dir / config["files_dir"]).resolve()
+    if config.get("scripts_dir"):
+        scripts_dir = (config_dir / config["scripts_dir"]).resolve()
+
     env = Environment(
         loader=FileSystemLoader(template_dirs),
         extensions=["jinja2.ext.do"],
@@ -605,11 +624,11 @@ def main():
 
     if args.all:
         for package_id in config["packages"]:
-            generate_package(env, config, output_base, package_id, args.dry_run)
+            generate_package(env, config, output_base, package_id, args.dry_run, files_dir, scripts_dir)
         return
 
     package_id = args.pkg
-    out = generate_package(env, config, output_base, package_id, args.dry_run)
+    out = generate_package(env, config, output_base, package_id, args.dry_run, files_dir, scripts_dir)
     if out is None:
         list_packages(config)
         sys.exit(1)
