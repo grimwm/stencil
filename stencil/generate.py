@@ -51,10 +51,10 @@ def get_template_context(package_id: str, config: dict) -> dict:
     package_type = package.get("package_type")
     if not package_type:
         raise ValueError(f"Package {package_id} is missing required 'package_type'")
-    if package_type not in ("doc", "zip"):
+    if package_type not in ("doc", "zip", "none"):
         raise ValueError(f"Package {package_id} has invalid package_type: {package_type}")
 
-    # package_name is required for zip packages
+    # package_name is required for zip packages (not for doc or none)
     package_name = package.get("package_name")
     if package_type == "zip" and not package_name:
         raise ValueError(f"Package {package_id} is missing required 'package_name' (required for zip type)")
