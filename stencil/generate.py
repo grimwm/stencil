@@ -294,12 +294,16 @@ def clean_generated(
     # Remove empty directories (e.g. .vscode, scripts/) under package dirs
     parent_dirs = set(p.parent for _, p in paths_with_depth)
     # Only consider dirs at least one level below package root (don't remove hs1-Setup itself)
-    candidate_dirs = [
-        d for d in parent_dirs
-        if d.exists()
-        and d.is_dir()
-        and len(d.relative_to(output_base).parts) >= 2
-    ]
+    candidate_dirs = []
+    for d in parent_dirs:
+        if not d.exists() or not d.is_dir():
+            continue
+        try:
+            if len(d.relative_to(output_base).parts) >= 2:
+                candidate_dirs.append(d)
+        except ValueError:
+            # Path is not under output_base (e.g. glob matched files elsewhere)
+            pass
     candidate_dirs.sort(key=lambda d: -len(d.parts))
     for d in candidate_dirs:
         if not d.exists():
