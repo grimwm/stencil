@@ -92,11 +92,12 @@ def get_template_context(package_id: str, config: dict) -> dict:
         "copy_files": package.get("copy_files"),
     }
 
-    # Custom template vars: only from explicit package.template_env (no gathering of other keys)
-    if "template_env" in package and isinstance(package.get("template_env"), dict):
-        context["template_env"] = package["template_env"]
-    else:
-        context["template_env"] = {}
+    # Custom template vars: merge into top-level context so `when` conditions and templates can access them directly
+    template_env = package.get("template_env", {})
+    if isinstance(template_env, dict):
+        context.update(template_env)
+    # Also keep as nested dict for backward compatibility
+    context["template_env"] = template_env if isinstance(template_env, dict) else {}
 
     return context
 
