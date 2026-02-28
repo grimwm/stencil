@@ -49,6 +49,13 @@
       border-bottom: 2px solid var(--accent-color);
     }
     
+    .doc-subtitle {
+      font-size: 1.8rem;
+      font-weight: 700;
+      color: #555;
+      margin-top: 0.5rem;
+    }
+    
     /* Headings: sans-serif with accent borders */
     h1, h2, h3, h4, h5, h6 {
       font-family: var(--font-sans);
@@ -313,7 +320,7 @@
 <body>
   <div class="container">
 $if(title)$
-<header class="doc-title">$title$</header>
+<header class="doc-title">$title$$if(subtitle)$<div class="doc-subtitle">$subtitle$</div>$endif$</header>
 $endif$
 $body$
   </div>
