@@ -117,6 +117,12 @@
     table {
       width: 100%;
       border-collapse: collapse;
+      table-layout: fixed;
+    }
+    
+    /* Disable fixed layout for tables with 6+ columns */
+    table:has(th:nth-child(6)) {
+      table-layout: auto;
     }
     
     /* Override Pandoc's colgroup width calculations */
