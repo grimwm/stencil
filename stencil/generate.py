@@ -12,6 +12,7 @@ Usage:
 
 import argparse
 import re
+import stat
 import sys
 from pathlib import Path
 
@@ -172,6 +173,9 @@ def render_templates(env: Environment, template_defs: list, context: dict, outpu
                 # Create parent directories if needed (for nested paths like .vscode/settings.json)
                 output_path.parent.mkdir(parents=True, exist_ok=True)
                 output_path.write_text(content)
+                # Set execute bit on shell scripts
+                if output_path.suffix == ".sh":
+                    output_path.chmod(output_path.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
                 print(f"Generated: {output_path}")
 
         except Exception as e:
