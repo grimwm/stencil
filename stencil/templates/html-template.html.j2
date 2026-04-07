@@ -4,18 +4,18 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>$if(course)$$course$: $endif$$title$</title>
-  
+
   <!-- Bootstrap 5 -->
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
-  
+
   <!-- Highlight.js for code syntax highlighting -->
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github.min.css">
-  
+
   <!-- Google Fonts: Crimson Pro (serif) + Inter (sans) -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Crimson+Pro:ital,wght@0,400;0,600;1,400&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
-  
+
   <style>
     :root {
       --font-serif: 'Crimson Pro', Georgia, 'Times New Roman', serif;
@@ -25,20 +25,20 @@
       --card-bg: #fffdf5;
       --card-border: #c8b48c;
     }
-    
+
     /* Academic fonts */
     body {
       font-family: var(--font-serif);
       font-size: 1.125rem;
       line-height: 1.7;
     }
-    
+
     .container {
       max-width: 60rem;
       padding-top: 2rem;
       padding-bottom: 2rem;
     }
-    
+
     /* Document title - H1 size + 0.2rem, bold */
     .doc-title {
       font-family: var(--font-sans);
@@ -48,31 +48,31 @@
       padding-bottom: 0.5rem;
       border-bottom: 2px solid var(--accent-color);
     }
-    
+
     .doc-subtitle {
       font-size: 1.8rem;
       font-weight: 700;
       color: #555;
       margin-top: 0.5rem;
     }
-    
+
     /* Headings: sans-serif with accent borders */
     h1, h2, h3, h4, h5, h6 {
       font-family: var(--font-sans);
       font-weight: 600;
       margin-top: 2rem;
     }
-    
+
     h1 {
       padding-bottom: 0.5rem;
       border-bottom: 2px solid var(--accent-color);
     }
-    
+
     h2 {
       padding-bottom: 0.25rem;
       border-bottom: 1px solid #dee2e6;
     }
-    
+
     /* Blockquotes as callout cards */
     blockquote {
       background: var(--card-bg);
@@ -84,63 +84,63 @@
       font-size: inherit;
       box-shadow: 2px 2px 8px rgba(0,0,0,0.08);
     }
-    
+
     blockquote p:last-child {
       margin-bottom: 0;
     }
-    
+
     blockquote strong {
       font-style: normal;
       color: var(--accent-color);
     }
-    
+
     /* Code: mono font */
     code, pre {
       font-family: var(--font-mono);
     }
-    
+
     pre {
       background: #f6f8fa;
       border: 1px solid #dee2e6;
       border-radius: 6px;
       padding: 1rem;
     }
-    
+
     code {
       font-size: 0.875em;
       color: #c7254e;
     }
-    
+
     pre code {
       color: inherit;
     }
-    
+
     /* Highlight.js contrast fixes for WCAG 2.1 AA */
     .hljs-built_in { color: #c85200; }
     .hljs-string { color: #0550ae; }
     .hljs-symbol { color: #c85200; }
-    
+
     /* Tables: header color, borders */
     table {
       width: 100%;
       border-collapse: collapse;
       table-layout: fixed;
     }
-    
+
     /* Disable fixed layout for tables with 6+ columns */
     table:has(th:nth-child(6)) {
       table-layout: auto;
     }
-    
+
     /* Override Pandoc's colgroup width calculations */
     col {
       width: auto !important;
     }
-    
+
     table + table {
       margin-top: 1.5rem;
     }
-    
+
     caption {
       font-family: var(--font-sans);
       font-weight: 600;
@@ -151,26 +151,26 @@
       border: 1px solid #c8c8c8;
       border-bottom: none;
     }
-    
+
     thead {
       background: #d2def2;
     }
-    
+
     th, td {
       padding: 0.5rem 0.75rem;
       border: 1px solid #c8c8c8;
       text-align: left;
     }
-    
+
     th {
       font-family: var(--font-sans);
       font-weight: 600;
     }
-    
+
     tbody tr:nth-child(even) {
       background: #f5f7fa;
     }
-    
+
     /* Display math: block + centered */
     math[display="block"] {
       display: block;
@@ -198,7 +198,7 @@
       min-width: 200px;
       min-height: 100px;
     }
-    
+
     /* Side-by-side tables */
     .side-by-side {
       display: flex;
@@ -207,12 +207,12 @@
       gap: 2rem;
       flex-wrap: wrap;
     }
-    
+
     .side-by-side table {
       width: auto;
       margin: 0;
     }
-    
+
     /* Navigation tabs - Bootstrap overrides */
     .nav-tabs.problem-tabs {
       background: var(--accent-color);
@@ -221,7 +221,7 @@
       padding: 0.5rem 0.5rem 0;
       margin-bottom: 0;
     }
-    
+
     .nav-tabs.problem-tabs .nav-link {
       color: rgba(255,255,255,0.85);
       font-family: var(--font-sans);
@@ -232,18 +232,18 @@
       padding: 0.5rem 1rem;
       margin-right: 2px;
     }
-    
+
     .nav-tabs.problem-tabs .nav-link:hover {
       color: #fff;
       background: rgba(255,255,255,0.15);
     }
-    
+
     .nav-tabs.problem-tabs .nav-link.active {
       background: #fff;
       color: var(--accent-color);
       border: none;
     }
-    
+
     .tab-content {
       border: 1px solid #dee2e6;
       border-top: none;
@@ -251,63 +251,64 @@
       padding: 1.5rem;
       background: #fff;
     }
-    
-    .tab-pane h1:first-child {
+
+    .tab-pane h1:first-child,
+    .tab-pane h2:first-child {
       margin-top: 0;
       border-bottom: none;
       padding-bottom: 0;
     }
-    
+
     /* Print styles */
     @media print {
       @page {
         size: letter;
         margin: 1in;
       }
-      
+
       body {
         font-size: 11pt;
         line-height: 1.5;
       }
-      
+
       .container {
         max-width: 100%;
         padding: 0;
       }
-      
+
       .doc-title { font-size: 18pt; }
       h1 { font-size: 16pt; }
       h2 { font-size: 14pt; }
       h3 { font-size: 12pt; }
-      
+
       h1, h2, h3, h4, h5, h6 {
         page-break-after: avoid;
       }
-      
+
       pre, blockquote, table, figure {
         page-break-inside: avoid;
       }
-      
+
       pre {
         font-size: 9pt;
       }
-      
+
       table {
         font-size: 10pt;
       }
-      
+
       thead {
         background: #e8e8e8 !important;
         -webkit-print-color-adjust: exact;
         print-color-adjust: exact;
       }
-      
+
       tbody tr:nth-child(even) {
         background: #f5f5f5 !important;
         -webkit-print-color-adjust: exact;
         print-color-adjust: exact;
       }
-      
+
       blockquote {
         background: #fffef8 !important;
         box-shadow: none;
@@ -324,10 +325,10 @@ $if(title)$
 $endif$
 $body$
   </div>
-  
+
   <!-- Bootstrap JS Bundle -->
   <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
-  
+
   <!-- Highlight.js -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/sql.min.js"></script>
@@ -403,51 +404,63 @@ $body$
     function initTabs() {
     const nav = document.querySelector('nav.nav-tabs');
     if (!nav) return;
-    
+
     const container = document.querySelector('.container');
     const links = nav.querySelectorAll('a');
     if (links.length === 0) return;
-    
+
+    // Detect heading level from first link target
+    const firstTargetId = links[0].getAttribute('href').slice(1);
+    const firstTarget = document.getElementById(firstTargetId);
+    if (!firstTarget) return;
+    const headingTag = firstTarget.tagName;
+
     // Convert nav to Bootstrap format
     nav.className = 'nav nav-tabs problem-tabs';
     nav.setAttribute('role', 'tablist');
-    
+
     // Create tab content container
     const tabContent = document.createElement('div');
     tabContent.className = 'tab-content';
-    
-    // Find all h1 sections that match our tab links
+
+    // Find all heading sections that match our tab links
     links.forEach((link, i) => {
       const targetId = link.getAttribute('href').slice(1);
-      const h1 = document.getElementById(targetId);
-      if (!h1) return;
-      
+      const heading = document.getElementById(targetId);
+      if (!heading) return;
+
       // Setup the nav link
       link.className = 'nav-link' + (i === 0 ? ' active' : '');
       link.setAttribute('data-bs-toggle', 'tab');
       link.setAttribute('data-bs-target', '#tab-' + targetId);
       link.setAttribute('role', 'tab');
       link.setAttribute('aria-selected', i === 0 ? 'true' : 'false');
-      
+
       // Create tab pane
       const pane = document.createElement('div');
       pane.className = 'tab-pane fade' + (i === 0 ? ' show active' : '');
       pane.id = 'tab-' + targetId;
       pane.setAttribute('role', 'tabpanel');
-      
-      // Collect all elements from h1 until next h1
-      let el = h1;
-      const elements = [h1];
-      while (el.nextElementSibling && el.nextElementSibling.tagName !== 'H1') {
-        el = el.nextElementSibling;
+
+      // Collect all elements from heading until next heading of same level (or higher)
+      let el = heading;
+      const elements = [heading];
+      const headingLevel = parseInt(headingTag.charAt(1));
+      while (el.nextElementSibling) {
+        const next = el.nextElementSibling;
+        const nextTag = next.tagName;
+        if (/^H[1-6]$$/.test(nextTag) && parseInt(nextTag.charAt(1)) <= headingLevel) {
+          break;
+        }
+        el = next;
         elements.push(el);
       }
-      
+
       // Move elements into pane
       elements.forEach(e => pane.appendChild(e));
       tabContent.appendChild(pane);
     });
-    
+
     // Insert tab content after nav
     nav.parentNode.insertBefore(tabContent, nav.nextSibling);
     }
