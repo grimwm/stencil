@@ -315,6 +315,26 @@
         -webkit-print-color-adjust: exact;
         print-color-adjust: exact;
       }
+
+      /* Show all tab panes and hide nav tabs when printing */
+      .nav-tabs.problem-tabs {
+        display: none !important;
+      }
+
+      .tab-content {
+        border: none;
+        padding: 0;
+      }
+
+      .tab-pane {
+        display: block !important;
+        opacity: 1 !important;
+        visibility: visible !important;
+      }
+
+      .tab-pane + .tab-pane {
+        margin-top: 1.5rem;
+      }
     }
   </style>
 </head>
