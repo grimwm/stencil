@@ -1,5 +1,6 @@
 # Makefile for course activities
-DC = docker compose
+# Override to use another Compose implementation, e.g. DC="podman compose"
+DC ?= docker compose
 
 # Default target
 ifeq ($(OS),Windows_NT)
