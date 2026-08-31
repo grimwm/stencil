@@ -62,6 +62,17 @@ def get_template_context(package_id: str, config: dict) -> dict:
     # docs list for doc-type packages (markdown files to convert to HTML)
     docs = package.get("docs", [])
 
+    # slides list: markdown rendered as a slide deck instead of a flowing document.
+    # Same pipeline, different pandoc template plus the slide-sections filter.
+    slides = package.get("slides", [])
+
+    both = sorted(set(docs) & set(slides))
+    if both:
+        raise ValueError(
+            f"Package {package_id} lists {both} in both 'docs' and 'slides'; "
+            "a markdown file belongs to exactly one of them"
+        )
+
     # Normalize sql_import to a list of import configs (target, database, file)
     raw_sql_import = package.get("sql_import")
     if raw_sql_import is None:
@@ -81,6 +92,10 @@ def get_template_context(package_id: str, config: dict) -> dict:
         "package_folder": package.get("package_folder", "htdocs"),
         "docs": docs,
         "has_docs": bool(docs),
+        "slides": slides,
+        "has_slides": bool(slides),
+        # True when the package renders any markdown through the pandoc pipeline
+        "has_pages": bool(docs) or bool(slides),
         "services": services,
         # Derived from services
         "has_web": has_web,
@@ -124,13 +139,18 @@ def generate_package(
             print(f"Created directory: {output_dir}")
 
     template_defs = list(config.get("templates", []))
-    # When package has docs, always include html template and Lua filters so config can't forget them
-    if context.get("has_docs"):
+    # When a package renders markdown, always include the pandoc templates and Lua
+    # filters it needs so a config can't forget them.
+    if context.get("has_pages"):
         doc_templates = [
-            {"src": "html-template.html.j2"},
             {"src": "hidden-filter.lua.j2"},
             {"src": "mermaid-figure-filter.lua.j2"},
         ]
+        if context.get("has_docs"):
+            doc_templates.insert(0, {"src": "html-template.html.j2"})
+        if context.get("has_slides"):
+            doc_templates.append({"src": "slides-template.html.j2"})
+            doc_templates.append({"src": "slide-sections.lua.j2"})
         template_defs = doc_templates + template_defs
     if not template_defs:
         print(f"Error: No templates defined in config", file=sys.stderr)
@@ -200,12 +220,13 @@ def get_generated_files(config: dict) -> list[str]:
     """
     entries = set()
 
-    # Doc templates always included when package has docs (injected in generate_package)
-    doc_template_files = [
-        "html-template.html",
+    # Templates always injected in generate_package for markdown-rendering packages
+    shared_page_files = [
         "hidden-filter.lua",
         "mermaid-figure-filter.lua",
     ]
+    doc_template_files = ["html-template.html"]
+    slides_template_files = ["slides-template.html", "slide-sections.lua"]
 
     # Process each package
     for package_id, package in config.get("packages", {}).items():
@@ -230,13 +251,19 @@ def get_generated_files(config: dict) -> list[str]:
             if dest:
                 entries.add(f"{pkg_dir}/{dest}")
 
-        # Add doc-only template outputs for packages with docs
+        # Add template outputs for packages that render markdown
+        if package.get("docs") or package.get("slides"):
+            for f in shared_page_files:
+                entries.add(f"{pkg_dir}/{f}")
         if package.get("docs"):
             for f in doc_template_files:
                 entries.add(f"{pkg_dir}/{f}")
+        if package.get("slides"):
+            for f in slides_template_files:
+                entries.add(f"{pkg_dir}/{f}")
 
-        # docs generates .html files from .md files (glob for feature variants)
-        for md in package.get("docs", []):
+        # docs and slides generate .html files from .md files (glob for feature variants)
+        for md in list(package.get("docs", [])) + list(package.get("slides", [])):
             if md.endswith(".md"):
                 entries.add(f"{pkg_dir}/{md.removesuffix('.md')}*.html")
 

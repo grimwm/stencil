@@ -1,0 +1,22 @@
+{# Pandoc HTML template for slide decks. Shares head, styling and client-side
+   behavior with html-template.html.j2; adds slide layout and present mode.
+   Pair it with slide-sections.lua, which groups the body into .slide sections. #}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+{% include '_page-head.html.j2' %}
+  <style>
+{% include '_page-style.css.j2' %}
+
+{% include '_slides-style.css.j2' %}
+  </style>
+</head>
+<body>
+  <div class="container deck">
+{% include '_slides-body.html.j2' %}
+  </div>
+
+{% include '_page-scripts.html.j2' %}
+{% include '_slides-scripts.html.j2' %}
+</body>
+</html>

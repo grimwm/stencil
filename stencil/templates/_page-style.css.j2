@@ -1,0 +1,321 @@
+{# Shared page styling: typography, callouts, code, tables, figures, print rules.
+   Included by html-template.html.j2 and slides-template.html.j2. #}
+    :root {
+      --font-serif: 'Crimson Pro', Georgia, 'Times New Roman', serif;
+      --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      --font-mono: 'JetBrains Mono', 'Fira Code', Consolas, Monaco, monospace;
+      --accent-color: #29417a;
+      --card-bg: #fffdf5;
+      --card-border: #c8b48c;
+    }
+
+    /* Academic fonts */
+    body {
+      font-family: var(--font-serif);
+      font-size: 1.125rem;
+      line-height: 1.7;
+    }
+
+    .container {
+      max-width: 60rem;
+      padding-top: 2rem;
+      padding-bottom: 2rem;
+    }
+
+    /* Document title - H1 size + 0.2rem, bold */
+    .doc-title {
+      font-family: var(--font-sans);
+      font-size: 2.2rem;
+      font-weight: 700;
+      margin-bottom: 1.5rem;
+      padding-bottom: 0.5rem;
+      border-bottom: 2px solid var(--accent-color);
+    }
+
+    .doc-subtitle {
+      font-size: 1.8rem;
+      font-weight: 700;
+      color: #555;
+      margin-top: 0.5rem;
+    }
+
+    /* Headings: sans-serif with accent borders */
+    h1, h2, h3, h4, h5, h6 {
+      font-family: var(--font-sans);
+      font-weight: 600;
+      margin-top: 2rem;
+    }
+
+    h1 {
+      padding-bottom: 0.5rem;
+      border-bottom: 2px solid var(--accent-color);
+    }
+
+    h2 {
+      padding-bottom: 0.25rem;
+      border-bottom: 1px solid #dee2e6;
+    }
+
+    /* Blockquotes as callout cards */
+    blockquote {
+      background: var(--card-bg);
+      border: 1px solid var(--card-border);
+      border-radius: 6px;
+      padding: 1rem 1.25rem;
+      margin-left: 3em;
+      font-style: italic;
+      font-size: inherit;
+      box-shadow: 2px 2px 8px rgba(0,0,0,0.08);
+    }
+
+    blockquote p:last-child {
+      margin-bottom: 0;
+    }
+
+    blockquote strong {
+      font-style: normal;
+      color: var(--accent-color);
+    }
+
+    /* Code: mono font */
+    code, pre {
+      font-family: var(--font-mono);
+    }
+
+    pre {
+      background: #f6f8fa;
+      border: 1px solid #dee2e6;
+      border-radius: 6px;
+      padding: 1rem;
+    }
+
+    code {
+      font-size: 0.875em;
+      color: #c7254e;
+    }
+
+    pre code {
+      color: inherit;
+    }
+
+    /* Highlight.js contrast fixes for WCAG 2.1 AA */
+    .hljs-built_in { color: #c85200; }
+    .hljs-string { color: #0550ae; }
+    .hljs-symbol { color: #c85200; }
+
+    /* Tables: header color, borders */
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      table-layout: fixed;
+    }
+
+    /* Disable fixed layout for tables with 6+ columns */
+    table:has(th:nth-child(6)) {
+      table-layout: auto;
+    }
+
+    /* Override Pandoc's colgroup width calculations */
+    col {
+      width: auto !important;
+    }
+
+    table + table {
+      margin-top: 1.5rem;
+    }
+
+    caption {
+      font-family: var(--font-sans);
+      font-weight: 600;
+      text-align: left;
+      padding: 0.5rem 0.75rem;
+      caption-side: top;
+      background: #e8eef7;
+      border: 1px solid #c8c8c8;
+      border-bottom: none;
+    }
+
+    thead {
+      background: #d2def2;
+    }
+
+    th, td {
+      padding: 0.5rem 0.75rem;
+      border: 1px solid #c8c8c8;
+      text-align: left;
+    }
+
+    th {
+      font-family: var(--font-sans);
+      font-weight: 600;
+    }
+
+    tbody tr:nth-child(even) {
+      background: #f5f7fa;
+    }
+
+    /* Display math: block + centered */
+    math[display="block"] {
+      display: block;
+      text-align: center;
+      margin: 1rem 0;
+    }
+
+    /* Figures (e.g. Mermaid with figcaption) */
+    figure {
+      margin: 1.5rem auto;
+      text-align: center;
+    }
+    figure figcaption {
+      text-align: center;
+      margin-top: 0.5rem;
+      font-size: 0.95em;
+      color: #555;
+      white-space: normal;
+    }
+
+    /* Mermaid diagrams (client-side render) */
+    .mermaid {
+      margin: 1.5rem 0;
+      overflow-x: auto;
+      min-width: 200px;
+      min-height: 100px;
+    }
+
+    /* Side-by-side tables */
+    .side-by-side {
+      display: flex;
+      justify-content: center;
+      align-items: flex-start;
+      gap: 2rem;
+      flex-wrap: wrap;
+    }
+
+    .side-by-side table {
+      width: auto;
+      margin: 0;
+    }
+
+    /* Navigation tabs - Bootstrap overrides */
+    .nav-tabs.problem-tabs {
+      background: var(--accent-color);
+      border-radius: 6px 6px 0 0;
+      border: none;
+      padding: 0.5rem 0.5rem 0;
+      margin-bottom: 0;
+    }
+
+    .nav-tabs.problem-tabs .nav-link {
+      color: rgba(255,255,255,0.85);
+      font-family: var(--font-sans);
+      font-size: 0.95rem;
+      font-weight: 500;
+      border: none;
+      border-radius: 6px 6px 0 0;
+      padding: 0.5rem 1rem;
+      margin-right: 2px;
+    }
+
+    .nav-tabs.problem-tabs .nav-link:hover {
+      color: #fff;
+      background: rgba(255,255,255,0.15);
+    }
+
+    .nav-tabs.problem-tabs .nav-link.active {
+      background: #fff;
+      color: var(--accent-color);
+      border: none;
+    }
+
+    .tab-content {
+      border: 1px solid #dee2e6;
+      border-top: none;
+      border-radius: 0 0 6px 6px;
+      padding: 1.5rem;
+      background: #fff;
+    }
+
+    .tab-pane h1:first-child,
+    .tab-pane h2:first-child {
+      margin-top: 0;
+      border-bottom: none;
+      padding-bottom: 0;
+    }
+
+    /* Print styles */
+    @media print {
+      @page {
+        size: letter;
+        margin: 1in;
+      }
+
+      body {
+        font-size: 11pt;
+        line-height: 1.5;
+      }
+
+      .container {
+        max-width: 100%;
+        padding: 0;
+      }
+
+      .doc-title { font-size: 18pt; }
+      h1 { font-size: 16pt; }
+      h2 { font-size: 14pt; }
+      h3 { font-size: 12pt; }
+
+      h1, h2, h3, h4, h5, h6 {
+        page-break-after: avoid;
+      }
+
+      pre, blockquote, table, figure {
+        page-break-inside: avoid;
+      }
+
+      pre {
+        font-size: 9pt;
+      }
+
+      table {
+        font-size: 10pt;
+      }
+
+      thead {
+        background: #e8e8e8 !important;
+        -webkit-print-color-adjust: exact;
+        print-color-adjust: exact;
+      }
+
+      tbody tr:nth-child(even) {
+        background: #f5f5f5 !important;
+        -webkit-print-color-adjust: exact;
+        print-color-adjust: exact;
+      }
+
+      blockquote {
+        background: #fffef8 !important;
+        box-shadow: none;
+        -webkit-print-color-adjust: exact;
+        print-color-adjust: exact;
+      }
+
+      /* Show all tab panes and hide nav tabs when printing */
+      .nav-tabs.problem-tabs {
+        display: none !important;
+      }
+
+      .tab-content {
+        border: none;
+        padding: 0;
+      }
+
+      .tab-pane {
+        display: block !important;
+        opacity: 1 !important;
+        visibility: visible !important;
+      }
+
+      .tab-pane + .tab-pane {
+        margin-top: 1.5rem;
+      }
+    }

@@ -90,7 +90,8 @@ Each key under `packages` is a package ID passed to the CLI.
 | ---------------- | ---------- | ------------------------------------------------------------- |
 | `name`           | package ID | Display name shown by `list`.                                 |
 | `dir`            | package ID | Output subdirectory under `output_dir`.                       |
-| `docs`           | `[]`       | Markdown files to convert to HTML.                            |
+| `docs`           | `[]`       | Markdown files to convert to HTML documents.                  |
+| `slides`         | `[]`       | Markdown files to convert to HTML slide decks.                |
 | `services`       | `[]`       | Docker Compose services (`web`, `mysql`).                     |
 | `package_folder` | `htdocs`   | Folder to include in the submission archive.                  |
 | `sql_import`     |            | SQL import config(s): `{target, database, file}` dict or list |
@@ -98,11 +99,11 @@ Each key under `packages` is a package ID passed to the CLI.
 
 ### Package types
 
-| Type   | Description                                                                   |
-| ------ | ----------------------------------------------------------------------------- |
-| `zip`  | Generates `pkg` target to create submission archive. Requires `package_name`. |
-| `doc`  | Documentation only. Generates `doc` target for HTML from markdown.            |
-| `none` | Infrastructure only. No `pkg` target, no `package_name` required.             |
+| Type   | Description                                                                        |
+| ------ | ---------------------------------------------------------------------------------- |
+| `zip`  | Generates `pkg` target to create submission archive. Requires `package_name`.      |
+| `doc`  | Documentation only. Generates `doc` (and `slides`) targets for HTML from markdown. |
+| `none` | Infrastructure only. No `pkg` target, no `package_name` required.                  |
 
 ### Context variables
 
@@ -117,6 +118,9 @@ Templates receive these variables, derived from the package config:
 | `package_folder` | `package_folder` field                              |
 | `docs`           | `docs` list                                         |
 | `has_docs`       | `true` if `docs` is non-empty                       |
+| `slides`         | `slides` list                                       |
+| `has_slides`     | `true` if `slides` is non-empty                     |
+| `has_pages`      | `true` if either `docs` or `slides` is non-empty    |
 | `services`       | `services` list                                     |
 | `has_web`        | `true` if `"web"` in services                       |
 | `has_mysql`      | `true` if `"mysql"` in services                     |

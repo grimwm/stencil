@@ -30,6 +30,23 @@
       - --mathml
     restart: "no"
 
+{% if has_slides %}
+  slides:
+    image: docker.io/pandoc/core:latest
+    volumes:
+      - .:/workspace:z
+    working_dir: /workspace
+    entrypoint:
+      - pandoc
+      - --standalone
+      - --template=slides-template.html
+      - --lua-filter=hidden-filter.lua
+      - --lua-filter=mermaid-figure-filter.lua
+      - --lua-filter=slide-sections.lua
+      - --mathml
+    restart: "no"
+
+{% endif %}
   check-access:
     image: docker.io/library/node:lts-alpine
     volumes:
@@ -55,7 +72,7 @@
         failed=0
         for f in *.html; do
           [ -f "$$f" ] || continue
-          [ "$$f" = "html-template.html" ] && continue
+          case "$$f" in html-template.html|slides-template.html) continue ;; esac
           echo "Checking $$f..."
           /tmp/pa11y/node_modules/.bin/pa11y \
             --config /tmp/pa11y.json \

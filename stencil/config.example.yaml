@@ -65,6 +65,11 @@ templates:
 #   package_name:   Submission filename, required for zip type (e.g., hs3.zip)
 #
 # Optional:
+#   docs:           List of markdown files to convert to individual HTML documents.
+#   slides:         List of markdown files to convert to HTML slide decks. Same
+#                   pipeline as docs, rendered with slides-template.html and split
+#                   into slides at each heading of the slide level (default: ##).
+#                   A markdown file belongs to docs or slides, never both.
 #   pdfs:           List of markdown files to convert to individual PDFs.
 #                   Each file produces a PDF with the same basename (e.g., Session1.md -> Session1.pdf).
 #                   Works with both package types. Zip packages typically include README.md here.
