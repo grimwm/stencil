@@ -1,0 +1,169 @@
+{# Shared client-side behavior: Bootstrap, highlight.js, Mermaid, tabbed sections. #}
+  <!-- Bootstrap JS Bundle -->
+  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+
+  <!-- Highlight.js -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/sql.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/python.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/javascript.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/bash.min.js"></script>
+  <script>hljs.highlightAll();</script>
+
+  <!-- Mermaid.js: run first; nav-tabs waits for mermaid-ready. Post-process SVG ids so multiple diagrams do not duplicate ids (WCAG 4.1.1). -->
+  <script type="module">
+    import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+    mermaid.initialize({ startOnLoad: false, theme: 'neutral' });
+    document.querySelectorAll('pre code.language-mermaid, pre.mermaid').forEach((el) => {
+      const pre = el.tagName === 'PRE' ? el : el.closest('pre');
+      if (!pre) return;
+      const text = (el.tagName === 'PRE' ? el : el).textContent.replace(/^\n|\n$$/g, '');
+      const div = document.createElement('div');
+      div.className = 'mermaid';
+      div.textContent = text;
+      pre.insertAdjacentElement('afterend', div);
+      pre.remove();
+    });
+    await mermaid.run({ querySelector: '.mermaid' });
+    const mermaidContainers = document.querySelectorAll('.mermaid');
+    if (mermaidContainers.length > 1) {
+      document.querySelectorAll('.mermaid').forEach((container, i) => {
+        const prefix = 'mermaid-' + i + '-';
+        const svg = container.querySelector('svg');
+        if (!svg) return;
+        const idMap = {};
+        svg.querySelectorAll('[id]').forEach((el) => {
+          const oldId = el.getAttribute('id');
+          if (oldId) {
+            const newId = prefix + oldId;
+            idMap[oldId] = newId;
+            el.setAttribute('id', newId);
+          }
+        });
+        function updateRef(attrValue) {
+          if (!attrValue || !attrValue.startsWith('#')) return attrValue;
+          const oldId = attrValue.slice(1);
+          return idMap[oldId] !== undefined ? '#' + idMap[oldId] : attrValue;
+        }
+        function updateUrlRefs(val) {
+          if (!val || !val.includes('url(#')) return val;
+          return val.replace(/url\(#([^)]+)\)/g, (_, id) =>
+            idMap[id] !== undefined ? 'url(#' + idMap[id] + ')' : 'url(#' + id + ')');
+        }
+        svg.querySelectorAll('[href]').forEach((el) => {
+          const href = el.getAttribute('href');
+          if (href) el.setAttribute('href', updateRef(href));
+        });
+        svg.querySelectorAll('*').forEach((el) => {
+          const xhref = el.getAttributeNS('http://www.w3.org/1999/xlink', 'href');
+          if (xhref) el.setAttributeNS('http://www.w3.org/1999/xlink', 'href', updateRef(xhref));
+          ['fill', 'stroke', 'clip-path', 'mask', 'filter', 'style', 'marker-end', 'marker-start', 'marker-mid'].forEach((attr) => {
+            const val = el.getAttribute(attr);
+            if (val) {
+              const updated = updateUrlRefs(val);
+              if (updated !== val) el.setAttribute(attr, updated);
+            }
+          });
+        });
+      });
+    }
+    window.__mermaidReady = true;
+    window.dispatchEvent(new Event('mermaid-ready'));
+  </script>
+
+  <!-- Convert nav-tabs to Bootstrap tabs (after Mermaid to avoid moving nodes mid-render) -->
+  <script>
+  (function() {
+    function initTabs() {
+    const nav = document.querySelector('nav.nav-tabs');
+    if (!nav) return;
+
+    const container = document.querySelector('.container');
+    const links = nav.querySelectorAll('a');
+    if (links.length === 0) return;
+
+    // Detect heading level from first link target
+    const firstTargetId = links[0].getAttribute('href').slice(1);
+    const firstTarget = document.getElementById(firstTargetId);
+    if (!firstTarget) return;
+    const headingTag = firstTarget.tagName;
+
+    // Convert nav to Bootstrap format
+    nav.className = 'nav nav-tabs problem-tabs';
+    nav.setAttribute('role', 'tablist');
+
+    // Create tab content container
+    const tabContent = document.createElement('div');
+    tabContent.className = 'tab-content';
+
+    // Find all heading sections that match our tab links
+    links.forEach((link, i) => {
+      const targetId = link.getAttribute('href').slice(1);
+      const heading = document.getElementById(targetId);
+      if (!heading) return;
+
+      // Setup the nav link
+      link.className = 'nav-link' + (i === 0 ? ' active' : '');
+      link.setAttribute('data-bs-toggle', 'tab');
+      link.setAttribute('data-bs-target', '#tab-' + targetId);
+      link.setAttribute('role', 'tab');
+      link.setAttribute('aria-selected', i === 0 ? 'true' : 'false');
+
+      // Create tab pane
+      const pane = document.createElement('div');
+      pane.className = 'tab-pane fade' + (i === 0 ? ' show active' : '');
+      pane.id = 'tab-' + targetId;
+      pane.setAttribute('role', 'tabpanel');
+
+      // Collect all elements from heading until next heading of same level (or higher)
+      let el = heading;
+      const elements = [heading];
+      const headingLevel = parseInt(headingTag.charAt(1));
+      while (el.nextElementSibling) {
+        const next = el.nextElementSibling;
+        const nextTag = next.tagName;
+        if (/^H[1-6]$$/.test(nextTag) && parseInt(nextTag.charAt(1)) <= headingLevel) {
+          break;
+        }
+        el = next;
+        elements.push(el);
+      }
+
+      // Move elements into pane
+      elements.forEach(e => pane.appendChild(e));
+      tabContent.appendChild(pane);
+    });
+
+    // Insert tab content after nav
+    nav.parentNode.insertBefore(tabContent, nav.nextSibling);
+
+    // Follow a URL fragment into whichever tab now owns it. Sections were moved into
+    // hidden panes above, so the browser's own fragment scrolling cannot reach them and
+    // a deep link would silently land on the first tab instead.
+    function revealFragment() {
+      var id = location.hash.slice(1);
+      if (!id) return;
+      var target = document.getElementById(decodeURIComponent(id));
+      if (!target) return;
+      var pane = target.closest('.tab-pane');
+      if (!pane || pane.classList.contains('active')) {
+        target.scrollIntoView();
+        return;
+      }
+      var trigger = nav.querySelector('[data-bs-target="#' + pane.id + '"]');
+      if (!trigger) return;
+      // Wait for the pane to finish showing, otherwise it has no layout to scroll to.
+      trigger.addEventListener('shown.bs.tab', function() { target.scrollIntoView(); }, { once: true });
+      bootstrap.Tab.getOrCreateInstance(trigger).show();
+    }
+
+    window.addEventListener('hashchange', revealFragment);
+    revealFragment();
+    }
+    if (window.__mermaidReady) {
+      initTabs();
+    } else {
+      window.addEventListener('mermaid-ready', initTabs, { once: true });
+    }
+  })();
+  </script>

@@ -1,0 +1,64 @@
+-- Group a flowing document into slides for the slide-deck HTML template.
+--
+-- A new slide starts at every heading of the slide level (default: 2, i.e. `##`)
+-- or shallower, and at every horizontal rule (`---`), which lets a long section
+-- be split by hand. Each slide becomes a <div class="slide">.
+--
+-- Set the slide level per document from the YAML metadata block:
+--   ---
+--   title: "..."
+--   slide-level: 2
+--   ---
+--
+-- Run this filter AFTER hidden-filter.lua so instructor-only content that was
+-- dropped does not leave an empty slide behind.
+
+local slide_level = 2
+
+local function starts_slide(block)
+  if block.t == 'Header' and block.level <= slide_level then
+    return 'header'
+  end
+  if block.t == 'HorizontalRule' then
+    return 'rule'
+  end
+  return nil
+end
+
+function Pandoc(doc)
+  local meta_level = doc.meta['slide-level']
+  if meta_level then
+    slide_level = tonumber(pandoc.utils.stringify(meta_level)) or slide_level
+  end
+
+  local slides = pandoc.List({})
+  local current = nil
+
+  local function flush()
+    if current and #current > 0 then
+      slides:insert(pandoc.Div(current, pandoc.Attr('', { 'slide' }, {})))
+    end
+    current = nil
+  end
+
+  for _, block in ipairs(doc.blocks) do
+    local kind = starts_slide(block)
+    if kind == 'header' then
+      flush()
+      current = pandoc.List({ block })
+    elseif kind == 'rule' then
+      flush()
+      current = pandoc.List({})
+    else
+      if current == nil then
+        current = pandoc.List({})
+      end
+      current:insert(block)
+    end
+  end
+
+  flush()
+
+  doc.blocks = slides
+  return doc
+end

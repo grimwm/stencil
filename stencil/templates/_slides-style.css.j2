@@ -1,0 +1,264 @@
+{# Slide-deck styling layered on top of _page-style.css.j2.
+
+   Screen: a vertical stack of slide cards you can read like a document.
+   Present mode (the "Present" button, or pressing "p"): one slide at a time,
+   sized to the viewport. Because the whole stylesheet is rem-based, present
+   mode simply scales the root font size and every slide scales with it.
+   Print: one slide per landscape page. #}
+    /* --- Deck layout --- */
+    .container.deck {
+      max-width: 72rem;
+    }
+
+    .slide {
+      counter-increment: slide;
+      position: relative;
+      display: flex;
+      flex-direction: column;
+      min-height: 30rem;
+      margin: 0 0 2rem;
+      padding: 2.25rem 2.75rem 3rem;
+      background: #fff;
+      border: 1px solid #d8dee9;
+      border-radius: 10px;
+      box-shadow: 0 2px 14px rgba(20, 30, 60, 0.10);
+      break-after: page;
+    }
+
+    /* Slide number badge */
+    .slide::after {
+      content: counter(slide);
+      position: absolute;
+      right: 1.5rem;
+      bottom: 1rem;
+      font-family: var(--font-sans);
+      font-size: 0.8rem;
+      font-variant-numeric: tabular-nums;
+      color: #8a93a5;
+    }
+
+    /* The slide's own heading is its title bar, whatever level it came in at. */
+    .slide > h1:first-child,
+    .slide > h2:first-child,
+    .slide > h3:first-child {
+      margin-top: 0;
+      padding-bottom: 0.4rem;
+      border-bottom: 2px solid var(--accent-color);
+      color: var(--accent-color);
+      font-size: 1.75rem;
+      line-height: 1.25;
+    }
+
+    .slide > h3:first-child { font-size: 1.5rem; }
+
+    .slide > :last-child { margin-bottom: 0; }
+
+    .slide ul, .slide ol { margin-bottom: 0.75rem; }
+    .slide li { margin-bottom: 0.35rem; }
+    .slide li > ul, .slide li > ol { margin-top: 0.35rem; }
+
+    /* --- Title slide --- */
+    .slide--title {
+      justify-content: center;
+      align-items: flex-start;
+      background: linear-gradient(135deg, #29417a 0%, #3c5da8 100%);
+      border-color: #22335e;
+      color: #fff;
+    }
+
+    .slide--title .deck-course {
+      font-family: var(--font-sans);
+      font-size: 0.95rem;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+      color: rgba(255, 255, 255, 0.78);
+      margin-bottom: 1rem;
+    }
+
+    .slide--title .deck-title {
+      font-family: var(--font-sans);
+      font-size: 2.9rem;
+      font-weight: 700;
+      line-height: 1.12;
+      margin: 0 0 0.75rem;
+      border: none;
+      padding: 0;
+      color: #fff;
+    }
+
+    .slide--title .deck-subtitle {
+      font-size: 1.5rem;
+      line-height: 1.35;
+      color: rgba(255, 255, 255, 0.9);
+      margin-bottom: 1.25rem;
+      max-width: 46rem;
+    }
+
+    .slide--title .deck-meta {
+      font-family: var(--font-sans);
+      font-size: 1rem;
+      color: rgba(255, 255, 255, 0.78);
+      margin: 0;
+    }
+
+    .slide--title::after { color: rgba(255, 255, 255, 0.6); }
+
+    /* --- Content helpers usable from markdown fenced divs --- */
+
+    /* ::: columns  ->  side-by-side halves; ::: {.columns .wide-left} to bias */
+    .columns {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 1.75rem;
+      align-items: start;
+    }
+    .columns.wide-left  { grid-template-columns: 1.6fr 1fr; }
+    .columns.wide-right { grid-template-columns: 1fr 1.6fr; }
+    .columns > * > :first-child { margin-top: 0; }
+    .columns > * > :last-child { margin-bottom: 0; }
+
+    /* ::: lead-in  ->  a pull statement, the one thing to remember */
+    .lead-in {
+      font-size: 1.3rem;
+      line-height: 1.45;
+      color: #2c3444;
+      border-left: 4px solid var(--accent-color);
+      padding-left: 1rem;
+      margin: 0.5rem 0 1rem;
+    }
+
+    /* ::: takeaway  ->  boxed conclusion, sits at the bottom of a slide */
+    .takeaway {
+      margin-top: auto;
+      background: #eef2fb;
+      border: 1px solid #c3cfe8;
+      border-radius: 8px;
+      padding: 0.85rem 1.15rem;
+      font-family: var(--font-sans);
+      font-size: 1rem;
+    }
+    .takeaway > :last-child { margin-bottom: 0; }
+    .takeaway strong { color: var(--accent-color); }
+
+    .center { text-align: center; }
+
+    /* --- Media sizing: never let one figure push a slide off the page --- */
+    .slide figure { margin: 0.75rem auto; }
+    .slide figure img,
+    .slide p > img {
+      max-height: min(42vh, 24rem);
+      width: auto;
+      max-width: 100%;
+    }
+    .slide .mermaid { margin: 0.75rem 0; }
+    .slide .mermaid svg { max-height: min(42vh, 24rem); height: auto; }
+    .slide table { font-size: 0.95rem; }
+    .slide pre { font-size: 0.9rem; }
+    .slide blockquote { margin-left: 0; }
+
+    /* --- Toolbar (screen only) --- */
+    .deck-toolbar {
+      position: fixed;
+      left: 1rem;
+      bottom: 1rem;
+      z-index: 1050;
+      display: flex;
+      align-items: center;
+      gap: 0.6rem;
+      font-family: var(--font-sans);
+      font-size: 0.85rem;
+      background: rgba(255, 255, 255, 0.94);
+      border: 1px solid #ccd4e2;
+      border-radius: 999px;
+      padding: 0.35rem 0.5rem 0.35rem 0.9rem;
+      box-shadow: 0 2px 10px rgba(20, 30, 60, 0.16);
+    }
+
+    .deck-toolbar button {
+      font: inherit;
+      color: #fff;
+      background: var(--accent-color);
+      border: none;
+      border-radius: 999px;
+      padding: 0.3rem 0.9rem;
+      cursor: pointer;
+    }
+
+    .deck-toolbar button:hover { background: #1d2f5c; }
+    .deck-toolbar button:focus-visible { outline: 3px solid #ffbf47; outline-offset: 2px; }
+    .deck-position { color: #55607a; font-variant-numeric: tabular-nums; }
+
+    /* --- Present mode: one slide, full viewport --- */
+    html.presenting { font-size: clamp(16px, 0.85vw + 11px, 25px); }
+    html.presenting body { overflow: hidden; background: #e9edf4; }
+    html.presenting .container.deck { max-width: none; padding: 0; }
+    html.presenting .slide { display: none; }
+
+    html.presenting .slide.is-current {
+      display: flex;
+      position: fixed;
+      inset: 0;
+      margin: 0;
+      min-height: 0;
+      padding: 2.5rem 3.5rem 3rem;
+      border: none;
+      border-radius: 0;
+      box-shadow: none;
+      overflow: auto;
+    }
+
+    html.presenting .slide.is-current figure img,
+    html.presenting .slide.is-current .mermaid svg {
+      max-height: 52vh;
+    }
+
+    /* --- Print: one slide per landscape page --- */
+    @media print {
+      @page { size: letter landscape; margin: 0.45in; }
+
+      .deck-toolbar { display: none !important; }
+
+      .container.deck { max-width: 100%; }
+
+      /* Fill most of the page so a short slide still puts its takeaway and its
+         slide number at the bottom, but stay clear of the page box so a slide
+         never spills a blank second page. */
+      .slide {
+        min-height: 6.8in;
+        margin: 0;
+        padding: 0 0 0.3in;
+        border: none;
+        border-radius: 0;
+        box-shadow: none;
+        break-after: page;
+        break-inside: avoid;
+      }
+
+      .slide:last-child { break-after: auto; }
+
+      .slide::after {
+        right: 0;
+        bottom: 0.05in;
+      }
+
+      .slide > h1:first-child,
+      .slide > h2:first-child,
+      .slide > h3:first-child { font-size: 20pt; }
+
+      .slide--title {
+        background: #29417a !important;
+        color: #fff !important;
+        padding: 1.5rem !important;
+        -webkit-print-color-adjust: exact;
+        print-color-adjust: exact;
+      }
+
+      .takeaway {
+        background: #eef2fb !important;
+        -webkit-print-color-adjust: exact;
+        print-color-adjust: exact;
+      }
+
+      .slide figure img,
+      .slide .mermaid svg { max-height: 3.6in; }
+    }

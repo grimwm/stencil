@@ -147,6 +147,44 @@ packages:
 Templates are searched in order: `templates_dir` (if specified), then bundled stencil templates.
 This allows projects to override or extend the default templates.
 
+### Documents vs. Slide Decks
+
+A package renders markdown two ways, and a file belongs to exactly one of them:
+
+| Key      | Pandoc template        | Output                                              |
+| -------- | ---------------------- | --------------------------------------------------- |
+| `docs`   | `html-template.html`   | One flowing document                                |
+| `slides` | `slides-template.html` | A slide deck: one slide per `##`, plus present mode |
+
+```yaml
+packages:
+  lessons:
+    name: "Classroom Lessons"
+    dir: lessons
+    package_type: doc
+    docs: [Introduction.md]
+    slides: [kanban-deck.md]
+```
+
+`make doc` builds everything the package declares; `make slides` builds only the decks. Stencil
+injects the pandoc template and Lua filters each kind needs, so the `templates:` list never has to
+mention them.
+
+Authoring a deck:
+
+- A new slide starts at every `##` heading and at every `---` horizontal rule. Set `slide-level` in
+  the document's YAML metadata block to split on `#` or `###` instead.
+- Fenced divs give slide layout: `::: columns` (side by side, plus `.wide-left` / `.wide-right`),
+  `::: lead-in` (a pull statement), `::: takeaway` (a boxed conclusion pinned to the bottom of the
+  slide), and `::: center`.
+- `::: {.hidden}` works exactly as it does in documents, so presenter-only slides and notes build
+  with `make slides with=hidden`.
+- On screen the deck reads as a stack of slide cards; the **Present** button (or pressing `p`) shows
+  one slide at a time with arrow-key navigation. Printing gives one slide per landscape page.
+- **Put a blank line after an opening `:::` fence and before the closing one.** `doc` and `slides`
+  run `format-md` first, and Prettier does not know about fenced divs: with the fence glued to its
+  content it folds the whole block into one paragraph and pandoc then emits a literal `:::`.
+
 ### Package Configuration
 
 | Field          | Required | Description                                      |
@@ -154,7 +192,8 @@ This allows projects to override or extend the default templates.
 | `name`         | No       | Display name (defaults to package ID)            |
 | `dir`          | No       | Output subdirectory (defaults to package ID)     |
 | `package_type` | Yes      | `doc` for HTML documents, `zip` for submissions  |
-| `docs`         | No       | List of markdown files to convert to HTML        |
+| `docs`         | No       | List of markdown files to convert to HTML docs   |
+| `slides`       | No       | List of markdown files to convert to slide decks |
 | `package_name` | zip only | Filename for the submission zip                  |
 | `services`     | No       | Docker services: `web`, `mysql`                  |
 | `copy_files`   | No       | Static files/dirs to copy from a files directory |
@@ -165,15 +204,16 @@ accessed in your templates.
 
 ## Makefile Targets
 
-| Target       | Description                                       |
-| ------------ | ------------------------------------------------- |
-| `help`       | Show available targets                            |
-| `install`    | Create/update virtual environment                 |
-| `gen T=name` | Generate scaffolding for package `name`           |
-| `doc`        | Generate HTML docs (add `WITH=hidden` for extras) |
-| `format-md`  | Format markdown files with prettier               |
-| `clean`      | Remove generated files                            |
-| `clean-pkg`  | Remove package-specific generated files           |
+| Target       | Description                                      |
+| ------------ | ------------------------------------------------ |
+| `help`       | Show available targets                           |
+| `install`    | Create/update virtual environment                |
+| `gen T=name` | Generate scaffolding for package `name`          |
+| `doc`        | Generate all HTML (add `WITH=hidden` for extras) |
+| `slides`     | Generate HTML slide decks only                   |
+| `format-md`  | Format markdown files with prettier              |
+| `clean`      | Remove generated files                           |
+| `clean-pkg`  | Remove package-specific generated files          |
 
 ## Extending Stencil
 
