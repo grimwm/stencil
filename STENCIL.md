@@ -170,20 +170,8 @@ packages:
 injects the pandoc template and Lua filters each kind needs, so the `templates:` list never has to
 mention them.
 
-Authoring a deck:
-
-- A new slide starts at every `##` heading and at every `---` horizontal rule. Set `slide-level` in
-  the document's YAML metadata block to split on `#` or `###` instead.
-- Fenced divs give slide layout: `::: columns` (side by side, plus `.wide-left` / `.wide-right`),
-  `::: lead-in` (a pull statement), `::: takeaway` (a boxed conclusion pinned to the bottom of the
-  slide), and `::: center`.
-- `::: {.hidden}` works exactly as it does in documents, so presenter-only slides and notes build
-  with `make slides with=hidden`.
-- On screen the deck reads as a stack of slide cards; the **Present** button (or pressing `p`) shows
-  one slide at a time with arrow-key navigation. Printing gives one slide per landscape page.
-- **Put a blank line after an opening `:::` fence and before the closing one.** `doc` and `slides`
-  run `format-md` first, and Prettier does not know about fenced divs: with the fence glued to its
-  content it folds the whole block into one paragraph and pandoc then emits a literal `:::`.
+Writing the markdown itself -- slide breaks, layout fences, presenter-only content, present
+mode and printing -- is covered in the [Authoring Guide](AUTHORING.md).
 
 ### Package Configuration
 
