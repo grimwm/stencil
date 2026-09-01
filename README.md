@@ -4,6 +4,10 @@ Generate project scaffolding from Jinja2 templates and YAML configuration.
 
 Stencil renders Jinja2 templates into per-package output directories, driven by a YAML config file. Conditional rendering lets you include or skip templates based on package features.
 
+Two companion guides: [STENCIL.md](STENCIL.md) describes the bundled templates and package
+configuration; the [Authoring Guide](AUTHORING.md) covers writing the markdown itself, including
+when to build a document and when to build a slide deck.
+
 ## Installation
 
 Install directly from GitHub:
@@ -133,17 +137,22 @@ Templates receive these variables, derived from the package config:
 
 Stencil includes a minimal set of templates for document generation:
 
-| Template                       | Description                                    |
-| ------------------------------ | ---------------------------------------------- |
-| `Makefile.j2`                  | Build targets (clean, format, doc, pkg)        |
-| `Makefile-base.j2`             | Common Makefile variables and help target      |
-| `Makefile-doc.j2`              | HTML documentation generation via Pandoc       |
-| `Makefile-pkg.j2`              | Submission packaging (zip)                     |
-| `docker-compose.yml.j2`        | HTML generation service (Pandoc)               |
-| `docker-compose-html.yml.j2`   | HTML generation service definition             |
-| `html-template.html.j2`        | Pandoc HTML template with Bootstrap styling    |
-| `hidden-filter.lua.j2`         | Pandoc Lua filter for hidden content sections  |
-| `mermaid-figure-filter.lua.j2` | Pandoc Lua filter for Mermaid diagram captions |
+| Template                       | Description                                      |
+| ------------------------------ | ------------------------------------------------ |
+| `Makefile.j2`                  | Build targets (clean, format, doc, pkg)          |
+| `Makefile-base.j2`             | Common Makefile variables and help target        |
+| `Makefile-doc.j2`              | HTML documentation generation via Pandoc         |
+| `Makefile-pkg.j2`              | Submission packaging (zip)                       |
+| `docker-compose.yml.j2`        | HTML generation service (Pandoc)                 |
+| `docker-compose-html.yml.j2`   | HTML generation service definition               |
+| `html-template.html.j2`        | Pandoc HTML template for flowing documents       |
+| `slides-template.html.j2`      | Pandoc HTML template for slide decks             |
+| `_page-*.html.j2`              | Head, styling and scripts shared by both         |
+| `_doc-body.html.j2`            | Document body block                              |
+| `_slides-*.j2`                 | Deck body, slide styling and present mode        |
+| `hidden-filter.lua.j2`         | Pandoc Lua filter for hidden content sections    |
+| `mermaid-figure-filter.lua.j2` | Pandoc Lua filter for Mermaid diagram captions   |
+| `slide-sections.lua.j2`        | Pandoc Lua filter that groups a deck into slides |
 
 Override these by providing your own `templates_dir`. Directories are searched in order (first match wins).
 
