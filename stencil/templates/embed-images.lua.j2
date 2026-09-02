@@ -1,0 +1,41 @@
+-- Inline every local image as a base64 data: URI, so the generated HTML is one
+-- self-contained file that can be emailed, uploaded, or copied to a flash drive
+-- without its images/ directory travelling alongside it.
+--
+-- Deliberately an <img> with a data: URI rather than inline <svg> markup: an
+-- <img> keeps the browser's image context menu, so a reader can still
+-- right-click and Save Image As, Copy Image, or open it in a new tab. Inlined
+-- <svg> elements offer none of that -- there is no image element to act on.
+-- The one thing a data: URI cannot carry is a filename, so the save dialog
+-- proposes a generic name rather than the original basename.
+--
+-- Remote images are left alone. Fetching them at build time would make the
+-- build depend on the network and silently bake in whatever the URL served
+-- that day, which is a different decision than "bundle my own figures".
+
+local function is_remote(src)
+  return src:match('^data:')
+      or src:match('^%a[%w+.-]*://')
+      or src:match('^//')
+end
+
+function Image(img)
+  if is_remote(img.src) then
+    return nil
+  end
+
+  -- `fetch` resolves relative to the working directory and --resource-path,
+  -- which is how `images/figure.svg` next to the markdown is found.
+  local ok, mime, contents = pcall(pandoc.mediabag.fetch, img.src)
+  if not ok or not mime or not contents then
+    -- A missing figure is the author's problem to see and fix, not this
+    -- filter's to hide. Leave the reference untouched so the broken image is
+    -- visible in the page, and say which one it was.
+    io.stderr:write('embed-images: could not read ' .. img.src
+                    .. ', leaving it as a file reference\n')
+    return nil
+  end
+
+  img.src = pandoc.mediabag.make_data_uri(mime, contents)
+  return img
+end

@@ -145,6 +145,7 @@ def generate_package(
         doc_templates = [
             {"src": "hidden-filter.lua.j2"},
             {"src": "mermaid-figure-filter.lua.j2"},
+            {"src": "embed-images.lua.j2"},
         ]
         if context.get("has_docs"):
             doc_templates.insert(0, {"src": "html-template.html.j2"})
@@ -224,6 +225,7 @@ def get_generated_files(config: dict) -> list[str]:
     shared_page_files = [
         "hidden-filter.lua",
         "mermaid-figure-filter.lua",
+        "embed-images.lua",
     ]
     doc_template_files = ["html-template.html"]
     slides_template_files = ["slides-template.html", "slide-sections.lua"]

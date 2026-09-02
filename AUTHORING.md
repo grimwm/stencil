@@ -113,6 +113,21 @@ flowchart LR
 Standard markdown. Images are looked up relative to the markdown file, so keep them in an `images/`
 subdirectory next to it.
 
+**Local images are inlined into the HTML as base64.** The generated page is one self-contained file:
+mail it, upload it to the LMS, or drop it on a flash drive and every figure travels with it. Nothing
+breaks when the `images/` directory is left behind. Readers keep the normal image context menu —
+right-click still offers Save Image As and Copy Image — because each figure is a real `<img>`
+element, not inlined `<svg>` markup. The one thing a `data:` URI cannot carry is a filename, so the
+save dialog proposes a generic one rather than the original basename.
+
+The cost is file size: base64 adds about a third on top of the raw bytes, and every figure is paid
+for whether or not the reader scrolls to it. A deck with 400 KB of SVG becomes a 600 KB page. That
+is the right trade for something you hand out, and the wrong one for a page with fifty photographs,
+so keep an eye on the total.
+
+Images referenced by URL are left alone. Fetching them at build time would make the build depend on
+the network and bake in whatever that URL served that day.
+
 A deck caps figure height so a diagram cannot push a slide off the page, on screen and in print. A
 document does not, so an oversized image will run past the text column — scale it yourself, or use
 SVG, which stays sharp at whatever width it lands on.
