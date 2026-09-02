@@ -27,6 +27,7 @@
       - --template=html-template.html
       - --lua-filter=hidden-filter.lua
       - --lua-filter=mermaid-figure-filter.lua
+      - --lua-filter=embed-images.lua
       - --mathml
     restart: "no"
 
@@ -42,6 +43,7 @@
       - --template=slides-template.html
       - --lua-filter=hidden-filter.lua
       - --lua-filter=mermaid-figure-filter.lua
+      - --lua-filter=embed-images.lua
       - --lua-filter=slide-sections.lua
       - --mathml
     restart: "no"
