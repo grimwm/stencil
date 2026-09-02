@@ -178,6 +178,16 @@ This applies to every change including documentation, tracker bookkeeping, and
 tooling setup. If a tool auto-commits to `main` on your behalf, say so and move the
 work onto a branch before pushing.
 
+### This file is the one to edit; CLAUDE.md is only a pointer
+
+`CLAUDE.md` contains a single line, `@AGENTS.md`, and should stay that way. Agent
+instructions and repository conventions go here, in `AGENTS.md`, so there is one copy
+to keep current rather than two that drift.
+
+`bd` manages its own blocks in both files between `BEGIN`/`END` markers and may write
+into `CLAUDE.md` again. That is expected and fine — leave it. Do not restore, expand,
+or re-collapse `CLAUDE.md` to protect the import.
+
 ### The pandoc filter order is load-bearing — do not reorder it
 
 In `stencil/templates/docker-compose-html.yml.j2`, the argument order encodes two
