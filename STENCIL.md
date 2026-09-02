@@ -75,6 +75,14 @@ Block math:
 $$\sum_{i=1}^{n} i = \frac{n(n+1)}{2}$$
 ```
 
+### Citations
+
+Pandoc's citation processor is enabled. Set `bibliography:` in the markdown front matter and cite with
+`[@key]`; the reference list is generated where an empty `::: {#refs}` div appears, or appended at the
+end. `--citeproc` runs after `hidden-filter.lua` so that a work cited only inside a `::: {.hidden}`
+block stays out of the reference list of a build that drops it, and before `slide-sections.lua` so the
+generated list is grouped into a slide.
+
 ### Code Syntax Highlighting
 
 Code blocks are highlighted using highlight.js with the GitHub theme:

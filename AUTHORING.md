@@ -58,6 +58,7 @@ are the extensions the rest of this guide actually leans on.
 | `pipe_tables`            | The ordinary `\| a \| b \|` table                                           |
 | `tex_math_dollars`       | `$L = \lambda W$`                                                           |
 | `raw_html`               | The `<nav>` block that becomes a tab bar                                    |
+| `citations`              | `[@key]` and `@key` — see [Citations](#citations)                           |
 | `footnotes`              | `[^1]` and its definition                                                   |
 | `definition_lists`       | A term, then a `:`-prefixed definition                                      |
 | `task_lists`             | `- [ ]` and `- [x]`                                                         |
@@ -69,9 +70,8 @@ extensions. What differs is everything downstream of the parse: which pandoc HTM
 result, which Lua filters run, and therefore which constructs mean anything. That is what the rest of
 this guide describes.
 
-A few pandoc features are *off*, because the pipeline never enables them: citations (`--citeproc` is
-not passed, so `[@smith2004]` renders as literal text), a generated table of contents (`--toc`), and
-section numbering (`--number-sections`).
+A few pandoc features are *off*, because the pipeline never enables them: a generated table of
+contents (`--toc`) and section numbering (`--number-sections`).
 
 ## What works where
 
@@ -82,6 +82,7 @@ section numbering (`--number-sections`).
 | Mermaid blocks with `caption=`                             | yes                     | yes, with figure height capped                            |
 | Local images inlined as base64                             | yes                     | yes                                                       |
 | Blockquotes as callout cards                               | yes                     | yes                                                       |
+| Citations and a generated reference list                   | yes                     | yes, but give `#refs` its own slide                       |
 | `::: {.hidden}` with `WITH=hidden`                         | yes                     | yes — see [Presenter-only slides](#presenter-only-slides) |
 | `::: {.side-by-side}`                                      | yes                     | yes                                                       |
 | `<nav class="nav-tabs">` tabbed sections                   | yes                     | no — a deck already paginates                             |
@@ -136,6 +137,9 @@ Names are joined with `·`, and the date follows after another `·`. A date with
 its own. The byline is part of the title header, so a file with an `author` but no `title` gets no
 header at all — same rule a deck follows for its title slide.
 
+Citations add four more keys — `bibliography`, `csl`, `nocite` and `link-citations` — which behave
+the same in a document as in a deck; see [Citations](#citations).
+
 Two more keys arrive from the build rather than from you: `course`, which the Makefile sets from the
 package's `name` (it prefixes the browser tab on both, and prints above the title on a deck's title
 slide), and `include-<feature>`, which `WITH=` sets — see [Optional content](#optional-content).
@@ -176,6 +180,57 @@ $$W = \frac{L}{\lambda}$$
 ```
 
 Prefer this over pasting Unicode symbols: write `$A \subseteq B$`, not `A ⊆ B`.
+
+### Citations
+
+Point `bibliography` at a file next to the markdown and cite by key. Pandoc formats the citation and
+builds the reference list for you.
+
+```markdown
+---
+title: "Flow, Limits, and Specifications"
+bibliography: refs.bib
+---
+
+Little's Law relates the three [@little1961], and @reinertsen2009 works through the queueing case.
+
+## References
+
+::: {#refs}
+:::
+```
+
+`[@key]` gives a parenthetical citation, `@key` names the author in the sentence, and `[-@key]`
+suppresses the author when you have already said the name. BibTeX, BibLaTeX, CSL-JSON and CSL-YAML
+files all work.
+
+| Key              | Does                                                                     |
+| ---------------- | ------------------------------------------------------------------------ |
+| `bibliography`   | The source file, or a list of them                                       |
+| `csl`            | A CSL style file; without one you get Chicago author-date                |
+| `nocite`         | Force entries into the list without citing them — `nocite: '@*'` for all |
+| `link-citations` | Link each citation to its entry in the reference list                    |
+
+**Put an empty `::: {#refs}` div where you want the list.** Without one, pandoc appends it to the end
+of the document — which in a deck means it is swept into whatever slide happens to be last. Give it a
+slide of its own:
+
+```markdown
+---
+
+## References
+
+::: {#refs}
+:::
+```
+
+**A key with no entry does not fail the build.** You get a warning on the console and
+`(**little1961?**)` in the page, which is easy to miss in a long build. Check the output.
+
+**Escape a stray `@` in prose.** Citations are parsed before anything knows what you meant, so a bare
+`@word` in running text becomes a broken citation. `` `@media` `` in backticks is safe, and so is
+anything in a fenced block or an email address like `you@example.com`, where the `@` follows a
+non-space character. Only a free-standing `@word` is at risk; write `\@word` if you need one.
 
 ### Code
 
