@@ -170,8 +170,11 @@ packages:
 injects the pandoc template and Lua filters each kind needs, so the `templates:` list never has to
 mention them.
 
-Writing the markdown itself -- slide breaks, layout fences, presenter-only content, present
-mode and printing -- is covered in the [Authoring Guide](AUTHORING.md).
+Both kinds parse as the same dialect -- pandoc's `markdown`, inferred from the `.md` extension, with
+its full default extension set; no `--from` is passed. Only the template and filter set differ.
+Writing the markdown itself -- the dialect and its extensions, which constructs work in which kind,
+slide breaks, layout fences, presenter-only content, present mode and printing -- is covered in the
+[Authoring Guide](AUTHORING.md).
 
 ### Package Configuration
 

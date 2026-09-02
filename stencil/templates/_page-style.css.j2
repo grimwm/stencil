@@ -39,6 +39,15 @@
       margin-top: 0.5rem;
     }
 
+    /* Byline: author(s) and date, from the front matter. Inside .doc-title, so it
+       has to opt out of that block's 2.2rem/700 rather than inherit it. */
+    .doc-meta {
+      font-size: 1rem;
+      font-weight: 400;
+      color: #5a6270;
+      margin-top: 0.6rem;
+    }
+
     /* Headings: sans-serif with accent borders */
     h1, h2, h3, h4, h5, h6 {
       font-family: var(--font-sans);
@@ -260,6 +269,7 @@
       }
 
       .doc-title { font-size: 18pt; }
+      .doc-meta { font-size: 10pt; }
       h1 { font-size: 16pt; }
       h2 { font-size: 14pt; }
       h3 { font-size: 12pt; }
