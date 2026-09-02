@@ -23,6 +23,125 @@
       return root.classList.contains('presenting');
     }
 
+    // --- Toolbar: draggable, and out of the way when idle ------------------
+    //
+    // The bar is pinned over the slide, so on a dense slide it can land on a
+    // figure. Two answers, because they solve different halves: drag moves it
+    // permanently, idle-hiding removes it during the part of a talk when
+    // nobody is looking at it.
+
+    var IDLE_AFTER_MS = 2600;
+    var DRAG_THRESHOLD_PX = 4;
+    var STORE_KEY = 'deck-toolbar-position';
+
+    var idleTimer = null;
+    var dragging = false;
+
+    function clamp(value, low, high) {
+      return Math.min(Math.max(value, low), high);
+    }
+
+    // Keep the bar fully on screen: a position saved on a wide window must not
+    // strand it off the edge of a narrow one.
+    function placeAt(left, top) {
+      var box = toolbar.getBoundingClientRect();
+      var margin = 8;
+      toolbar.style.left =
+        clamp(left, margin, window.innerWidth - box.width - margin) + 'px';
+      toolbar.style.top =
+        clamp(top, margin, window.innerHeight - box.height - margin) + 'px';
+      // `bottom` is the CSS default anchor; once dragged, `top` owns it.
+      toolbar.style.bottom = 'auto';
+    }
+
+    function savePosition() {
+      try {
+        window.localStorage.setItem(STORE_KEY, JSON.stringify({
+          left: parseFloat(toolbar.style.left),
+          top: parseFloat(toolbar.style.top),
+        }));
+      } catch (error) {
+        /* Private windows and blocked site data throw. The bar still drags,
+           it just will not remember where it was put. */
+      }
+    }
+
+    function restorePosition() {
+      var saved = null;
+      try {
+        saved = JSON.parse(window.localStorage.getItem(STORE_KEY) || 'null');
+      } catch (error) {
+        saved = null;
+      }
+      if (saved && isFinite(saved.left) && isFinite(saved.top)) {
+        placeAt(saved.left, saved.top);
+      }
+    }
+
+    function wake() {
+      toolbar.classList.remove('is-idle');
+      if (idleTimer) window.clearTimeout(idleTimer);
+      idleTimer = window.setTimeout(function () {
+        // Never vanish mid-drag, and never take the keyboard's focused
+        // control out from under it.
+        if (dragging || toolbar.contains(document.activeElement)) return;
+        toolbar.classList.add('is-idle');
+      }, IDLE_AFTER_MS);
+    }
+
+    ['pointermove', 'pointerdown', 'keydown', 'wheel', 'touchstart']
+      .forEach(function (name) {
+        document.addEventListener(name, wake, { passive: true });
+      });
+    toolbar.addEventListener('focusin', wake);
+
+    toolbar.addEventListener('pointerdown', function (event) {
+      // Let the button be a button. Dragging starts anywhere else on the bar.
+      if (event.target.closest('button')) return;
+
+      var box = toolbar.getBoundingClientRect();
+      var grabX = event.clientX - box.left;
+      var grabY = event.clientY - box.top;
+      var startX = event.clientX;
+      var startY = event.clientY;
+      var moved = false;
+
+      function onMove(moveEvent) {
+        if (!moved) {
+          // A threshold keeps a sloppy click from registering as a drag.
+          if (Math.abs(moveEvent.clientX - startX) < DRAG_THRESHOLD_PX &&
+              Math.abs(moveEvent.clientY - startY) < DRAG_THRESHOLD_PX) return;
+          moved = true;
+          dragging = true;
+          toolbar.classList.add('is-dragging');
+        }
+        placeAt(moveEvent.clientX - grabX, moveEvent.clientY - grabY);
+      }
+
+      function onUp() {
+        document.removeEventListener('pointermove', onMove);
+        document.removeEventListener('pointerup', onUp);
+        document.removeEventListener('pointercancel', onUp);
+        if (moved) savePosition();
+        dragging = false;
+        toolbar.classList.remove('is-dragging');
+        wake();
+      }
+
+      document.addEventListener('pointermove', onMove);
+      document.addEventListener('pointerup', onUp);
+      document.addEventListener('pointercancel', onUp);
+    });
+
+    window.addEventListener('resize', function () {
+      if (toolbar.style.top) {
+        placeAt(parseFloat(toolbar.style.left), parseFloat(toolbar.style.top));
+      }
+    });
+
+    restorePosition();
+    wake();
+
     function render() {
       slides.forEach(function (slide, i) {
         slide.classList.toggle('is-current', i === index);
