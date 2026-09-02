@@ -83,6 +83,14 @@ end. `--citeproc` runs after `hidden-filter.lua` so that a work cited only insid
 block stays out of the reference list of a build that drops it, and before `slide-sections.lua` so the
 generated list is grouped into a slide.
 
+### Build Failures
+
+Pandoc runs with `--fail-if-warnings`, so a warning stops the build instead of shipping a damaged
+page. In practice this catches two things: a citation key with no matching bibliography entry, which
+would otherwise render as `(**key?**)`, and an unclosed fenced div. A missing image is reported by
+`embed-images.lua` on stderr and does not fail the build, because the broken figure is visible in the
+page itself.
+
 ### Code Syntax Highlighting
 
 Code blocks are highlighted using highlight.js with the GitHub theme:

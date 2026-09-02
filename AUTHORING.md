@@ -224,8 +224,11 @@ slide of its own:
 :::
 ```
 
-**A key with no entry does not fail the build.** You get a warning on the console and
-`(**little1961?**)` in the page, which is easy to miss in a long build. Check the output.
+**A key with no entry fails the build.** Pandoc runs with `--fail-if-warnings`, so a mistyped key
+stops the build rather than shipping `(**little1961?**)` into the page for someone to notice later.
+The same flag catches an unclosed fenced div — see
+[Fenced divs and prettier](#fenced-divs-and-prettier). A missing *figure* still does not fail: that
+one is reported by `embed-images.lua` and stays visible as a broken image in the page.
 
 **Escape a stray `@` in prose.** Citations are parsed before anything knows what you meant, so a bare
 `@word` in running text becomes a broken citation. `` `@media` `` in backticks is safe, and so is
@@ -476,6 +479,9 @@ Batch size is the real variable.
 is. With the fence glued to its content it folds the whole block into a single paragraph, and pandoc
 then emits a literal `:::` into the page instead of a styled box. The blank lines cost nothing and
 survive formatting.
+
+When the damage leaves a fence unclosed, the build now stops on it rather than rendering the mess —
+pandoc runs with `--fail-if-warnings`.
 
 Prettier runs with `--prose-wrap always --print-width 100`, so it rewraps every paragraph to 100
 columns. Line breaks you put in for your own reading comfort will not survive, and neither will a
