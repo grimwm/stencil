@@ -25,6 +25,12 @@
       - pandoc
       - --standalone
       - --template=html-template.html
+      # A mistyped citation key is otherwise a console warning and a
+      # "(**key?**)" in the page -- easy to miss, and it ships. Promote pandoc's
+      # warnings to build failures instead. This catches unclosed fenced divs
+      # too. It does not touch embed-images.lua's missing-figure notice, which
+      # goes straight to stderr rather than through pandoc's warning system.
+      - --fail-if-warnings
       - --lua-filter=hidden-filter.lua
       # Must follow hidden-filter. Citeproc collects a reference entry for every
       # citation it can still see, so running it first would list the sources an
@@ -45,6 +51,12 @@
       - pandoc
       - --standalone
       - --template=slides-template.html
+      # A mistyped citation key is otherwise a console warning and a
+      # "(**key?**)" in the page -- easy to miss, and it ships. Promote pandoc's
+      # warnings to build failures instead. This catches unclosed fenced divs
+      # too. It does not touch embed-images.lua's missing-figure notice, which
+      # goes straight to stderr rather than through pandoc's warning system.
+      - --fail-if-warnings
       - --lua-filter=hidden-filter.lua
       # Between the two, and for two separate reasons. After hidden-filter, so a
       # presenter-only citation stays out of the handout's reference list; before
