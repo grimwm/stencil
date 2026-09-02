@@ -101,7 +101,10 @@
       margin: 0;
     }
 
-    .slide--title::after { color: rgba(255, 255, 255, 0.6); }
+    /* The title slide is the cover, not a numbered slide, so it shows no badge.
+       It still increments the counter, which keeps the badge and the toolbar's
+       "n / total" position in agreement rather than one apart. */
+    .slide--title::after { content: none; }
 
     /* --- Content helpers usable from markdown fenced divs --- */
 

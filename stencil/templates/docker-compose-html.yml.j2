@@ -25,7 +25,17 @@
       - pandoc
       - --standalone
       - --template=html-template.html
+      # A mistyped citation key is otherwise a console warning and a
+      # "(**key?**)" in the page -- easy to miss, and it ships. Promote pandoc's
+      # warnings to build failures instead. This catches unclosed fenced divs
+      # too. It does not touch embed-images.lua's missing-figure notice, which
+      # goes straight to stderr rather than through pandoc's warning system.
+      - --fail-if-warnings
       - --lua-filter=hidden-filter.lua
+      # Must follow hidden-filter. Citeproc collects a reference entry for every
+      # citation it can still see, so running it first would list the sources an
+      # answer key cites in the build that drops the answer key.
+      - --citeproc
       - --lua-filter=mermaid-figure-filter.lua
       - --lua-filter=embed-images.lua
       - --mathml
@@ -41,7 +51,18 @@
       - pandoc
       - --standalone
       - --template=slides-template.html
+      # A mistyped citation key is otherwise a console warning and a
+      # "(**key?**)" in the page -- easy to miss, and it ships. Promote pandoc's
+      # warnings to build failures instead. This catches unclosed fenced divs
+      # too. It does not touch embed-images.lua's missing-figure notice, which
+      # goes straight to stderr rather than through pandoc's warning system.
+      - --fail-if-warnings
       - --lua-filter=hidden-filter.lua
+      # Between the two, and for two separate reasons. After hidden-filter, so a
+      # presenter-only citation stays out of the handout's reference list; before
+      # slide-sections, so the generated list is grouped into the last slide
+      # rather than landing outside every card, where present mode never shows it.
+      - --citeproc
       - --lua-filter=mermaid-figure-filter.lua
       - --lua-filter=embed-images.lua
       - --lua-filter=slide-sections.lua

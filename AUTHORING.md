@@ -3,9 +3,10 @@
 How to write the markdown. This guide is for the person writing a lecture, a set of notes, or an
 assignment; [STENCIL.md](STENCIL.md) is for the person configuring the package that builds it.
 
-Everything here goes through the same pipeline: prettier formats the markdown, pandoc converts it to
-a standalone HTML file, and Lua filters handle hidden content and diagram captions. The only choice
-that changes the output shape is whether the file is listed under `docs:` or `slides:`.
+Everything here goes through the same pipeline: prettier formats the markdown, pandoc parses it as
+[pandoc's `markdown`](#the-dialect) and writes a standalone HTML file, and Lua filters handle hidden
+content, diagram captions, inlined images and — for a deck — the slide breaks. The only choice that
+changes the output shape is whether the file is listed under `docs:` or `slides:`.
 
 ## Which one am I writing?
 
@@ -39,6 +40,63 @@ make check-access # pa11y accessibility check over the built HTML
 `make doc` depends on `make slides`, so the one command always produces everything. Both targets run
 `format-md` first, which matters — see [Fenced divs and prettier](#fenced-divs-and-prettier).
 
+## The dialect
+
+Both kinds of file are written in **pandoc's `markdown`** — pandoc's own extended dialect, not
+CommonMark and not GitHub-Flavored Markdown. Nothing in the pipeline passes `--from`, so pandoc
+infers the format from the `.md` extension and turns on its full default extension set. The
+authoritative reference is [pandoc's manual](https://pandoc.org/MANUAL.html#pandocs-markdown); these
+are the extensions the rest of this guide actually leans on.
+
+| Extension                | What it buys you                                                            |
+| ------------------------ | --------------------------------------------------------------------------- |
+| `fenced_divs`            | `::: {.hidden}`, `::: columns`, `::: takeaway` — every fence below          |
+| `bracketed_spans`        | `[text]{.class}` when you need a class on an inline run                     |
+| `header_attributes`      | `## Setup {#custom-id}` to pin a heading's id                               |
+| `auto_identifiers`       | Every other heading gets an id derived from its text                        |
+| `fenced_code_attributes` | ```` ```{.mermaid caption="…"} ````                                         |
+| `pipe_tables`            | The ordinary `\| a \| b \|` table                                           |
+| `tex_math_dollars`       | `$L = \lambda W$`                                                           |
+| `raw_html`               | The `<nav>` block that becomes a tab bar                                    |
+| `citations`              | `[@key]` and `@key` — see [Citations](#citations)                           |
+| `footnotes`              | `[^1]` and its definition                                                   |
+| `definition_lists`       | A term, then a `:`-prefixed definition                                      |
+| `task_lists`             | `- [ ]` and `- [x]`                                                         |
+| `implicit_figures`       | An image alone in a paragraph becomes a `<figure>`, alt text as its caption |
+| `smart`                  | Straight quotes and `--` become typographic quotes and dashes               |
+
+**There is one dialect, not two.** A deck and a document parse identically — same parser, same
+extensions. What differs is everything downstream of the parse: which pandoc HTML template wraps the
+result, which Lua filters run, and therefore which constructs mean anything. That is what the rest of
+this guide describes.
+
+A few pandoc features are *off*, because the pipeline never enables them: a generated table of
+contents (`--toc`) and section numbering (`--number-sections`).
+
+## What works where
+
+| Construct                                                  | Document                | Deck                                                      |
+| ---------------------------------------------------------- | ----------------------- | --------------------------------------------------------- |
+| Headings, lists, tables, code, footnotes, definition lists | yes                     | yes — a slide-level heading also breaks                   |
+| `$math$` and `$$math$$`, rendered as MathML                | yes                     | yes                                                       |
+| Mermaid blocks with `caption=`                             | yes                     | yes, with figure height capped                            |
+| Local images inlined as base64                             | yes                     | yes                                                       |
+| Blockquotes as callout cards                               | yes                     | yes                                                       |
+| Citations and a generated reference list                   | yes                     | yes, but give `#refs` its own slide                       |
+| `::: {.hidden}` with `WITH=hidden`                         | yes                     | yes — see [Presenter-only slides](#presenter-only-slides) |
+| `::: {.side-by-side}`                                      | yes                     | yes                                                       |
+| `<nav class="nav-tabs">` tabbed sections                   | yes                     | no — a deck already paginates                             |
+| `---` horizontal rule                                      | renders as a rule       | starts a new slide                                        |
+| `::: columns` (with `.wide-left` / `.wide-right`)          | no — plain unstyled div | yes                                                       |
+| `::: lead-in`, `::: takeaway`, `::: center`                | no — plain unstyled div | yes                                                       |
+| `slide-level:` front matter                                | ignored                 | sets the breaking level                                   |
+| `author:` / `date:` front matter                           | byline in the header    | byline on the title slide                                 |
+| Present mode, one-slide-per-page printing                  | no                      | yes                                                       |
+
+The "no — plain unstyled div" rows are the trap worth remembering: the fences still *parse* in a
+document, they just come out as a bare `<div>` with no styling attached, so the text lands on the page
+looking like an ordinary paragraph rather than failing loudly.
+
 ## What both kinds share
 
 ### Front matter
@@ -47,12 +105,45 @@ make check-access # pa11y accessibility check over the built HTML
 ---
 title: "Flow, Limits, and Specifications"
 subtitle: "Kanban and its neighbors"
+author: Ada Lovelace
+date: 2026-09-02
 ---
 ```
 
-A document renders these as a page header; a deck renders them as a generated title slide, which
-also picks up `author` and `date` if present. The package's `name` is passed in as `course` and
-appears above the title on a deck's title slide.
+A document renders these as a page header; a deck renders them as a generated title slide. Every key
+the pipeline reads, and what each one does on each side:
+
+| Key           | In a document                    | In a deck                                       |
+| ------------- | -------------------------------- | ----------------------------------------------- |
+| `title`       | Page header, and the browser tab | Title slide, and the browser tab                |
+| `subtitle`    | Under the title                  | Under the title on the title slide              |
+| `author`      | Byline under the subtitle        | Byline on the title slide                       |
+| `date`        | Byline, after the author         | Byline, after the author                        |
+| `slide-level` | Ignored                          | Heading level that starts a slide (default `2`) |
+
+`author` takes one name or a list of them:
+
+```markdown
+---
+title: "Flow, Limits, and Specifications"
+author:
+  - Ada Lovelace
+  - Grace Hopper
+date: 2026-09-02
+---
+```
+
+Names are joined with `·`, and the date follows after another `·`. A date with no author renders on
+its own. The byline is part of the title header, so a file with an `author` but no `title` gets no
+header at all — same rule a deck follows for its title slide.
+
+Citations add four more keys — `bibliography`, `csl`, `nocite` and `link-citations` — which behave
+the same in a document as in a deck; see [Citations](#citations).
+
+Two more keys arrive from the build rather than from you: `course`, which the Makefile sets from the
+package's `name` (it prefixes the browser tab on both, and prints above the title on a deck's title
+slide), and `include-<feature>`, which `WITH=` sets — see [Optional content](#optional-content).
+Anything else you put in the front matter is carried along by pandoc but nothing reads it.
 
 ### Optional content
 
@@ -89,6 +180,60 @@ $$W = \frac{L}{\lambda}$$
 ```
 
 Prefer this over pasting Unicode symbols: write `$A \subseteq B$`, not `A ⊆ B`.
+
+### Citations
+
+Point `bibliography` at a file next to the markdown and cite by key. Pandoc formats the citation and
+builds the reference list for you.
+
+```markdown
+---
+title: "Flow, Limits, and Specifications"
+bibliography: refs.bib
+---
+
+Little's Law relates the three [@little1961], and @reinertsen2009 works through the queueing case.
+
+## References
+
+::: {#refs}
+:::
+```
+
+`[@key]` gives a parenthetical citation, `@key` names the author in the sentence, and `[-@key]`
+suppresses the author when you have already said the name. BibTeX, BibLaTeX, CSL-JSON and CSL-YAML
+files all work.
+
+| Key              | Does                                                                     |
+| ---------------- | ------------------------------------------------------------------------ |
+| `bibliography`   | The source file, or a list of them                                       |
+| `csl`            | A CSL style file; without one you get Chicago author-date                |
+| `nocite`         | Force entries into the list without citing them — `nocite: '@*'` for all |
+| `link-citations` | Link each citation to its entry in the reference list                    |
+
+**Put an empty `::: {#refs}` div where you want the list.** Without one, pandoc appends it to the end
+of the document — which in a deck means it is swept into whatever slide happens to be last. Give it a
+slide of its own:
+
+```markdown
+---
+
+## References
+
+::: {#refs}
+:::
+```
+
+**A key with no entry fails the build.** Pandoc runs with `--fail-if-warnings`, so a mistyped key
+stops the build rather than shipping `(**little1961?**)` into the page for someone to notice later.
+The same flag catches an unclosed fenced div — see
+[Fenced divs and prettier](#fenced-divs-and-prettier). A missing *figure* still does not fail: that
+one is reported by `embed-images.lua` and stays visible as a broken image in the page.
+
+**Escape a stray `@` in prose.** Citations are parsed before anything knows what you meant, so a bare
+`@word` in running text becomes a broken citation. `` `@media` `` in backticks is safe, and so is
+anything in a fenced block or an email address like `you@example.com`, where the `@` follows a
+non-space character. Only a free-standing `@word` is at risk; write `\@word` if you need one.
 
 ### Code
 
@@ -145,6 +290,24 @@ callout picks up the accent color.
 > **Before you start:** back up your database. The migration is not reversible.
 ```
 
+**Side-by-side blocks** put two or three narrow things on one row instead of stacking them — most
+often small tables that are meant to be compared. The fence is a flex row that wraps, so it collapses
+back to a stack on a narrow screen:
+
+```markdown
+::: {.side-by-side}
+
+| id | name |
+| -- | ---- |
+| 1  | ada  |
+
+| id | role  |
+| -- | ----- |
+| 1  | admin |
+
+:::
+```
+
 **Tabbed sections** are available for documents whose parts are alternatives rather than a sequence
 — per-problem solutions, or the same setup written for three operating systems. Write a raw HTML
 `nav` whose links point at heading ids, and the page turns it into a tab bar at load:
@@ -168,6 +331,29 @@ Each linked heading and everything under it moves into its own tab pane. When pr
 shown and the tab bar is hidden, so a printed copy is complete.
 
 ## Writing a slide deck
+
+### If you know pandoc's slide shows, read this first
+
+Stencil does not use them. There is no `-t revealjs`, `-t beamer`, `-t s5` or `-t dzslides` anywhere
+in the pipeline. Pandoc writes ordinary HTML; `slide-sections.lua` then groups the blocks into
+`<div class="slide">` cards and CSS does the rest. So everything in
+[pandoc's "Slide shows" chapter](https://pandoc.org/MANUAL.html#slide-shows) is inapplicable here.
+Following it produces markdown that quietly does nothing — or, in the case of speaker notes, prints
+the thing you meant to keep to yourself.
+
+| If pandoc's slide docs tell you to…                           | Here                                                                                                         |
+| ------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
+| pass `--slide-level=N`                                        | Not passed. Put `slide-level:` in the front matter instead.                                                  |
+| write `::: notes` for speaker notes                           | Worse than nothing: the note renders visibly on the slide. Use `::: {.hidden}` and build with `WITH=hidden`. |
+| write `. . .` to pause                                        | Nothing — it renders as literal text. A deck has no incremental reveal.                                      |
+| write `::: incremental`                                       | Nothing.                                                                                                     |
+| nest `::: {.column width="40%"}` inside `::: {.columns}`      | Don't nest. `::: columns` splits its own children; bias it with `.wide-left` / `.wide-right`, not `width=`.  |
+| expect a content-free slide-level heading to be a title slide | It becomes an ordinary slide. The title slide is generated from the front matter instead.                    |
+| expect `---` to break slides only at slide level 0            | `---` always starts a new slide, whatever `slide-level` is.                                                  |
+
+What you get in exchange is that a deck is one self-contained HTML file — no reveal.js to download,
+no separate embedding step — with the same math, diagrams, code highlighting and callouts a document
+gets.
 
 ### Where slides break
 
@@ -248,8 +434,9 @@ rendered blank. Built with `WITH=hidden`, the notes appear as a slide of their o
 
 ### Presenting
 
-The deck reads as a scrollable stack of cards. A toolbar in the corner shows your position and a
-**Present** button.
+The deck reads as a scrollable stack of cards. Each one carries its number in the bottom corner —
+except the title slide, which is the cover and shows none, so the first slide you wrote is numbered
+2\. A toolbar in the corner shows your position and a **Present** button.
 
 | Key                            | Does                        |
 | ------------------------------ | --------------------------- |
@@ -292,6 +479,14 @@ Batch size is the real variable.
 is. With the fence glued to its content it folds the whole block into a single paragraph, and pandoc
 then emits a literal `:::` into the page instead of a styled box. The blank lines cost nothing and
 survive formatting.
+
+When the damage leaves a fence unclosed, the build now stops on it rather than rendering the mess —
+pandoc runs with `--fail-if-warnings`.
+
+Prettier runs with `--prose-wrap always --print-width 100`, so it rewraps every paragraph to 100
+columns. Line breaks you put in for your own reading comfort will not survive, and neither will a
+one-sentence-per-line habit. Where a break has to be real, use an explicit markdown line break — two
+trailing spaces, or a backslash at end of line — or a list item.
 
 ## Before you hand it out
 

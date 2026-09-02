@@ -75,6 +75,22 @@ Block math:
 $$\sum_{i=1}^{n} i = \frac{n(n+1)}{2}$$
 ```
 
+### Citations
+
+Pandoc's citation processor is enabled. Set `bibliography:` in the markdown front matter and cite with
+`[@key]`; the reference list is generated where an empty `::: {#refs}` div appears, or appended at the
+end. `--citeproc` runs after `hidden-filter.lua` so that a work cited only inside a `::: {.hidden}`
+block stays out of the reference list of a build that drops it, and before `slide-sections.lua` so the
+generated list is grouped into a slide.
+
+### Build Failures
+
+Pandoc runs with `--fail-if-warnings`, so a warning stops the build instead of shipping a damaged
+page. In practice this catches two things: a citation key with no matching bibliography entry, which
+would otherwise render as `(**key?**)`, and an unclosed fenced div. A missing image is reported by
+`embed-images.lua` on stderr and does not fail the build, because the broken figure is visible in the
+page itself.
+
 ### Code Syntax Highlighting
 
 Code blocks are highlighted using highlight.js with the GitHub theme:
@@ -170,8 +186,11 @@ packages:
 injects the pandoc template and Lua filters each kind needs, so the `templates:` list never has to
 mention them.
 
-Writing the markdown itself -- slide breaks, layout fences, presenter-only content, present
-mode and printing -- is covered in the [Authoring Guide](AUTHORING.md).
+Both kinds parse as the same dialect -- pandoc's `markdown`, inferred from the `.md` extension, with
+its full default extension set; no `--from` is passed. Only the template and filter set differ.
+Writing the markdown itself -- the dialect and its extensions, which constructs work in which kind,
+slide breaks, layout fences, presenter-only content, present mode and printing -- is covered in the
+[Authoring Guide](AUTHORING.md).
 
 ### Package Configuration
 

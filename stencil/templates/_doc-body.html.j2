@@ -1,4 +1,15 @@
 $if(title)$
-<header class="doc-title">$title$$if(subtitle)$<div class="doc-subtitle">$subtitle$</div>$endif$</header>
+<header class="doc-title">$title$
+$if(subtitle)$
+  <div class="doc-subtitle">$subtitle$</div>
+$endif$
+$if(author)$
+  <div class="doc-meta">$for(author)$$author$$sep$ &middot; $endfor$$if(date)$ &middot; $date$$endif$</div>
+$else$
+$if(date)$
+  <div class="doc-meta">$date$</div>
+$endif$
+$endif$
+</header>
 $endif$
 $body$
