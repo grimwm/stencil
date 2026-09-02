@@ -26,6 +26,10 @@
       - --standalone
       - --template=html-template.html
       - --lua-filter=hidden-filter.lua
+      # Must follow hidden-filter. Citeproc collects a reference entry for every
+      # citation it can still see, so running it first would list the sources an
+      # answer key cites in the build that drops the answer key.
+      - --citeproc
       - --lua-filter=mermaid-figure-filter.lua
       - --lua-filter=embed-images.lua
       - --mathml
@@ -42,6 +46,11 @@
       - --standalone
       - --template=slides-template.html
       - --lua-filter=hidden-filter.lua
+      # Between the two, and for two separate reasons. After hidden-filter, so a
+      # presenter-only citation stays out of the handout's reference list; before
+      # slide-sections, so the generated list is grouped into the last slide
+      # rather than landing outside every card, where present mode never shows it.
+      - --citeproc
       - --lua-filter=mermaid-figure-filter.lua
       - --lua-filter=embed-images.lua
       - --lua-filter=slide-sections.lua
