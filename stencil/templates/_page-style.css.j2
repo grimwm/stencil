@@ -86,6 +86,38 @@
       color: var(--accent-color);
     }
 
+    /* Task lists: pandoc wraps each item as <li><label><input type=checkbox>text</label>.
+       Drop the disc so the checkbox is the only marker, and hang the text off it
+       so wrapped lines align with the first character instead of the box. */
+    ul.task-list {
+      list-style: none;
+      padding-left: 0.25rem;
+    }
+
+    /* 0.25rem + 1.75rem is the 2rem Bootstrap indents a normal <ul> by, so
+       task text starts on the same column as bullet text. rem, not em, for
+       that reason -- Bootstrap's indent does not scale with font-size either. */
+    ul.task-list > li {
+      position: relative;
+      padding-left: 1.75rem;
+    }
+
+    /* Absolute against the li: the label is inline and unpositioned, so the box
+       sits in the hanging indent whether or not pandoc wrapped it in a label. */
+    ul.task-list > li > input[type="checkbox"],
+    ul.task-list > li > label > input[type="checkbox"] {
+      position: absolute;
+      left: 0;
+      /* Baseline-align the box with the first line of serif body text. */
+      top: 0.35em;
+      margin: 0;
+      width: 1em;
+      height: 1em;
+      /* Native control, so a checked box renders its tick in every browser and
+         stays clickable on screen; accent-color just tints it to match. */
+      accent-color: var(--accent-color);
+    }
+
     /* Code: mono font */
     code, pre {
       font-family: var(--font-mono);
@@ -305,6 +337,13 @@
       blockquote {
         background: #fffef8 !important;
         box-shadow: none;
+        -webkit-print-color-adjust: exact;
+        print-color-adjust: exact;
+      }
+
+      /* Browsers drop form-control fills from print by default, which would
+         print a checked box as an empty one. */
+      ul.task-list input[type="checkbox"] {
         -webkit-print-color-adjust: exact;
         print-color-adjust: exact;
       }
