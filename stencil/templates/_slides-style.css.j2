@@ -225,6 +225,14 @@
     html.presenting .container.deck { max-width: none; padding: 0; }
     html.presenting .slide { display: none; }
 
+    /* Hiding the others with display:none drops them out of the slide counter,
+       which would leave the badge reading "1" on every slide. The deck script
+       stamps the position as data-slide-number; read that instead while
+       presenting. The title slide stays unnumbered, as it is when scrolling. */
+    html.presenting .slide:not(.slide--title)::after {
+      content: attr(data-slide-number);
+    }
+
     html.presenting .slide.is-current {
       display: flex;
       position: fixed;
