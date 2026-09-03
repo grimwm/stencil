@@ -7,6 +7,13 @@
     var slides = Array.prototype.slice.call(document.querySelectorAll('.slide'));
     if (slides.length === 0) return;
 
+    // The badge in the corner is a CSS counter, and present mode display:none's
+    // every slide but the current one -- a display:none element does not
+    // increment a counter, so the one slide on screen always counted as 1.
+    // Stamp each slide's position here, where the deck order is already known,
+    // and let the present-mode rule read it back with attr().
+    slides.forEach(function (slide, i) { slide.dataset.slideNumber = i + 1; });
+
     var index = 0;
 
     var toolbar = document.createElement('div');
