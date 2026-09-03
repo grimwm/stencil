@@ -61,7 +61,7 @@ are the extensions the rest of this guide actually leans on.
 | `citations`              | `[@key]` and `@key` — see [Citations](#citations)                           |
 | `footnotes`              | `[^1]` and its definition                                                   |
 | `definition_lists`       | A term, then a `:`-prefixed definition                                      |
-| `task_lists`             | `- [ ]` and `- [x]`                                                         |
+| `task_lists`             | `- [ ]` and `- [x]` — the checkbox replaces the bullet                      |
 | `implicit_figures`       | An image alone in a paragraph becomes a `<figure>`, alt text as its caption |
 | `smart`                  | Straight quotes and `--` become typographic quotes and dashes               |
 
