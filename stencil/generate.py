@@ -153,6 +153,8 @@ def generate_package(
             # Drives the `pdf` compose service. Emitted for every package that
             # renders markdown, so `make pdf` needs no configuration to exist.
             {"src": "html-to-pdf.js.j2"},
+            # Shared image the pdf and check-access services build from.
+            {"src": "Dockerfile.browser.j2"},
         ]
         if context.get("has_docs"):
             doc_templates.insert(0, {"src": "html-template.html.j2"})
@@ -245,6 +247,7 @@ def get_generated_files(config: dict) -> list[str]:
         "mermaid-figure-filter.lua",
         "embed-images.lua",
         "html-to-pdf.js",
+        "Dockerfile.browser",
     ]
     doc_template_files = ["html-template.html"]
     slide_template_files = ["slide-template.html", "slide-sections.lua"]
