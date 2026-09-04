@@ -19,6 +19,8 @@ from pathlib import Path
 import yaml
 from jinja2 import Environment, FileSystemLoader
 
+from . import pipeline
+
 # Script directory
 SCRIPT_DIR = Path(__file__).parent
 
@@ -107,6 +109,12 @@ def get_template_context(package_id: str, config: dict) -> dict:
         "has_services": has_services,
         # Explicit features
         "sql_imports": sql_imports,
+        # The pandoc invocation, from stencil/pipeline.py rather than spelled
+        # out in the compose template, so a test can assert on the same argv
+        # the generated package builds with.
+        "pandoc_image": pipeline.PANDOC_IMAGE,
+        "pandoc_argv_doc": pipeline.annotated_argv("doc"),
+        "pandoc_argv_slide": pipeline.annotated_argv("slide"),
     }
 
     # Custom template vars: merge into top-level context so `when` conditions and templates can access them directly
@@ -117,6 +125,33 @@ def get_template_context(package_id: str, config: dict) -> dict:
     context["template_env"] = template_env if isinstance(template_env, dict) else {}
 
     return context
+
+
+def build_environment(config: dict, config_dir: Path) -> Environment:
+    """Build the Jinja environment with the configured template search path.
+
+    Every templates_dir in config order, then the bundled templates; first match
+    wins. Extracted from main so tests can render a template without the CLI.
+    """
+    templates_dir_raw = config.get("templates_dir")
+    if templates_dir_raw:
+        if isinstance(templates_dir_raw, str):
+            templates_dir_raw = [templates_dir_raw]
+        template_dirs = [(config_dir / d).resolve() for d in templates_dir_raw]
+    else:
+        template_dirs = []
+    bundled = SCRIPT_DIR / "templates"
+    if bundled.resolve() not in [d.resolve() for d in template_dirs]:
+        template_dirs.append(bundled)
+
+    return Environment(
+        loader=FileSystemLoader(template_dirs),
+        extensions=["jinja2.ext.do"],
+        trim_blocks=True,
+        # keep indentation on lines after {% ... %} so templates stay readable
+        lstrip_blocks=False,
+        keep_trailing_newline=True,
+    )
 
 
 def generate_package(
@@ -537,25 +572,7 @@ def main():
         gen_p.print_help()
         return
 
-    # Resolve templates_dir for gen
-    templates_dir_raw = config.get("templates_dir")
-    if templates_dir_raw:
-        if isinstance(templates_dir_raw, str):
-            templates_dir_raw = [templates_dir_raw]
-        template_dirs = [(config_dir / d).resolve() for d in templates_dir_raw]
-    else:
-        template_dirs = []
-    bundled = SCRIPT_DIR / "templates"
-    if bundled.resolve() not in [d.resolve() for d in template_dirs]:
-        template_dirs.append(bundled)
-
-    env = Environment(
-        loader=FileSystemLoader(template_dirs),
-        extensions=["jinja2.ext.do"],
-        trim_blocks=True,
-        lstrip_blocks=False,  # keep indentation on lines after {% ... %} so templates stay readable
-        keep_trailing_newline=True,
-    )
+    env = build_environment(config, config_dir)
     template_defs = config.get("templates", [])
     if not template_defs:
         print("Error: No templates defined in config", file=sys.stderr)
