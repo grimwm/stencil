@@ -15,5 +15,5 @@ endif
 
 {% endif %}
 clean-pkg: ## Remove generated files
-	rm -f {% if package_type == "zip" %}$(PKG) {% endif %}{% for md in docs + slides %}{{ md | replace('.md', '.html') }} {{ md | replace('.md', '-*.html') }} {% endfor %}
+	rm -f {% if package_type == "zip" %}$(PKG) {% endif %}{% for md in docs + slides %}{{ md | replace('.md', '.html') }} {{ md | replace('.md', '-*.html') }} {{ md | replace('.md', '.pdf') }} {{ md | replace('.md', '-*.pdf') }} {% endfor %}
 

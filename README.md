@@ -103,11 +103,11 @@ Each key under `packages` is a package ID passed to the CLI.
 
 ### Package types
 
-| Type   | Description                                                                        |
-| ------ | ---------------------------------------------------------------------------------- |
-| `zip`  | Generates `pkg` target to create submission archive. Requires `package_name`.      |
-| `doc`  | Documentation only. Generates `doc` (and `slides`) targets for HTML from markdown. |
-| `none` | Infrastructure only. No `pkg` target, no `package_name` required.                  |
+| Type   | Description                                                                            |
+| ------ | -------------------------------------------------------------------------------------- |
+| `zip`  | Generates `pkg` target to create submission archive. Requires `package_name`.          |
+| `doc`  | Documentation only. Generates `doc`, `slide` and `pdf` targets for HTML from markdown. |
+| `none` | Infrastructure only. No `pkg` target, no `package_name` required.                      |
 
 ### Context variables
 
@@ -139,12 +139,13 @@ Stencil includes a minimal set of templates for document generation:
 
 | Template                       | Description                                       |
 | ------------------------------ | ------------------------------------------------- |
-| `Makefile.j2`                  | Build targets (clean, format, doc, pkg)           |
+| `Makefile.j2`                  | Build targets (clean, format, doc, pdf, pkg)      |
 | `Makefile-base.j2`             | Common Makefile variables and help target         |
-| `Makefile-doc.j2`              | HTML documentation generation via Pandoc          |
+| `Makefile-doc.j2`              | HTML generation via Pandoc, plus the `pdf` target |
 | `Makefile-pkg.j2`              | Submission packaging (zip)                        |
 | `docker-compose.yml.j2`        | HTML generation service (Pandoc)                  |
 | `docker-compose-html.yml.j2`   | HTML generation service definition                |
+| `docker-compose-pdf.yml.j2`    | Headless-Chromium service that prints HTML to PDF |
 | `html-template.html.j2`        | Pandoc HTML template for flowing documents        |
 | `slide-template.html.j2`       | Pandoc HTML template for slide decks              |
 | `_page-*.html.j2`              | Head, styling and scripts shared by both          |
@@ -154,6 +155,7 @@ Stencil includes a minimal set of templates for document generation:
 | `mermaid-figure-filter.lua.j2` | Pandoc Lua filter for Mermaid diagram captions    |
 | `slide-sections.lua.j2`        | Pandoc Lua filter that groups a deck into slides  |
 | `embed-images.lua.j2`          | Pandoc Lua filter inlining local images as base64 |
+| `html-to-pdf.js.j2`            | Puppeteer driver the `pdf` service runs           |
 
 Override these by providing your own `templates_dir`. Directories are searched in order (first match wins).
 

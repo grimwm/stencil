@@ -1,0 +1,118 @@
+{# Driver behind `make pdf`. Prints an already-generated HTML file to PDF
+   through headless Chromium. Rendered into the package directory next to the
+   Lua filters, so a project can override it from its own templates_dir. #}
+"use strict";
+
+// Chromium's own --print-to-pdf would be a smaller dependency, but it cannot
+// answer the only two questions that matter here: has the page finished
+// building itself, and did every asset it depends on actually arrive. It
+// captures whatever is on screen at an arbitrary moment and exits 0 either
+// way. Puppeteer can wait for the first and detect the second.
+const puppeteer = require("puppeteer");
+
+const [input, output] = process.argv.slice(2);
+
+if (!input || !output) {
+  console.error("usage: html-to-pdf.js <input.html> <output.pdf>");
+  process.exit(2);
+}
+
+// These pages are not self-contained. embed-images.lua inlines images, but
+// Bootstrap, highlight.js, Mermaid and the web fonts are all fetched from CDNs
+// at view time. A dropped request does not stop the page from rendering; it
+// produces a plausible-looking PDF with no syntax highlighting, no diagrams
+// and the wrong fonts. That is the failure this collects, in the same spirit
+// as the pandoc services running with --fail-if-warnings.
+const failures = [];
+
+// Long enough to absorb a cold CDN and a deck full of diagrams, short enough
+// that a genuinely stuck page fails the build instead of hanging CI.
+const TIMEOUT_MS = 120000;
+
+function assertNoFailures() {
+  if (failures.length > 0) {
+    throw new Error("assets failed to load");
+  }
+}
+
+async function main() {
+  const browser = await puppeteer.launch({
+    executablePath: process.env.PUPPETEER_EXECUTABLE_PATH,
+    args: [
+      "--no-sandbox",
+      "--disable-setuid-sandbox",
+      "--disable-dev-shm-usage",
+    ],
+  });
+
+  try {
+    const page = await browser.newPage();
+
+    page.on("requestfailed", (request) => {
+      const failure = request.failure();
+      failures.push(
+        `${request.url()} (${failure ? failure.errorText : "request failed"})`,
+      );
+    });
+    page.on("response", (response) => {
+      if (response.status() >= 400) {
+        failures.push(`${response.url()} (HTTP ${response.status()})`);
+      }
+    });
+    page.on("pageerror", (error) => {
+      failures.push(`uncaught page error: ${error.message}`);
+    });
+
+    await page.goto(`file:///workspace/${input}`, {
+      waitUntil: "networkidle0",
+      timeout: TIMEOUT_MS,
+    });
+
+    // Check before waiting on the page rather than only after. Mermaid is
+    // itself a CDN import, so the usual consequence of a dead CDN is that the
+    // ready flag below never gets set -- and reporting "timed out" two minutes
+    // later would bury the actual cause.
+    assertNoFailures();
+
+    // Mermaid renders in the browser, and the tab panes are only assembled
+    // once it signals done. Printing before this flag is set captures raw
+    // mermaid source sitting in a code block and tab content that never got
+    // moved into its pane.
+    await page.waitForFunction("window.__mermaidReady === true", {
+      timeout: TIMEOUT_MS,
+    });
+
+    // A webfont that is still loading lays out at fallback metrics, which
+    // changes where every page break lands.
+    await page.evaluate(() => document.fonts.ready.then(() => undefined));
+
+    // Again, for anything that failed after the initial load settled.
+    assertNoFailures();
+
+    await page.pdf({
+      path: output,
+      // The @page rules in _page-style.css.j2 and _slide-style.css.j2 are the
+      // page geometry: letter with 1in margins for documents, letter landscape
+      // with one slide per page for decks. Without this, Puppeteer's own
+      // defaults silently override both.
+      preferCSSPageSize: true,
+      // Honors the print-color-adjust: exact declarations on table headers,
+      // row stripes, blockquotes, task-list checkboxes and slide title bars.
+      printBackground: true,
+    });
+  } finally {
+    await browser.close();
+  }
+}
+
+main()
+  .then(() => {
+    console.log(`Wrote ${output}`);
+  })
+  .catch((error) => {
+    console.error(`Failed to convert ${input}: ${error.message}`);
+    for (const failure of failures) {
+      console.error(`  ${failure}`);
+    }
+    process.exit(1);
+  });

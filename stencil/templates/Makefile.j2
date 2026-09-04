@@ -3,7 +3,8 @@
 {% set phony = ['help'] %}
 {% do phony.append('format-md') %}
 {% if has_pages %}{% do phony.append('doc') %}{% endif %}
-{% if has_slides %}{% do phony.append('slides') %}{% endif %}
+{% if has_slides %}{% do phony.append('slide') %}{% endif %}
+{% if has_pages %}{% do phony.append('pdf') %}{% endif %}
 {% if has_pages %}{% do phony.append('check-access') %}{% endif %}
 {% do phony.extend(['clean', 'clean-pkg']) %}
 .PHONY: {{ phony | join(' ') }}

@@ -56,9 +56,9 @@ output_dir: ../assignments
 #         Keys from a package's template_env are merged into the same context,
 #         so they work as `when` conditions too.
 #
-# Packages that render markdown do not list the pandoc HTML templates or the
-# Lua filters here. stencil injects them automatically whenever docs or slides
-# is non-empty, so a config cannot forget one.
+# Packages that render markdown do not list the pandoc HTML templates, the Lua
+# filters, or the PDF driver here. stencil injects them automatically whenever
+# docs or slides is non-empty, so a config cannot forget one.
 templates:
   - src: Makefile.j2
   - src: docker-compose.yml.j2
@@ -94,6 +94,11 @@ templates:
 #                   pipeline as docs, rendered with slide-template.html and split
 #                   into slides at each heading of the slide level (default: ##).
 #                   A markdown file belongs to docs or slides, never both.
+#
+#                   PDFs need no configuration. Any package with docs or slides
+#                   also gets a `make pdf` target that prints the HTML it just
+#                   built to a PDF of the same name; it simply goes unused if
+#                   you never call it.
 #   name:           Display name shown by 'stencil list' (defaults to package ID)
 #   dir:            Output subdirectory under output_dir (defaults to package ID)
 #   services:       List of Docker Compose services the package needs. Supported:

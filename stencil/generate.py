@@ -150,6 +150,9 @@ def generate_package(
             {"src": "hidden-filter.lua.j2"},
             {"src": "mermaid-figure-filter.lua.j2"},
             {"src": "embed-images.lua.j2"},
+            # Drives the `pdf` compose service. Emitted for every package that
+            # renders markdown, so `make pdf` needs no configuration to exist.
+            {"src": "html-to-pdf.js.j2"},
         ]
         if context.get("has_docs"):
             doc_templates.insert(0, {"src": "html-template.html.j2"})
@@ -241,6 +244,7 @@ def get_generated_files(config: dict) -> list[str]:
         "hidden-filter.lua",
         "mermaid-figure-filter.lua",
         "embed-images.lua",
+        "html-to-pdf.js",
     ]
     doc_template_files = ["html-template.html"]
     slide_template_files = ["slide-template.html", "slide-sections.lua"]
@@ -279,10 +283,12 @@ def get_generated_files(config: dict) -> list[str]:
             for f in slide_template_files:
                 entries.add(f"{pkg_dir}/{f}")
 
-        # docs and slides generate .html files from .md files (glob for feature variants)
+        # docs and slides generate .html files from .md files, and `make pdf`
+        # prints each of those to a .pdf beside it (glob for feature variants)
         for md in list(package.get("docs", [])) + list(package.get("slides", [])):
             if md.endswith(".md"):
                 entries.add(f"{pkg_dir}/{md.removesuffix('.md')}*.html")
+                entries.add(f"{pkg_dir}/{md.removesuffix('.md')}*.pdf")
 
         # package_name is the zip file created by pkg target
         package_name = package.get("package_name")
