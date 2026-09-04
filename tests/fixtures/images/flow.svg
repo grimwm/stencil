@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 60" width="120" height="60"
+     role="img" aria-label="A cumulative flow diagram">
+  <rect x="0" y="0" width="120" height="60" fill="#eef2f7"/>
+  <polygon points="0,60 120,10 120,60" fill="#4a7fb5"/>
+  <polygon points="0,60 120,34 120,60" fill="#2c4f73"/>
+</svg>

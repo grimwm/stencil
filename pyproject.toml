@@ -17,6 +17,11 @@ dependencies = [
 dev = [
     "pre-commit",
     "pytest>=8.0",
+    # Structural assertions on rendered pages. The deck reference-list test
+    # needs a real ancestor chain, not a substring match.
+    "beautifulsoup4>=4.12",
+    # Page geometry and text extraction from the generated PDFs.
+    "pypdf>=4.0",
 ]
 
 [project.scripts]
