@@ -137,25 +137,25 @@ Templates receive these variables, derived from the package config:
 
 Stencil includes a minimal set of templates for document generation:
 
-| Template                       | Description                                       |
-| ------------------------------ | ------------------------------------------------- |
-| `Makefile.j2`                  | Build targets (clean, format, doc, pdf, pkg)      |
-| `Makefile-base.j2`             | Common Makefile variables and help target         |
-| `Makefile-doc.j2`              | HTML generation via Pandoc, plus the `pdf` target |
-| `Makefile-pkg.j2`              | Submission packaging (zip)                        |
-| `docker-compose.yml.j2`        | HTML generation service (Pandoc)                  |
-| `docker-compose-html.yml.j2`   | HTML generation service definition                |
-| `docker-compose-pdf.yml.j2`    | Headless-Chromium service that prints HTML to PDF |
-| `html-template.html.j2`        | Pandoc HTML template for flowing documents        |
-| `slide-template.html.j2`       | Pandoc HTML template for slide decks              |
-| `_page-*.html.j2`              | Head, styling and scripts shared by both          |
-| `_doc-body.html.j2`            | Document body block                               |
-| `_slide-*.j2`                  | Deck body, slide styling and present mode         |
-| `hidden-filter.lua.j2`         | Pandoc Lua filter for hidden content sections     |
-| `mermaid-figure-filter.lua.j2` | Pandoc Lua filter for Mermaid diagram captions    |
-| `slide-sections.lua.j2`        | Pandoc Lua filter that groups a deck into slides  |
-| `embed-images.lua.j2`          | Pandoc Lua filter inlining local images as base64 |
-| `html-to-pdf.js.j2`            | Puppeteer driver the `pdf` service runs           |
+| Template                       | Description                                        |
+| ------------------------------ | -------------------------------------------------- |
+| `Makefile.j2`                  | Build targets (clean, format, doc, pdf, pkg)       |
+| `Makefile-base.j2`             | Common Makefile variables and help target          |
+| `Makefile-doc.j2`              | HTML generation via Pandoc, plus the `pdf` target  |
+| `Makefile-pkg.j2`              | Submission packaging (zip)                         |
+| `docker-compose.yml.j2`        | HTML generation service (Pandoc)                   |
+| `docker-compose-html.yml.j2`   | Service definitions for HTML, PDF and a11y checks  |
+| `Dockerfile.browser.j2`        | Shared Chromium image for `pdf` and `check-access` |
+| `html-template.html.j2`        | Pandoc HTML template for flowing documents         |
+| `slide-template.html.j2`       | Pandoc HTML template for slide decks               |
+| `_page-*.html.j2`              | Head, styling and scripts shared by both           |
+| `_doc-body.html.j2`            | Document body block                                |
+| `_slide-*.j2`                  | Deck body, slide styling and present mode          |
+| `hidden-filter.lua.j2`         | Pandoc Lua filter for hidden content sections      |
+| `mermaid-figure-filter.lua.j2` | Pandoc Lua filter for Mermaid diagram captions     |
+| `slide-sections.lua.j2`        | Pandoc Lua filter that groups a deck into slides   |
+| `embed-images.lua.j2`          | Pandoc Lua filter inlining local images as base64  |
+| `html-to-pdf.js.j2`            | Puppeteer driver the `pdf` service runs            |
 
 Override these by providing your own `templates_dir`. Directories are searched in order (first match wins).
 
@@ -171,6 +171,9 @@ pre-commit install
 ```
 
 Pre-commit hooks run markdown formatting via [mdformat](https://github.com/hukkin/mdformat).
+
+Delete `build/` before packaging if you have built before. setuptools copies from `build/lib` rather
+than rebuilding it from scratch, so a template you deleted can still end up in the wheel.
 
 ## License
 
