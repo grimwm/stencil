@@ -10,6 +10,7 @@ This document describes the bundled templates, features, and conventions.
 
 ```bash
 make doc              # Generate HTML documents from markdown files
+make pdf              # Print the generated HTML to PDF
 make format-md        # Format markdown files with prettier
 ```
 
@@ -104,32 +105,47 @@ SELECT * FROM users WHERE active = true;
 
 ### Mermaid Diagrams
 
-Mermaid code blocks (` ```mermaid `) are rendered in the browser by Mermaid.js. The HTML template
+Mermaid code blocks (```` ```mermaid ````) are rendered in the browser by Mermaid.js. The HTML template
 replaces each block with a `div.mermaid`, runs Mermaid, then dispatches `mermaid-ready` so that the
 nav-tabs script runs only after diagrams are rendered (avoiding layout errors from moving nodes
 into hidden tabs mid-render).
 
-### Printing
+### Printing and PDFs
 
-The HTML documents include print-optimized styles. Use your browser's print function (Ctrl+P / Cmd+P)
-to generate a PDF that closely matches academic document formatting:
+There are two ways to reach a PDF, and they produce the same document because both render through
+the same print stylesheet:
 
-- Proper page margins (1 inch)
+- `make pdf` prints every generated HTML file to a PDF beside it (`Document.html` →
+  `Document.pdf`), using headless Chromium in a container. It depends on `doc`, so it always prints
+  the HTML from the current build rather than whatever was left over from the last one. Feature
+  variants pair up: `make pdf with=hidden` produces `Document-hidden.pdf` from
+  `Document-hidden.html`.
+- Your browser's print function (Ctrl+P / Cmd+P) on any built HTML file.
+
+Either way you get:
+
+- Proper page margins (1 inch for documents; decks print letter landscape, one slide per page)
 - Print-safe fonts and sizes
 - Code blocks and tables won't break across pages
 - Colored backgrounds preserved for headers and callouts
+- Tabbed sections expanded, so nothing is hidden behind a tab nobody can click on paper
+
+`make pdf` fails instead of writing a file when an asset does not load or the page's client-side
+rendering never finishes. Diagrams, syntax highlighting and fonts all arrive from CDNs at load
+time, so a missed request would otherwise produce a plausible-looking PDF with no diagrams in it.
 
 ## Project Structure
 
 Stencil generates files based on your `.config.yaml` template list. For document packages, the
 bundled templates produce:
 
-| File                 | Purpose                                     |
-| -------------------- | ------------------------------------------- |
-| `Makefile`           | Build targets (doc, format-md, clean, etc.) |
-| `docker-compose.yml` | Container definitions for doc generation    |
-| `html-template.html` | HTML template with Bootstrap 5 styling      |
-| `hidden-filter.lua`  | Pandoc filter for conditional content       |
+| File                 | Purpose                                          |
+| -------------------- | ------------------------------------------------ |
+| `Makefile`           | Build targets (doc, pdf, format-md, clean, etc.) |
+| `docker-compose.yml` | Container definitions for doc and PDF generation |
+| `html-template.html` | HTML template with Bootstrap 5 styling           |
+| `hidden-filter.lua`  | Pandoc filter for conditional content            |
+| `html-to-pdf.js`     | Headless-Chromium driver behind `make pdf`       |
 
 You can create custom templates for any project type. Templates are Jinja2 files (`.j2` suffix)
 that have access to the package context variables.
