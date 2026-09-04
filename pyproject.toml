@@ -16,10 +16,17 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
     "pre-commit",
+    "pytest>=8.0",
 ]
 
 [project.scripts]
 stencil = "stencil.generate:main"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "integration: needs a container runtime; deselect with -m 'not integration'",
+]
 
 [tool.setuptools.package-data]
 stencil = [
