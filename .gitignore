@@ -12,3 +12,6 @@ build/
 *.db
 .beads-credential-key
 .beads/proxieddb/
+# Stat cache (size + nanosecond mtime) recording what bd last auto-imported.
+# Per-machine by construction; .beads/.gitignore does not cover it.
+.beads/.auto-import-issues.jsonl
