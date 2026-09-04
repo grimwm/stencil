@@ -32,13 +32,15 @@ Then, in the package directory:
 
 ```bash
 make doc          # builds everything the package declares
-make slides       # builds only the decks
+make slide        # builds only the decks
+make pdf          # prints the built HTML to PDF
 make format-md    # runs prettier over the markdown
 make check-access # pa11y accessibility check over the built HTML
 ```
 
-`make doc` depends on `make slides`, so the one command always produces everything. Both targets run
+`make doc` depends on `make slide`, so the one command always produces everything. Both targets run
 `format-md` first, which matters — see [Fenced divs and prettier](#fenced-divs-and-prettier).
+`make pdf` depends on `make doc`, so it always prints the build you just made.
 
 ## The dialect
 
@@ -452,8 +454,9 @@ you are reading the deck. Keystrokes inside a text field are left alone.
 
 ### Printing a deck
 
-Print from the browser. The page is set up for letter landscape, one slide per page, with the
-toolbar suppressed — no extra flag or separate build.
+Run `make pdf`, or print from the browser — both give you the same file. The page is set up for
+letter landscape, one slide per page, with the toolbar suppressed. There is no separate deck build
+and no extra flag: the deck you present is the deck that prints.
 
 ## Fenced divs and prettier
 
@@ -475,7 +478,7 @@ Batch size is the real variable.
 :::
 ```
 
-`make doc` and `make slides` both run `format-md` first, and prettier does not know what a fenced div
+`make doc` and `make slide` both run `format-md` first, and prettier does not know what a fenced div
 is. With the fence glued to its content it folds the whole block into a single paragraph, and pandoc
 then emits a literal `:::` into the page instead of a styled box. The blank lines cost nothing and
 survive formatting.
