@@ -38,4 +38,5 @@ stencil = [
     "config.example.yaml",
     "templates/*",
     "templates/.*",
+    "assets/*",
 ]

@@ -131,8 +131,9 @@ Either way you get:
 - Tabbed sections expanded, so nothing is hidden behind a tab nobody can click on paper
 
 `make pdf` fails instead of writing a file when an asset does not load or the page's client-side
-rendering never finishes. Diagrams, syntax highlighting and fonts all arrive from CDNs at load
-time, so a missed request would otherwise produce a plausible-looking PDF with no diagrams in it.
+rendering never finishes. Bootstrap, highlight.js, Mermaid and the webfonts are inlined into the
+HTML at generate time, so a typical handout never makes a network request; the refusal still
+catches a page that has been edited to fetch something that is not there.
 
 ## Project Structure
 

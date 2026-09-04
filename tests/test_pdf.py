@@ -159,12 +159,14 @@ def unresolvable_asset(pdf_workspace):
 
 
 def test_a_failed_asset_refuses_to_write_a_pdf(unresolvable_asset):
-    """The pages are not self-contained, so a dropped request degrades silently.
+    """A dropped request would otherwise degrade silently.
 
-    Bootstrap, highlight.js, Mermaid and the webfonts all come from CDNs. A
-    dropped request does not stop rendering -- it produces a finished-looking
-    PDF with no diagrams, no highlighting and fallback fonts. Matching the
-    --fail-if-warnings stance, html-to-pdf.js refuses to write the file.
+    The generated pages are self-contained -- Bootstrap, highlight.js, Mermaid
+    and the webfonts are inlined -- so a normal handout never makes a network
+    request. html-to-pdf.js still refuses to write when *any* request fails,
+    which catches a page that has been edited to fetch something that is not
+    there: without the check it would produce a finished-looking PDF missing
+    whatever that fetch was supposed to provide.
     """
     result = pipeline.html_to_pdf(
         "broken.html", "broken.pdf", workdir=unresolvable_asset, timeout=300
@@ -182,13 +184,13 @@ def test_a_failed_asset_refuses_to_write_a_pdf(unresolvable_asset):
 def test_the_failure_is_reported_without_waiting_out_the_timeout(
     unresolvable_asset,
 ):
-    """The early check exists because Mermaid is itself a CDN import.
+    """The early check exists because a dead fetch can stall the ready flag.
 
-    A dead CDN means __mermaidReady is never set, so checking only before
-    printing would report a 120s timeout instead of the actual cause. The check
-    right after load is easy to lose in a refactor, and losing it shows up only
-    as a slow, confusing failure -- which is exactly the kind of thing nobody
-    files a bug about.
+    A page that never sets __mermaidReady would otherwise sit for the full 120s
+    timeout before reporting anything, which reads as a hang rather than as a
+    failed asset. The check right after load is easy to lose in a refactor, and
+    losing it shows up only as a slow, confusing failure -- which is exactly
+    the kind of thing nobody files a bug about.
     """
     started = time.monotonic()
     result = pipeline.html_to_pdf(
