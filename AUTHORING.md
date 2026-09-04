@@ -39,7 +39,9 @@ make check-access # pa11y accessibility check over the built HTML
 ```
 
 `make doc` depends on `make slide`, so the one command always produces everything. Both targets run
-`format-md` first, which matters — see [Fenced divs and prettier](#fenced-divs-and-prettier).
+`format-md` first, which matters — see [Fenced divs and prettier](#fenced-divs-and-prettier). It is
+the only formatter to point at these files; [mdformat breaks
+them](#do-not-run-mdformat-over-this-markdown).
 `make pdf` depends on `make doc`, so it always prints the build you just made.
 
 ## The dialect
@@ -490,6 +492,47 @@ Prettier runs with `--prose-wrap always --print-width 100`, so it rewraps every 
 columns. Line breaks you put in for your own reading comfort will not survive, and neither will a
 one-sentence-per-line habit. Where a break has to be real, use an explicit markdown line break — two
 trailing spaces, or a backslash at end of line — or a list item.
+
+## Do not run mdformat over this markdown
+
+Prettier is the formatter the pipeline runs, and the fenced-div rule above is the only concession
+it asks for. **[mdformat](https://github.com/hukkin/mdformat) is a different matter: pointed at a
+document or a deck, it rewrites the file into something that either fails to build or builds into
+the wrong document.** If your project runs mdformat as a pre-commit hook, exclude wherever the
+course markdown lives:
+
+```yaml
+- repo: https://github.com/hukkin/mdformat
+  rev: 0.7.21
+  hooks:
+    - id: mdformat
+      exclude: ^week\d+/ # wherever the course content lives
+```
+
+Three things it does, all of them found by letting it run:
+
+**It eats the YAML front matter.** mdformat has no front-matter support unless a plugin adds it, so
+the opening `---` becomes a thematic break and the metadata below it becomes body text — in a
+document, a single very long heading. The title, subtitle, author, date and `bibliography:` are all
+gone from the page. That last one is the one you notice, because the build stops on
+
+```
+[WARNING] Citeproc: citation little1961 not found
+```
+
+which reads as a typo in a citation key rather than as a formatter having removed the bibliography.
+Installing `mdformat-frontmatter` fixes this one, and nothing else below.
+
+**It escapes the backslashes in LaTeX.** `$L = \lambda W$` becomes `$L = \\lambda W$`, and
+`\frac{L}{\lambda}` becomes `\\frac{L}{\\lambda}`. In a diff this is close to invisible. The build
+does stop — `--fail-if-warnings` promotes pandoc's `Could not convert TeX math` to a failure — but
+the message points at an "unexpected control sequence" in your math, which is not where the problem
+came from.
+
+**It rewrites the `---` slide separator as `______`.** This one is cosmetic: both parse as a
+thematic break, so a deck still breaks into exactly the same slides. It is worth knowing only
+because it makes a separator indistinguishable from what used to be a metadata fence in a file the
+other two changes have already broken.
 
 ## Before you hand it out
 
