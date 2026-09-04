@@ -9,12 +9,16 @@ contributor without docker still gets a useful run.
 
 from __future__ import annotations
 
+import shutil
 from pathlib import Path
 
 import pytest
 import yaml
+from bs4 import BeautifulSoup
 
 from stencil import generate, pipeline
+
+FIXTURES = Path(__file__).parent / "fixtures"
 
 
 def pytest_collection_modifyitems(config, items):
@@ -65,3 +69,55 @@ def doc_package(generate_package):
             },
         }
     )
+
+
+@pytest.fixture
+def render(doc_package):
+    """Render markdown through the real pandoc container and return the result.
+
+    A generated package already carries the html templates and the four lua
+    filters, so it doubles as the working directory pandoc needs -- the same one
+    the generated docker-compose.yml would mount. Returns the CompletedProcess
+    alongside the output path rather than raising, because several tests here
+    are about what a *failing* build does.
+    """
+
+    def _render(
+        kind: str,
+        source: str = "document.md",
+        *,
+        text: str | None = None,
+        metadata: dict[str, str] | None = None,
+        output: str | None = None,
+    ):
+        for item in FIXTURES.iterdir():
+            dest = doc_package / item.name
+            if item.is_dir():
+                shutil.copytree(item, dest, dirs_exist_ok=True)
+            else:
+                shutil.copy2(item, dest)
+
+        if text is not None:
+            (doc_package / source).write_text(text)
+
+        output = output or f"{Path(source).stem}.html"
+        result = pipeline.render(
+            kind, source, output, workdir=doc_package, metadata=metadata
+        )
+        return result, doc_package / output
+
+    return _render
+
+
+@pytest.fixture
+def render_soup(render):
+    """render(), asserting the build succeeded and handing back parsed HTML."""
+
+    def _render_soup(kind: str, source: str = "document.md", **kwargs):
+        result, path = render(kind, source, **kwargs)
+        assert result.returncode == 0, (
+            f"pandoc exited {result.returncode}\n{result.stderr}"
+        )
+        return BeautifulSoup(path.read_text(), "html.parser")
+
+    return _render_soup

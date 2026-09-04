@@ -5,10 +5,17 @@ repos:
       - id: mdformat
         additional_dependencies:
           - mdformat-gfm
-        # Files we do not own. bd rewrites .beads/, .agents/ and its own block
-        # in CLAUDE.md, so formatting them just churns against the next bd run.
-        # .agents/skills/beads/SKILL.md is the reason this is an exclude rather
-        # than a style preference: mdformat has no front-matter support here and
-        # rewrites the skill's YAML header into a thematic break and a heading,
-        # which breaks the file.
-        exclude: ^(\.beads/|\.agents/|CLAUDE\.md$)
+        # Two separate reasons, both load-bearing.
+        #
+        # .beads/, .agents/ and CLAUDE.md are files we do not own -- bd rewrites
+        # them, so formatting them just churns against the next bd run. It is an
+        # exclude rather than a preference because mdformat has no front-matter
+        # support configured and rewrites .agents/skills/beads/SKILL.md's YAML
+        # header into a thematic break plus a heading, breaking the skill.
+        #
+        # tests/fixtures/ is markdown in stencil's own dialect, and mdformat
+        # corrupts it three ways: front matter as above, `---` slide separators
+        # into `______`, and -- worst, because it is invisible -- LaTeX escaped
+        # to `\\lambda` and `\\frac`. Formatting a fixture would silently change
+        # what the test renders. Do not format course content with mdformat.
+        exclude: ^(\.beads/|\.agents/|CLAUDE\.md$|tests/fixtures/)
