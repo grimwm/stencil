@@ -42,7 +42,7 @@
     restart: "no"
 
 {% if has_slides %}
-  slides:
+  slide:
     image: docker.io/pandoc/core:latest
     volumes:
       - .:/workspace:z
@@ -50,7 +50,7 @@
     entrypoint:
       - pandoc
       - --standalone
-      - --template=slides-template.html
+      - --template=slide-template.html
       # A mistyped citation key is otherwise a console warning and a
       # "(**key?**)" in the page -- easy to miss, and it ships. Promote pandoc's
       # warnings to build failures instead. This catches unclosed fenced divs
@@ -95,7 +95,7 @@
         failed=0
         for f in *.html; do
           [ -f "$$f" ] || continue
-          case "$$f" in html-template.html|slides-template.html) continue ;; esac
+          case "$$f" in html-template.html|slide-template.html) continue ;; esac
           echo "Checking $$f..."
           /tmp/pa11y/node_modules/.bin/pa11y \
             --config /tmp/pa11y.json \
