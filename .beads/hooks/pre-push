@@ -37,8 +37,8 @@ fi
 # core.hooksPath points here, so the call is wired in by hand -- the same
 # arrangement .beads/hooks/pre-commit already uses for the commit-stage hooks.
 #
-# Kept in sh rather than copying that file's bash array, and without its
-# hardcoded INSTALL_PYTHON, which still names a macOS path from another machine.
+# Kept in sh rather than copying that file's bash array and its venv lookup: a
+# push runs rarely enough that resolving `pre-commit` from PATH is no loss.
 if command -v pre-commit >/dev/null 2>&1; then
   _here="$(cd "$(dirname "$0")" && pwd)"
   exec pre-commit hook-impl \

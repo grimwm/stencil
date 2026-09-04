@@ -30,9 +30,37 @@ GITIGNORE_END = "# <<< stencil <<<"
 
 
 def load_config(config_path: Path) -> dict:
-    """Load and parse the configuration file."""
-    with open(config_path) as f:
-        return yaml.safe_load(f)
+    """Load and parse the configuration file.
+
+    Every failure here is a mistake the person at the terminal made -- running
+    outside a configured project, or mistyping --config -- so each one exits
+    with a line naming the file rather than a traceback through yaml.
+    """
+    example = SCRIPT_DIR / "config.example.yaml"
+
+    try:
+        with open(config_path) as f:
+            config = yaml.safe_load(f)
+    except FileNotFoundError:
+        sys.exit(
+            f"Error: no config file at {config_path}\n"
+            f"Run stencil from a directory containing .config.yaml, or pass "
+            f"--config <path>. See {example} for the format."
+        )
+    except IsADirectoryError:
+        sys.exit(f"Error: {config_path} is a directory, not a config file")
+    except yaml.YAMLError as e:
+        sys.exit(f"Error: {config_path} is not valid YAML\n{e}")
+
+    if config is None:
+        sys.exit(f"Error: {config_path} is empty\nSee {example} for the format.")
+    if not isinstance(config, dict):
+        sys.exit(
+            f"Error: {config_path} must be a mapping of settings, "
+            f"not {type(config).__name__}"
+        )
+
+    return config
 
 
 def get_template_context(package_id: str, config: dict) -> dict:
