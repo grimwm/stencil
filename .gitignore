@@ -15,3 +15,8 @@ build/
 # Stat cache (size + nanosecond mtime) recording what bd last auto-imported.
 # Per-machine by construction; .beads/.gitignore does not cover it.
 .beads/.auto-import-issues.jsonl
+
+# Claude Code worktrees. .claude/settings.json is tracked, so this cannot be a
+# blanket .claude/ ignore. Without it, a `git add -A` in the shared checkout
+# commits every worktree tree into the repository.
+.claude/worktrees/
