@@ -15,7 +15,7 @@ METADATA_FLAGS := $(foreach feat,$(subst $(comma), ,$(WITH)),--metadata include-
 # Build output suffix from WITH variable (e.g., -hidden or -hidden-draft)
 OUTPUT_SUFFIX := $(if $(WITH),$(addprefix -,$(subst $(comma),-,$(WITH))),)
 
-doc: format-md{% if has_slides %} slides{% endif %} ## Generate HTML{% if has_slides %} (documents and slide decks){% endif %} (use with=hidden to include hidden sections)
+docs: format-md{% if has_slides %} slides{% endif %} ## Generate HTML{% if has_slides %} (documents and slide decks){% endif %} (use with=hidden to include hidden sections)
 {% if has_docs %}
 	@docker images -q docker.io/pandoc/core:latest | grep -q . || $(DC) pull doc
 {% for md in docs %}
