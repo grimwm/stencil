@@ -137,20 +137,29 @@ def build_browser_image(
     tag: str = BROWSER_IMAGE_TAG,
     runtime: str | None = None,
 ) -> subprocess.CompletedProcess:
-    """Build the Chromium image the pdf and check-access services share."""
+    """Build the Chromium image the pdf and check-access services share.
+
+    The dockerfile is passed as an absolute path because the two runtimes
+    disagree about what a relative -f is relative to: podman resolves it
+    against the build context, docker against the current working directory.
+    A bare "Dockerfile.browser" therefore works under podman and fails under
+    docker with "no such file or directory".
+    """
     runtime = runtime or container_runtime()
     if runtime is None:
         raise RuntimeError("no container runtime found (looked for docker, podman)")
+
+    context = Path(workdir).resolve()
 
     return subprocess.run(
         [
             runtime,
             "build",
             "-f",
-            BROWSER_DOCKERFILE,
+            str(context / BROWSER_DOCKERFILE),
             "-t",
             tag,
-            str(Path(workdir).resolve()),
+            str(context),
         ],
         capture_output=True,
         text=True,
