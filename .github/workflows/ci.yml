@@ -50,9 +50,11 @@ jobs:
       - run: pip install -e '.[dev]'
 
       # Pull ahead of the suite so a registry hiccup reads as a registry
-      # problem rather than as a failing assertion inside a test.
+      # problem rather than as a failing assertion inside a test. Asks the
+      # package which image it builds with, so bumping the pin is one edit.
       - name: Pull the pandoc image
-        run: docker pull docker.io/pandoc/core:latest
+        run: |
+          docker pull "$(python -c 'from stencil import pipeline; print(pipeline.PANDOC_IMAGE)')"
 
       - run: pytest -v
 

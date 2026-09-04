@@ -20,7 +20,15 @@ import shutil
 import subprocess
 from pathlib import Path
 
-PANDOC_IMAGE = "docker.io/pandoc/core:latest"
+# Pinned, and bumped deliberately. Against :latest a build is not reproducible
+# across time, and a pandoc release can change rendered output or emit a new
+# warning that --fail-if-warnings promotes to a failure -- breaking CI on a
+# commit that changed nothing, at whatever hour the release landed.
+#
+# To bump: edit this line, run the suite, and read what changed in the rendered
+# fixtures. The four-part tag is the specific release; :3.10 would still float
+# across patch releases.
+PANDOC_IMAGE = "docker.io/pandoc/core:3.10.0.0"
 
 # The pdf and check-access services share one image, built from this Dockerfile
 # in the generated package. Tests build it once and reuse the tag.
