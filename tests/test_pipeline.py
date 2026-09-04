@@ -7,6 +7,8 @@ fails, a build is about to produce a plausible-looking document that is wrong.
 
 from __future__ import annotations
 
+import re
+
 import pytest
 import yaml
 
@@ -121,6 +123,48 @@ def test_the_ready_flag_is_set_by_the_page_and_waited_on_by_the_converter(
         "the tab panes are assembled on the mermaid-ready event; without it "
         "a printed page shows only the first tab"
     )
+
+
+def test_the_pandoc_image_is_pinned():
+    """A floating tag makes a build depend on the day it ran.
+
+    Worse than irreproducible output: --fail-if-warnings means a pandoc release
+    that adds a warning breaks CI on a commit that changed nothing.
+    """
+    _, _, tag = pipeline.PANDOC_IMAGE.rpartition(":")
+
+    assert tag, f"{pipeline.PANDOC_IMAGE} names no tag, so it resolves to latest"
+    assert tag != "latest"
+    assert re.fullmatch(r"\d+(\.\d+)+", tag), (
+        f"{tag!r} is not a release version; a moving tag is not a pin"
+    )
+
+
+def test_the_compose_services_build_with_the_pinned_image(doc_package):
+    compose = yaml.safe_load((doc_package / "docker-compose.yml").read_text())
+
+    for kind in pipeline.KINDS:
+        assert compose["services"][kind]["image"] == pipeline.PANDOC_IMAGE
+
+
+def test_the_makefile_checks_for_the_image_compose_actually_runs(doc_package):
+    """The doc and slide targets skip `pull` when the image is already local.
+
+    Name a different tag there than the compose service uses and the check can
+    never succeed, so every build pulls again -- or, worse, passes because some
+    other tag is present while compose goes and fetches this one.
+    """
+    guards = [
+        line
+        for line in (doc_package / "Makefile").read_text().splitlines()
+        if "docker images -q" in line and "pandoc" in line
+    ]
+    assert guards, "the pandoc pull guard is gone"
+
+    for line in guards:
+        assert pipeline.PANDOC_IMAGE in line, (
+            f"the pull guard names an image compose does not run: {line.strip()}"
+        )
 
 
 def test_compose_entrypoint_matches_the_shared_argv(doc_package):
