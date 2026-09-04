@@ -123,6 +123,34 @@ def test_pdf_is_declared_phony(pages_makefile):
     assert phony and "pdf" in phony.group(1).split()
 
 
+def test_a_slides_only_package_does_not_claim_to_generate_docs(makefile):
+    """stn-4t0. `doc` exists for a slides-only package only to reach `slide`.
+
+    The closing echo used to sit outside the has_docs guard, so building a
+    deck-only package printed "Generated docs" after generating no documents.
+    """
+    text = makefile(slides=["Deck.md"])
+
+    assert "Generated docs" not in text, (
+        "a package with no docs still reports that it generated some"
+    )
+    assert "Generated slides" in text, "the deck report should survive"
+
+
+def test_a_slides_only_package_describes_itself_as_decks(makefile):
+    """The same mistake in the help text, which `make help` prints verbatim."""
+    summary = re.search(r"^doc\s*:.*?##(.*)$", makefile(slides=["Deck.md"]), re.M)
+    assert summary and "documents" not in summary.group(1)
+
+
+def test_a_package_with_both_still_reports_both(makefile):
+    """The guard must not silence the report for a package that does have docs."""
+    text = makefile(docs=["Guide.md"], slides=["Deck.md"])
+
+    assert "Generated docs" in text
+    assert "Generated slides" in text
+
+
 @pytest.mark.parametrize(
     ("package", "expected"),
     [
