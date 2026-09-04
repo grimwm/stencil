@@ -46,11 +46,12 @@ Wrap content in fenced divs to control visibility:
 2. Explain the concept of recursion.
 
 ::: {.hidden}
+
 ## Answers
 
 1. 4
 2. Recursion is when a function calls itself...
-:::
+   :::
 ```
 
 The content inside `::: {.hidden}` will only appear when `WITH=hidden` is specified.
@@ -103,7 +104,7 @@ SELECT * FROM users WHERE active = true;
 
 ### Mermaid Diagrams
 
-Mermaid code blocks (```` ```mermaid ````) are rendered in the browser by Mermaid.js. The HTML template
+Mermaid code blocks (` ```mermaid `) are rendered in the browser by Mermaid.js. The HTML template
 replaces each block with a `div.mermaid`, runs Mermaid, then dispatches `mermaid-ready` so that the
 nav-tabs script runs only after diagrams are rendered (avoiding layout errors from moving nodes
 into hidden tabs mid-render).
@@ -138,17 +139,17 @@ that have access to the package context variables.
 Projects configure stencil via `.config.yaml`:
 
 ```yaml
-templates_dir: ../_generator/templates  # Optional: custom templates (searched first)
-output_dir: .                           # Where to generate packages
+templates_dir: ../_generator/templates # Optional: custom templates (searched first)
+output_dir: . # Where to generate packages
 
-templates:                              # Which templates to render
+templates: # Which templates to render
   - src: Makefile.j2
   - src: docker-compose.yml.j2
   - src: html-template.html.j2
   - src: hidden-filter.lua.j2
-  - src: custom-script.sh.j2            # Any custom templates
-    dest: setup.sh                      # Optional: rename output file
-    when: has_mysql                     # Optional: conditional rendering
+  - src: custom-script.sh.j2 # Any custom templates
+    dest: setup.sh # Optional: rename output file
+    when: has_mysql # Optional: conditional rendering
 
 packages:
   lessons:
@@ -167,10 +168,10 @@ This allows projects to override or extend the default templates.
 
 A package renders markdown two ways, and a file belongs to exactly one of them:
 
-| Key      | Pandoc template        | Output                                              |
-| -------- | ---------------------- | --------------------------------------------------- |
-| `docs`   | `html-template.html`   | One flowing document                                |
-| `slides` | `slides-template.html` | A slide deck: one slide per `##`, plus present mode |
+| Key      | Pandoc template       | Output                                              |
+| -------- | --------------------- | --------------------------------------------------- |
+| `docs`   | `html-template.html`  | One flowing document                                |
+| `slides` | `slide-template.html` | A slide deck: one slide per `##`, plus present mode |
 
 ```yaml
 packages:
@@ -182,7 +183,7 @@ packages:
     slides: [kanban-deck.md]
 ```
 
-`make doc` builds everything the package declares; `make slides` builds only the decks. Stencil
+`make doc` builds everything the package declares; `make slide` builds only the decks. Stencil
 injects the pandoc template and Lua filters each kind needs, so the `templates:` list never has to
 mention them.
 
@@ -217,7 +218,7 @@ accessed in your templates.
 | `install`    | Create/update virtual environment                |
 | `gen T=name` | Generate scaffolding for package `name`          |
 | `doc`        | Generate all HTML (add `WITH=hidden` for extras) |
-| `slides`     | Generate HTML slide decks only                   |
+| `slide`      | Generate HTML slide decks only                   |
 | `format-md`  | Format markdown files with prettier              |
 | `clean`      | Remove generated files                           |
 | `clean-pkg`  | Remove package-specific generated files          |

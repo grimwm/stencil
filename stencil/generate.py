@@ -52,12 +52,16 @@ def get_template_context(package_id: str, config: dict) -> dict:
     if not package_type:
         raise ValueError(f"Package {package_id} is missing required 'package_type'")
     if package_type not in ("doc", "zip", "none"):
-        raise ValueError(f"Package {package_id} has invalid package_type: {package_type}")
+        raise ValueError(
+            f"Package {package_id} has invalid package_type: {package_type}"
+        )
 
     # package_name is required for zip packages (not for doc or none)
     package_name = package.get("package_name")
     if package_type == "zip" and not package_name:
-        raise ValueError(f"Package {package_id} is missing required 'package_name' (required for zip type)")
+        raise ValueError(
+            f"Package {package_id} is missing required 'package_name' (required for zip type)"
+        )
 
     # docs list for doc-type packages (markdown files to convert to HTML)
     docs = package.get("docs", [])
@@ -150,7 +154,7 @@ def generate_package(
         if context.get("has_docs"):
             doc_templates.insert(0, {"src": "html-template.html.j2"})
         if context.get("has_slides"):
-            doc_templates.append({"src": "slides-template.html.j2"})
+            doc_templates.append({"src": "slide-template.html.j2"})
             doc_templates.append({"src": "slide-sections.lua.j2"})
         template_defs = doc_templates + template_defs
     if not template_defs:
@@ -162,7 +166,13 @@ def generate_package(
     return output_dir
 
 
-def render_templates(env: Environment, template_defs: list, context: dict, output_dir: Path, dry_run: bool = False):
+def render_templates(
+    env: Environment,
+    template_defs: list,
+    context: dict,
+    output_dir: Path,
+    dry_run: bool = False,
+):
     """Render all templates to the output directory."""
     templates = []
 
@@ -196,7 +206,12 @@ def render_templates(env: Environment, template_defs: list, context: dict, outpu
                 output_path.write_text(content)
                 # Set execute bit on shell scripts
                 if output_path.suffix == ".sh":
-                    output_path.chmod(output_path.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+                    output_path.chmod(
+                        output_path.stat().st_mode
+                        | stat.S_IXUSR
+                        | stat.S_IXGRP
+                        | stat.S_IXOTH
+                    )
                 print(f"Generated: {output_path}")
 
         except Exception as e:
@@ -228,7 +243,7 @@ def get_generated_files(config: dict) -> list[str]:
         "embed-images.lua",
     ]
     doc_template_files = ["html-template.html"]
-    slides_template_files = ["slides-template.html", "slide-sections.lua"]
+    slide_template_files = ["slide-template.html", "slide-sections.lua"]
 
     # Process each package
     for package_id, package in config.get("packages", {}).items():
@@ -261,7 +276,7 @@ def get_generated_files(config: dict) -> list[str]:
             for f in doc_template_files:
                 entries.add(f"{pkg_dir}/{f}")
         if package.get("slides"):
-            for f in slides_template_files:
+            for f in slide_template_files:
                 entries.add(f"{pkg_dir}/{f}")
 
         # docs and slides generate .html files from .md files (glob for feature variants)
@@ -408,26 +423,54 @@ def install_gitignore(config: dict, dry_run: bool = False):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Generate package scaffolding from templates")
-    parser.add_argument("--config", default=".config.yaml", help="Path to config file (default: .config.yaml in working directory)")
-    parser.add_argument("--dry-run", action="store_true", help="Show what would be done without making changes")
+    parser = argparse.ArgumentParser(
+        description="Generate package scaffolding from templates"
+    )
+    parser.add_argument(
+        "--config",
+        default=".config.yaml",
+        help="Path to config file (default: .config.yaml in working directory)",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Show what would be done without making changes",
+    )
     sub = parser.add_subparsers(dest="command", required=True, metavar="COMMAND")
 
     def _add_global_opts(p):
-        p.add_argument("--config", default=".config.yaml", help="Path to config file (default: .config.yaml)")
-        p.add_argument("--dry-run", action="store_true", help="Show what would be done without making changes")
+        p.add_argument(
+            "--config",
+            default=".config.yaml",
+            help="Path to config file (default: .config.yaml)",
+        )
+        p.add_argument(
+            "--dry-run",
+            action="store_true",
+            help="Show what would be done without making changes",
+        )
 
-    gen_p = sub.add_parser("gen", help="Generate scaffolding for a package or all packages")
-    gen_p.add_argument("pkg", nargs="?", help="Package ID (e.g. hs6); omit when using --all")
-    gen_p.add_argument("--all", action="store_true", help="Generate for every package in the config")
+    gen_p = sub.add_parser(
+        "gen", help="Generate scaffolding for a package or all packages"
+    )
+    gen_p.add_argument(
+        "pkg", nargs="?", help="Package ID (e.g. hs6); omit when using --all"
+    )
+    gen_p.add_argument(
+        "--all", action="store_true", help="Generate for every package in the config"
+    )
     _add_global_opts(gen_p)
 
     clean_p = sub.add_parser("clean", help="Remove generated files")
-    clean_p.add_argument("pkg", nargs="?", help="Package ID to clean (required unless --all)")
+    clean_p.add_argument(
+        "pkg", nargs="?", help="Package ID to clean (required unless --all)"
+    )
     clean_p.add_argument("--all", action="store_true", help="Clean every package")
     _add_global_opts(clean_p)
 
-    install_p = sub.add_parser("install", help="Install or update .gitignore with stencil-managed entries")
+    install_p = sub.add_parser(
+        "install", help="Install or update .gitignore with stencil-managed entries"
+    )
     _add_global_opts(install_p)
 
     list_p = sub.add_parser("list", help="List available packages")
@@ -468,9 +511,13 @@ def main():
 
     if args.command == "clean":
         if not args.all and not args.pkg:
-            parser.error("clean requires either --all or a package ID (e.g. stencil clean hs1)")
+            parser.error(
+                "clean requires either --all or a package ID (e.g. stencil clean hs1)"
+            )
         package_id = None if args.all else args.pkg
-        clean_generated(output_base, config, package_id=package_id, dry_run=args.dry_run)
+        clean_generated(
+            output_base, config, package_id=package_id, dry_run=args.dry_run
+        )
         return
 
     if args.command != "gen":

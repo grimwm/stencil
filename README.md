@@ -131,7 +131,7 @@ Templates receive these variables, derived from the package config:
 | `has_services`   | `true` if any services defined                      |
 | `sql_imports`    | Normalized list of `sql_import` dicts               |
 | `template_env`   | Custom variables dict (also merged to top level)    |
-| *(custom)*       | All keys from `template_env` are available directly |
+| _(custom)_       | All keys from `template_env` are available directly |
 
 ## Bundled templates
 
@@ -146,10 +146,10 @@ Stencil includes a minimal set of templates for document generation:
 | `docker-compose.yml.j2`        | HTML generation service (Pandoc)                  |
 | `docker-compose-html.yml.j2`   | HTML generation service definition                |
 | `html-template.html.j2`        | Pandoc HTML template for flowing documents        |
-| `slides-template.html.j2`      | Pandoc HTML template for slide decks              |
+| `slide-template.html.j2`       | Pandoc HTML template for slide decks              |
 | `_page-*.html.j2`              | Head, styling and scripts shared by both          |
 | `_doc-body.html.j2`            | Document body block                               |
-| `_slides-*.j2`                 | Deck body, slide styling and present mode         |
+| `_slide-*.j2`                  | Deck body, slide styling and present mode         |
 | `hidden-filter.lua.j2`         | Pandoc Lua filter for hidden content sections     |
 | `mermaid-figure-filter.lua.j2` | Pandoc Lua filter for Mermaid diagram captions    |
 | `slide-sections.lua.j2`        | Pandoc Lua filter that groups a deck into slides  |
