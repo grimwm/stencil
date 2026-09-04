@@ -69,6 +69,60 @@ def test_unknown_kind_is_rejected():
         pipeline.pandoc_argv("pdf")
 
 
+def test_the_pdf_converter_defers_to_the_print_stylesheet(doc_package):
+    """preferCSSPageSize is the declaration that @page owns the page geometry.
+
+    Asserted as template text rather than by printing something, because on
+    current Chromium removing it does not change the output: the flag decides
+    whether CSS overrides an explicit width/height, and page.pdf() is called
+    with neither, so @page wins either way. That makes it a contract nothing
+    would notice the loss of -- until a puppeteer or Chromium release restores
+    the default and every handout silently repaginates.
+
+    The behaviour it stands for is covered by the geometry tests in
+    test_pdf.py, which do fail when an @page block is edited.
+    """
+    script = (doc_package / "html-to-pdf.js").read_text()
+
+    assert "preferCSSPageSize: true" in script
+    assert "printBackground: true" in script, (
+        "without printBackground the PDF loses every background colour the "
+        "print stylesheet sets"
+    )
+
+
+READY_FLAG = "window.__mermaidReady"
+READY_EVENT = "mermaid-ready"
+
+
+def test_the_ready_flag_is_set_by_the_page_and_waited_on_by_the_converter(
+    doc_package,
+):
+    """A contract between two templates that no build step checks.
+
+    _page-scripts.html.j2 sets the flag once mermaid has rendered, and only
+    then assembles the tab panes. html-to-pdf.js waits on it before printing.
+    Rename it on one side and nothing fails to build -- every PDF build just
+    hangs for the full 120s timeout and then reports a timeout, which says
+    nothing about the cause. That is why this is a test and not a comment.
+    """
+    page_scripts = (doc_package / "html-template.html").read_text()
+    converter = (doc_package / "html-to-pdf.js").read_text()
+
+    assert f"{READY_FLAG} = true" in page_scripts, (
+        "the page never sets the ready flag, so every PDF build will hang "
+        "until the converter times out"
+    )
+    assert READY_FLAG in converter, (
+        "the converter no longer waits for the ready flag, so a PDF can be "
+        "printed while mermaid is still a code block"
+    )
+    assert f"'{READY_EVENT}'" in page_scripts, (
+        "the tab panes are assembled on the mermaid-ready event; without it "
+        "a printed page shows only the first tab"
+    )
+
+
 def test_compose_entrypoint_matches_the_shared_argv(doc_package):
     """The whole point of the extraction: the compose file cannot drift.
 
