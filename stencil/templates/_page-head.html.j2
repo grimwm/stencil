@@ -1,16 +1,15 @@
-{# Shared <head> contents (metadata, CDN stylesheets, fonts) for every pandoc HTML template. #}
+{# Shared <head> contents (metadata, inlined stylesheets, fonts) for every pandoc HTML template.
+   Bootstrap, highlight.js and the webfonts are embedded rather than fetched: a generated
+   page is one self-contained file, and make pdf does not reach the network. #}
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>$if(course)$$course$: $endif$$title$</title>
 
   <!-- Bootstrap 5 -->
-  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+  <style>{{ assets.bootstrap_css }}</style>
 
   <!-- Highlight.js for code syntax highlighting -->
-  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github.min.css">
+  <style>{{ assets.highlight_css }}</style>
 
-  <!-- Google Fonts: Crimson Pro (serif) + Inter (sans) -->
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Crimson+Pro:ital,wght@0,400;0,600;1,400&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
-
+  <!-- Crimson Pro (serif) + Inter (sans) + JetBrains Mono; latin + latin-ext only -->
+  <style>{{ assets.fonts_css }}</style>
