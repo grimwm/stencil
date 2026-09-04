@@ -5,3 +5,10 @@ repos:
       - id: mdformat
         additional_dependencies:
           - mdformat-gfm
+        # Files we do not own. bd rewrites .beads/, .agents/ and its own block
+        # in CLAUDE.md, so formatting them just churns against the next bd run.
+        # .agents/skills/beads/SKILL.md is the reason this is an exclude rather
+        # than a style preference: mdformat has no front-matter support here and
+        # rewrites the skill's YAML header into a thematic break and a heading,
+        # which breaks the file.
+        exclude: ^(\.beads/|\.agents/|CLAUDE\.md$)
