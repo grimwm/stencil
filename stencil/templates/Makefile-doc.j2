@@ -38,14 +38,14 @@ slide: format-md ## Generate HTML slide decks (use with=hidden to include presen
 # one. $(OUTPUT_SUFFIX) has to appear on both sides: `make pdf with=hidden`
 # must print the -hidden HTML into the -hidden PDF, not pair one with the other.
 pdf: doc ## Generate PDFs from the generated HTML (use with=hidden to include hidden sections)
-	@docker images -q docker.io/library/node:lts-alpine | grep -q . || $(DC) pull pdf
+	$(DC) build pdf
 {% for md in docs + slides %}
 	$(DC) run --rm pdf {{ md | replace('.md', '') }}$(OUTPUT_SUFFIX).html {{ md | replace('.md', '') }}$(OUTPUT_SUFFIX).pdf
 {% endfor %}
 	@echo "Generated PDFs$(if $(WITH), with features: $(WITH),)"
 
 check-access: ## Check HTML accessibility (WCAG 2.1 AA)
-	@docker images -q docker.io/library/node:lts-alpine | grep -q . || $(DC) pull check-access
+	$(DC) build check-access
 	$(DC) run --rm check-access
 
 {% endif %}
