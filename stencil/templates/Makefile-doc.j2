@@ -15,14 +15,14 @@ METADATA_FLAGS := $(foreach feat,$(subst $(comma), ,$(WITH)),--metadata include-
 # Build output suffix from WITH variable (e.g., -hidden or -hidden-draft)
 OUTPUT_SUFFIX := $(if $(WITH),$(addprefix -,$(subst $(comma),-,$(WITH))),)
 
-doc: format-md{% if has_slides %} slide{% endif %} ## Generate HTML{% if has_slides %} (documents and slide decks){% endif %} (use with=hidden to include hidden sections)
+doc: format-md{% if has_slides %} slide{% endif %} ## Generate HTML{% if has_docs and has_slides %} (documents and slide decks){% elif has_slides %} (slide decks){% endif %} (use with=hidden to include hidden sections)
 {% if has_docs %}
 	@docker images -q docker.io/pandoc/core:latest | grep -q . || $(DC) pull doc
 {% for md in docs %}
 	$(DC) run --rm doc --metadata course="{{ name }}" $(METADATA_FLAGS) {{ md }} -o {{ md | replace('.md', '') }}$(OUTPUT_SUFFIX).html
 {% endfor %}
-{% endif %}
 	@echo "Generated docs$(if $(WITH), with features: $(WITH),)"
+{% endif %}
 
 {% if has_slides %}
 slide: format-md ## Generate HTML slide decks (use with=hidden to include presenter-only sections)
