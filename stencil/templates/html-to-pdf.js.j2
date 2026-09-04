@@ -17,16 +17,17 @@ if (!input || !output) {
   process.exit(2);
 }
 
-// These pages are not self-contained. embed-images.lua inlines images, but
-// Bootstrap, highlight.js, Mermaid and the web fonts are all fetched from CDNs
-// at view time. A dropped request does not stop the page from rendering; it
-// produces a plausible-looking PDF with no syntax highlighting, no diagrams
-// and the wrong fonts. That is the failure this collects, in the same spirit
-// as the pandoc services running with --fail-if-warnings.
+// Generated pages are self-contained: embed-images.lua inlines local images,
+// and stencil gen inlines Bootstrap, highlight.js, Mermaid and the webfonts.
+// A typical handout never makes a network request. The collector below still
+// refuses to write when any request fails, so a page that has been edited to
+// fetch something that is not there cannot ship a finished-looking PDF missing
+// whatever that fetch was supposed to provide -- same spirit as the pandoc
+// services running with --fail-if-warnings.
 const failures = [];
 
-// Long enough to absorb a cold CDN and a deck full of diagrams, short enough
-// that a genuinely stuck page fails the build instead of hanging CI.
+// Long enough for a deck full of diagrams, short enough that a genuinely stuck
+// page fails the build instead of hanging CI.
 const TIMEOUT_MS = 120000;
 
 function assertNoFailures() {
@@ -68,10 +69,10 @@ async function main() {
       timeout: TIMEOUT_MS,
     });
 
-    // Check before waiting on the page rather than only after. Mermaid is
-    // itself a CDN import, so the usual consequence of a dead CDN is that the
-    // ready flag below never gets set -- and reporting "timed out" two minutes
-    // later would bury the actual cause.
+    // Check before waiting on the page rather than only after. A page that
+    // never sets the ready flag below would otherwise report "timed out" two
+    // minutes later and bury the actual cause (a failed fetch, a thrown
+    // script error).
     assertNoFailures();
 
     // Mermaid renders in the browser, and the tab panes are only assembled

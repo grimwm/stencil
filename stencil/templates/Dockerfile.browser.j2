@@ -16,8 +16,9 @@ ENV NPM_CONFIG_UPDATE_NOTIFIER=false
 ENV NODE_PATH=/opt/tools/lib/node_modules
 ENV PATH=/opt/tools/bin:$PATH
 
-# font-noto backs the webfonts the pages load from a CDN. With no real font
-# installed, Chromium lays out at fallback metrics and every page break moves.
+# font-noto covers characters outside the latin/latin-ext faces the page
+# inlines. With no real font installed, Chromium lays out at fallback metrics
+# and every page break moves.
 RUN apk add --no-cache chromium font-noto ttf-dejavu
 
 RUN npm install --global --prefix /opt/tools puppeteer pa11y

@@ -1,18 +1,24 @@
-{# Shared client-side behavior: Bootstrap, highlight.js, Mermaid, tabbed sections. #}
+{# Shared client-side behavior: Bootstrap, highlight.js, Mermaid, tabbed sections.
+   Libraries are inlined from stencil/assets/ rather than loaded from a CDN, so a
+   generated page works offline and make pdf does not depend on the network.
+   Mermaid uses the UMD build (globalThis.mermaid) rather than the ESM one: the
+   ESM build lazily imports diagram chunks, which would reintroduce a fetch. #}
   <!-- Bootstrap JS Bundle -->
-  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+  <script>{{ assets.bootstrap_js }}</script>
 
   <!-- Highlight.js -->
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/sql.min.js"></script>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/python.min.js"></script>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/javascript.min.js"></script>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/bash.min.js"></script>
+  <script>{{ assets.highlight_js }}</script>
+  <script>{{ assets.highlight_sql }}</script>
+  <script>{{ assets.highlight_python }}</script>
+  <script>{{ assets.highlight_javascript }}</script>
+  <script>{{ assets.highlight_bash }}</script>
   <script>hljs.highlightAll();</script>
 
   <!-- Mermaid.js: run first; nav-tabs waits for mermaid-ready. Post-process SVG ids so multiple diagrams do not duplicate ids (WCAG 4.1.1). -->
-  <script type="module">
-    import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+  <script>{{ assets.mermaid_js }}</script>
+  <script>
+  (async function() {
+    const mermaid = globalThis.mermaid;
     mermaid.initialize({ startOnLoad: false, theme: 'neutral' });
     document.querySelectorAll('pre code.language-mermaid, pre.mermaid').forEach((el) => {
       const pre = el.tagName === 'PRE' ? el : el.closest('pre');
@@ -69,6 +75,7 @@
     }
     window.__mermaidReady = true;
     window.dispatchEvent(new Event('mermaid-ready'));
+  })();
   </script>
 
   <!-- Convert nav-tabs to Bootstrap tabs (after Mermaid to avoid moving nodes mid-render) -->

@@ -237,8 +237,9 @@ flag, every PDF build hangs until it times out rather than failing with a useful
 
 For the same reason the pandoc services run with `--fail-if-warnings`, `html-to-pdf.js`
 treats a failed asset request as a build failure. Bootstrap, highlight.js, Mermaid, and the
-fonts all come from CDNs at load time, and `embed-images.lua` inlines images only — so a
-dropped request otherwise yields a PDF that looks finished and has no diagrams in it.
+fonts are inlined into the HTML at `stencil gen` time — so a typical handout never makes a
+network request — but the refusal still catches a page that has been edited to fetch
+something that is not there.
 
 ### Keep the two guides in step with the templates
 
