@@ -1,0 +1,33 @@
+{# Shared image for the pdf and check-access services. Both drive Chromium from
+   Node, and both used to install it at run time -- roughly twelve seconds on
+   every single invocation, paid once per file. Building it instead lets the
+   container engine cache the layers, so the cost lands on the first run and
+   never again. #}
+FROM docker.io/library/node:lts-alpine
+
+# Puppeteer's bundled Chromium download has no musl build, and pa11y drives the
+# same browser anyway, so both use the distro package.
+ENV PUPPETEER_SKIP_DOWNLOAD=true
+ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium-browser
+ENV NPM_CONFIG_UPDATE_NOTIFIER=false
+
+# Resolve `require("puppeteer")` and the pa11y binary from the shared prefix
+# below rather than from a node_modules tree inside the mounted workspace.
+ENV NODE_PATH=/opt/tools/lib/node_modules
+ENV PATH=/opt/tools/bin:$PATH
+
+# font-noto backs the webfonts the pages load from a CDN. With no real font
+# installed, Chromium lays out at fallback metrics and every page break moves.
+RUN apk add --no-cache chromium font-noto ttf-dejavu
+
+RUN npm install --global --prefix /opt/tools puppeteer pa11y
+
+# Chromium cannot use its own sandbox inside an unprivileged container.
+RUN printf '%s\n' \
+  '{' \
+  '  "chromeLaunchConfig": {' \
+  '    "args": ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"]' \
+  '  }' \
+  '}' > /opt/pa11y.json
+
+WORKDIR /workspace

@@ -139,13 +139,14 @@ time, so a missed request would otherwise produce a plausible-looking PDF with n
 Stencil generates files based on your `.config.yaml` template list. For document packages, the
 bundled templates produce:
 
-| File                 | Purpose                                          |
-| -------------------- | ------------------------------------------------ |
-| `Makefile`           | Build targets (doc, pdf, format-md, clean, etc.) |
-| `docker-compose.yml` | Container definitions for doc and PDF generation |
-| `html-template.html` | HTML template with Bootstrap 5 styling           |
-| `hidden-filter.lua`  | Pandoc filter for conditional content            |
-| `html-to-pdf.js`     | Headless-Chromium driver behind `make pdf`       |
+| File                 | Purpose                                           |
+| -------------------- | ------------------------------------------------- |
+| `Makefile`           | Build targets (doc, pdf, format-md, clean, etc.)  |
+| `docker-compose.yml` | Container definitions for doc and PDF generation  |
+| `html-template.html` | HTML template with Bootstrap 5 styling            |
+| `hidden-filter.lua`  | Pandoc filter for conditional content             |
+| `html-to-pdf.js`     | Headless-Chromium driver behind `make pdf`        |
+| `Dockerfile.browser` | Chromium image shared by `pdf` and `check-access` |
 
 You can create custom templates for any project type. Templates are Jinja2 files (`.j2` suffix)
 that have access to the package context variables.

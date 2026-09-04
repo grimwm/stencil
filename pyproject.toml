@@ -26,6 +26,4 @@ stencil = [
     "config.example.yaml",
     "templates/*",
     "templates/.*",
-    "files/.vscode/*",
-    "scripts/*",
 ]
