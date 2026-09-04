@@ -47,7 +47,9 @@ def test_deck_exercises_the_layout_fences(render_soup):
     for fence in ("lead-in", "columns", "takeaway"):
         assert soup.select_one(f".{fence}") is not None, f"missing ::: {fence}"
 
-    slides = soup.select("section.slide")
+    # .slide, not section.slide: pandoc promotes a slide Div to <section> only
+    # when its first block is a Header, so a headingless card stays a <div>.
+    slides = soup.select(".slide")
     assert len(slides) > 1, "the deck should split into several slides"
 
 
