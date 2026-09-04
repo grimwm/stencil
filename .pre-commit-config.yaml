@@ -1,4 +1,21 @@
+# So a plain `pre-commit install` wires up the pre-push guard below too.
+default_install_hook_types: [pre-commit, pre-push]
+
 repos:
+  - repo: local
+    hooks:
+      - id: bd-export-drift
+        name: .beads/issues.jsonl matches the beads database
+        # At pre-push, not pre-commit. The race this guards against happens
+        # inside the pre-commit window -- the framework stashes unstaged
+        # changes while beads' own hook rewrites the export -- so a check
+        # running there would be racing too.
+        stages: [pre-push]
+        entry: python3 scripts/check_bd_export_drift.py
+        language: system
+        pass_filenames: false
+        always_run: true
+
   - repo: https://github.com/hukkin/mdformat
     rev: 0.7.21
     hooks:

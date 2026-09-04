@@ -178,6 +178,21 @@ This applies to every change including documentation, tracker bookkeeping, and
 tooling setup. If a tool auto-commits to `main` on your behalf, say so and move the
 work onto a branch before pushing.
 
+### Export beads before the last commit, not after it
+
+`.beads/issues.jsonl` is a passive export of a Dolt database that git does not
+track, and it is the only view of the tracker a reviewer gets. A `bd close` that
+runs after the final commit never reaches the PR — which happens every time issues
+are closed in the same shell invocation as a merge. Separately, `pre-commit`
+stashes unstaged changes while hooks run and beads' own hook rewrites the export
+inside that window, so a staged snapshot can be taken before beads finishes.
+
+Both leave a clean working tree, so nothing says git and the database disagree.
+
+A pre-push hook now refuses the push when they do, naming the issues that differ.
+It is installed by `pre-commit install` along with the commit-stage hooks. When it
+fires, run `bd export -o .beads/issues.jsonl` and commit that before pushing again.
+
 ### This file is the one to edit; CLAUDE.md is only a pointer
 
 `CLAUDE.md` contains a single line, `@AGENTS.md`, and should stay that way. Agent
