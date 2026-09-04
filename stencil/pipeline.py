@@ -22,6 +22,11 @@ from pathlib import Path
 
 PANDOC_IMAGE = "docker.io/pandoc/core:latest"
 
+# The pdf and check-access services share one image, built from this Dockerfile
+# in the generated package. Tests build it once and reuse the tag.
+BROWSER_DOCKERFILE = "Dockerfile.browser"
+BROWSER_IMAGE_TAG = "localhost/stencil_browser:test"
+
 # The two constraints this module exists to protect. Both were reproduced by
 # hand once and would otherwise be reproducible only by hand again.
 _CITEPROC_AFTER_HIDDEN = (
@@ -124,3 +129,77 @@ def render(
     argv += [source, "-o", output]
 
     return subprocess.run(argv, capture_output=True, text=True)
+
+
+def build_browser_image(
+    workdir: Path,
+    *,
+    tag: str = BROWSER_IMAGE_TAG,
+    runtime: str | None = None,
+) -> subprocess.CompletedProcess:
+    """Build the Chromium image the pdf and check-access services share.
+
+    The dockerfile is passed as an absolute path because the two runtimes
+    disagree about what a relative -f is relative to: podman resolves it
+    against the build context, docker against the current working directory.
+    A bare "Dockerfile.browser" therefore works under podman and fails under
+    docker with "no such file or directory".
+    """
+    runtime = runtime or container_runtime()
+    if runtime is None:
+        raise RuntimeError("no container runtime found (looked for docker, podman)")
+
+    context = Path(workdir).resolve()
+
+    return subprocess.run(
+        [
+            runtime,
+            "build",
+            "-f",
+            str(context / BROWSER_DOCKERFILE),
+            "-t",
+            tag,
+            str(context),
+        ],
+        capture_output=True,
+        text=True,
+    )
+
+
+def html_to_pdf(
+    source: str,
+    output: str,
+    *,
+    workdir: Path,
+    tag: str = BROWSER_IMAGE_TAG,
+    runtime: str | None = None,
+    timeout: float | None = None,
+) -> subprocess.CompletedProcess:
+    """Convert an HTML file to PDF the way the generated pdf service does.
+
+    Same image, same entrypoint, same mount -- the compose service is
+    `node html-to-pdf.js` over the package directory at /workspace.
+    """
+    runtime = runtime or container_runtime()
+    if runtime is None:
+        raise RuntimeError("no container runtime found (looked for docker, podman)")
+
+    return subprocess.run(
+        [
+            runtime,
+            "run",
+            "--rm",
+            "-v",
+            f"{Path(workdir).resolve()}:/workspace:z",
+            "-w",
+            "/workspace",
+            tag,
+            "node",
+            "html-to-pdf.js",
+            source,
+            output,
+        ],
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+    )
