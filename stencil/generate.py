@@ -19,7 +19,7 @@ from pathlib import Path
 import yaml
 from jinja2 import Environment, FileSystemLoader
 
-from . import pipeline
+from . import assets, pipeline
 
 # Script directory
 SCRIPT_DIR = Path(__file__).parent
@@ -143,6 +143,10 @@ def get_template_context(package_id: str, config: dict) -> dict:
         "pandoc_image": pipeline.PANDOC_IMAGE,
         "pandoc_argv_doc": pipeline.annotated_argv("doc"),
         "pandoc_argv_slide": pipeline.annotated_argv("slide"),
+        # CSS, JS and webfonts inlined into the pandoc templates. Loaded here
+        # rather than fetched at page load, so a handout is self-contained and
+        # make pdf does not depend on the network.
+        "assets": assets.load(),
     }
 
     # Custom template vars: merge into top-level context so `when` conditions and templates can access them directly

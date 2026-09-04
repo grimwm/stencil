@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import copy
 import shutil
-import time
 from pathlib import Path
 
 import pytest
@@ -174,24 +173,13 @@ def to_pdf(pdf_workspace):
         )
         assert built.returncode == 0, f"pandoc failed\n{built.stderr}"
 
-        # The generated pages fetch Bootstrap, highlight.js, Mermaid and the
-        # webfonts from CDNs, and html-to-pdf.js correctly refuses to write a
-        # PDF when any request fails -- which is the behaviour the last two
-        # tests in test_pdf.py assert on. The cost is that a test about page
-        # geometry fails whenever a request drops, and running containers in
-        # quick succession provokes net::ERR_NETWORK_CHANGED often enough to
-        # matter.
-        #
-        # So the tests that expect a PDF retry. The ones that expect a refusal
-        # call pipeline.html_to_pdf directly and are not retried, so the
-        # refusal is still tested exactly once, on the first attempt.
-        for attempt in range(5):
-            result = pipeline.html_to_pdf(
-                f"{stem}.html", f"{stem}.pdf", workdir=pdf_workspace, timeout=timeout
-            )
-            if result.returncode == 0 or "assets failed to load" not in result.stderr:
-                break
-            time.sleep(3)
+        # The generated pages used to fetch Bootstrap, highlight.js, Mermaid and
+        # the webfonts from CDNs, and html-to-pdf.js correctly refuses to write a
+        # PDF when any request fails. Those assets are now inlined, so a transient
+        # network blip can no longer turn a geometry assertion into a flake.
+        result = pipeline.html_to_pdf(
+            f"{stem}.html", f"{stem}.pdf", workdir=pdf_workspace, timeout=timeout
+        )
 
         return result, pdf_workspace / f"{stem}.pdf"
 
