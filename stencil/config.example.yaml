@@ -67,7 +67,7 @@ templates:
 # Optional:
 #   docs:           List of markdown files to convert to individual HTML documents.
 #   slides:         List of markdown files to convert to HTML slide decks. Same
-#                   pipeline as docs, rendered with slides-template.html and split
+#                   pipeline as docs, rendered with slide-template.html and split
 #                   into slides at each heading of the slide level (default: ##).
 #                   A markdown file belongs to docs or slides, never both.
 #   pdfs:           List of markdown files to convert to individual PDFs.

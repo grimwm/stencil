@@ -164,8 +164,8 @@ the bundled `stencil/templates/`, first match wins — so a consuming project ov
 one template without vendoring the set.
 
 Under `stencil/templates/`: two pandoc HTML templates (`html-template` for flowing
-documents, `slides-template` for decks), shared partials (`_page-head`, `_page-style`,
-`_page-scripts`) that both include, deck-only partials (`_slides-*`), and the Lua
+documents, `slide-template` for decks), shared partials (`_page-head`, `_page-style`,
+`_page-scripts`) that both include, deck-only partials (`_slide-*`), and the Lua
 filters that do the real work — `hidden-filter` (WITH= variants), `mermaid-figure-filter`
 (figure/figcaption), `embed-images` (base64 inlining), `slide-sections` (slide grouping).
 
