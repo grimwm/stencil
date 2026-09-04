@@ -26,9 +26,9 @@ doc: format-md{% if has_slides %} slide{% endif %} ## Generate HTML{% if has_sli
 
 {% if has_slides %}
 slide: format-md ## Generate HTML slide decks (use with=hidden to include presenter-only sections)
-	@docker images -q docker.io/pandoc/core:latest | grep -q . || $(DC) pull slides
+	@docker images -q docker.io/pandoc/core:latest | grep -q . || $(DC) pull slide
 {% for md in slides %}
-	$(DC) run --rm slides --metadata course="{{ name }}" $(METADATA_FLAGS) {{ md }} -o {{ md | replace('.md', '') }}$(OUTPUT_SUFFIX).html
+	$(DC) run --rm slide --metadata course="{{ name }}" $(METADATA_FLAGS) {{ md }} -o {{ md | replace('.md', '') }}$(OUTPUT_SUFFIX).html
 {% endfor %}
 	@echo "Generated slides$(if $(WITH), with features: $(WITH),)"
 
