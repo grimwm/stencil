@@ -17,7 +17,8 @@ import sys
 from pathlib import Path
 
 import yaml
-from jinja2 import Environment, FileSystemLoader
+from jinja2 import Environment, FileSystemLoader, StrictUndefined, Undefined, meta
+from jinja2.exceptions import TemplateNotFound
 
 from . import assets, pipeline
 
@@ -198,6 +199,28 @@ def get_template_context(package_id: str, config: dict) -> dict:
         "assets": assets.load(),
     }
 
+    # Config-level template_env declares which custom keys these templates may
+    # read and supplies the value for packages that do not set one. cs234
+    # points three configs at a single templates directory, so its shared
+    # Makefile.j2 reads has_playwright, which only answers/.config.yaml sets,
+    # and deps_script, which only assignments/.config.yaml sets. Without a way
+    # to declare a key without setting it, StrictUndefined would make one
+    # shared template impossible to serve from more than one config.
+    config_env = config.get("template_env")
+    if isinstance(config_env, dict):
+        for key, value in config_env.items():
+            context.setdefault(key, value)
+
+    # Any remaining custom key some package sets, left *undefined* for the
+    # packages that do not -- the lenient Undefined, not this environment's
+    # StrictUndefined. It is falsy in a condition, renders as nothing, and
+    # still satisfies `| default(...)`, which a concrete False does not: cs234
+    # writes `{{ front_controller | default('index.html') }}`, and defaulting
+    # the key to False put the literal "False" where a filename belonged.
+    # setdefault throughout, so a config cannot shadow a derived key.
+    for key in declared_template_env_keys(config):
+        context.setdefault(key, Undefined())
+
     # Custom template vars: merge into top-level context so `when` conditions and templates can access them directly
     template_env = package.get("template_env", {})
     if isinstance(template_env, dict):
@@ -206,6 +229,91 @@ def get_template_context(package_id: str, config: dict) -> dict:
     context["template_env"] = template_env if isinstance(template_env, dict) else {}
 
     return context
+
+
+def declared_template_env_keys(config: dict) -> set[str]:
+    """Every custom context key the config declares, at either level."""
+    keys: set[str] = set()
+    config_env = config.get("template_env")
+    if isinstance(config_env, dict):
+        keys |= set(config_env)
+    for package in config.get("packages", {}).values():
+        custom = package.get("template_env")
+        if isinstance(custom, dict):
+            keys |= set(custom)
+    return keys
+
+
+def referenced_variables(env: Environment, name: str, _seen=None) -> set[str]:
+    """Context keys a template reads, following {% include %} transitively.
+
+    Transitively because a consuming project overrides a composition template
+    and includes stencil's partials into it, so a key is often read a level
+    below the template the config names. A template that does not resolve
+    contributes nothing rather than raising -- render_templates reports that,
+    with the path, and this should not pre-empt it with a worse message.
+    """
+    seen = set() if _seen is None else _seen
+    if name in seen:
+        return set()
+    seen.add(name)
+    try:
+        source = env.loader.get_source(env, name)[0]
+    except TemplateNotFound:
+        return set()
+    ast = env.parse(source, filename=name)
+    found = set(meta.find_undeclared_variables(ast))
+    for referenced in meta.find_referenced_templates(ast):
+        if referenced:
+            found |= referenced_variables(env, referenced, seen)
+    return found
+
+
+def validate_config(config: dict, env: Environment) -> None:
+    """Reject custom keys that cannot do anything, in either direction.
+
+    template_env accepts any key and `when:` tests any name, so a typo used to
+    be silent both ways: an unknown key was set and read by nothing, and a
+    `when:` naming a key nobody set read as None and skipped the template it
+    guarded for every package. Neither produced output or an error.
+    """
+    when_keys: set[str] = set()
+    for tdef in config.get("templates", []):
+        when = tdef.get("when")
+        if when is None:
+            continue
+        when_keys |= {when} if isinstance(when, str) else set(when)
+
+    # What a template could legitimately read: everything stencil derives, plus
+    # every custom key any package declares. Built per package because a config
+    # error in one should not hide a naming error in another.
+    available: set[str] = set()
+    for package_id in config.get("packages", {}):
+        try:
+            available |= set(get_template_context(package_id, config))
+        except ValueError:
+            continue
+
+    unknown = sorted(when_keys - available)
+    if unknown:
+        raise ValueError(
+            f"`when:` names {', '.join(unknown)}, which stencil does not derive "
+            f"and no package sets in template_env. The template it guards is "
+            f"skipped for every package. Known keys: {', '.join(sorted(available))}"
+        )
+
+    read = set(when_keys)
+    for tdef in config.get("templates", []):
+        src = tdef.get("src")
+        if src:
+            read |= referenced_variables(env, src)
+
+    unread = sorted(declared_template_env_keys(config) - read)
+    if unread:
+        raise ValueError(
+            f"template_env sets {', '.join(unread)}, which no `when:` names and "
+            f"no template reads. Nothing uses it."
+        )
 
 
 def build_environment(config: dict, config_dir: Path) -> Environment:
@@ -228,6 +336,12 @@ def build_environment(config: dict, config_dir: Path) -> Environment:
     return Environment(
         loader=FileSystemLoader(template_dirs),
         extensions=["jinja2.ext.do"],
+        # A missing variable is an error, not an empty string. A consuming
+        # project may override a composition template and include stencil's
+        # partials into it (cs234 does), so a renamed context key would
+        # otherwise render a Makefile with a hole where a recipe used to be,
+        # found by whoever next ran make. See tests/test_template_contract.py.
+        undefined=StrictUndefined,
         trim_blocks=True,
         # keep indentation on lines after {% ... %} so templates stay readable
         lstrip_blocks=False,
@@ -670,6 +784,12 @@ def main():
     template_defs = config.get("templates", [])
     if not template_defs:
         print("Error: No templates defined in config", file=sys.stderr)
+        sys.exit(1)
+
+    try:
+        validate_config(config, env)
+    except ValueError as e:
+        print(f"Error: {e}", file=sys.stderr)
         sys.exit(1)
 
     if args.all:
