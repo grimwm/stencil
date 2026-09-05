@@ -334,7 +334,9 @@ def test_the_pushed_revision_is_preferred_over_head(drift_check, repo, monkeypat
 
     monkeypatch.setenv("PRE_COMMIT_TO_REF", first)
 
-    assert drift_check.committed_export()[0] == jsonl(OPEN)
+    (revision,) = drift_check.pushed_revisions()
+    assert revision == first
+    assert drift_check.committed_export(revision)[0] == jsonl(OPEN)
 
 
 def test_a_deleted_branch_falls_back_to_head(drift_check, repo, monkeypatch):
@@ -342,7 +344,7 @@ def test_a_deleted_branch_falls_back_to_head(drift_check, repo, monkeypatch):
     monkeypatch.chdir(repo)
     monkeypatch.setenv("PRE_COMMIT_TO_REF", "0" * 40)
 
-    assert drift_check.committed_export()[0] == jsonl(OPEN)
+    assert drift_check.pushed_revisions() == ["HEAD"]
 
 
 def test_a_junk_ref_is_not_passed_to_git(drift_check, repo, monkeypatch):
@@ -350,7 +352,7 @@ def test_a_junk_ref_is_not_passed_to_git(drift_check, repo, monkeypatch):
     monkeypatch.chdir(repo)
     monkeypatch.setenv("PRE_COMMIT_TO_REF", "HEAD; rm -rf /")
 
-    assert drift_check.committed_export()[0] == jsonl(OPEN)
+    assert drift_check.pushed_revisions() == ["HEAD"]
 
 
 def test_an_unreadable_repository_blocks_the_push(
@@ -364,7 +366,9 @@ def test_an_unreadable_repository_blocks_the_push(
     """
     monkeypatch.chdir(repo)
     monkeypatch.setattr(
-        drift_check, "committed_export", lambda: (None, "fatal: bad object HEAD")
+        drift_check,
+        "committed_export",
+        lambda revision="HEAD": (None, "fatal: bad object HEAD"),
     )
     monkeypatch.setattr(drift_check, "fresh_export", lambda: (jsonl(OPEN), ""))
 
@@ -377,8 +381,86 @@ def test_an_untracked_export_still_passes(drift_check, repo, monkeypatch, bd_ins
     monkeypatch.setattr(
         drift_check,
         "committed_export",
-        lambda: (None, "fatal: path '.beads/issues.jsonl' does not exist in 'HEAD'"),
+        lambda revision="HEAD": (
+            None,
+            "fatal: path '.beads/issues.jsonl' does not exist in 'HEAD'",
+        ),
     )
     monkeypatch.setattr(drift_check, "fresh_export", lambda: (jsonl(CLOSED), ""))
 
     assert drift_check.main() == 0
+
+
+# Several refs in one push ----------------------------------------------------
+#
+# `git push --all`, or `git push origin a b`, sends one update line per ref.
+# pre-commit collapses those into a single from/to pair, so the wrapper captures
+# the local shas itself and passes them on. Branches can carry different
+# historical exports; checking only one of them lets the others through.
+
+
+def test_every_pushed_revision_is_checked(drift_check, repo, monkeypatch, bd_installed):
+    """One stale branch in a push of two must still fail it."""
+    import subprocess
+
+    monkeypatch.chdir(repo)
+    stale = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=repo, capture_output=True, text=True
+    ).stdout.strip()
+
+    (repo / ".beads" / "issues.jsonl").write_text(jsonl(CLOSED))
+    subprocess.run(["git", "add", "-A"], cwd=repo, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "commit", "-qm", "current"], cwd=repo, check=True, capture_output=True
+    )
+    current = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=repo, capture_output=True, text=True
+    ).stdout.strip()
+
+    # The database agrees with `current`, so a check that looked only there
+    # would pass the push.
+    monkeypatch.setattr(drift_check, "fresh_export", lambda: (jsonl(CLOSED), ""))
+    monkeypatch.setenv("BD_PUSHED_REVISIONS", f"{current} {stale}")
+
+    assert drift_check.main() == 1
+
+
+def test_a_push_of_current_revisions_passes(
+    drift_check, repo, monkeypatch, bd_installed
+):
+    monkeypatch.chdir(repo)
+    head = drift_check.subprocess.run(
+        ["git", "rev-parse", "HEAD"], capture_output=True, text=True
+    ).stdout.strip()
+    monkeypatch.setattr(drift_check, "fresh_export", lambda: (jsonl(OPEN), ""))
+    monkeypatch.setenv("BD_PUSHED_REVISIONS", f"{head} {head}")
+
+    assert drift_check.main() == 0
+
+
+def test_the_pushed_revisions_list_is_validated(drift_check, repo, monkeypatch):
+    """Values arrive from the environment, so junk is dropped, not handed to git."""
+    monkeypatch.chdir(repo)
+    monkeypatch.setenv("BD_PUSHED_REVISIONS", "HEAD;rm -rf / 0000000000 zzzz")
+
+    assert drift_check.pushed_revisions() == ["HEAD"]
+
+
+def test_the_wrapper_hands_over_only_real_local_shas():
+    """The awk in .beads/hooks/pre-push, exercised as git would drive it."""
+    import subprocess
+    import textwrap
+
+    updates = textwrap.dedent("""\
+        refs/heads/a aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa refs/heads/a 1111111111111111111111111111111111111111
+        refs/heads/gone 0000000000000000000000000000000000000000 refs/heads/gone 2222222222222222222222222222222222222222
+        refs/heads/b bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb refs/heads/b 0000000000000000000000000000000000000000
+        """)
+    extract = (
+        "awk '$2 ~ /^[0-9a-fA-F]+$/ && $2 !~ /^0+$/ { print $2 }' | sort -u | tr '\\n' ' '"
+    )
+    out = subprocess.run(
+        ["sh", "-c", extract], input=updates, capture_output=True, text=True
+    ).stdout.split()
+
+    assert out == ["a" * 40, "b" * 40], "a deletion leaked through, or a sha was lost"

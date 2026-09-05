@@ -39,10 +39,43 @@ fi
 #
 # Kept in sh rather than copying that file's bash array and its venv lookup: a
 # push runs rarely enough that resolving `pre-commit` from PATH is no loss.
-if command -v pre-commit >/dev/null 2>&1; then
-  _here="$(cd "$(dirname "$0")" && pwd)"
-  exec pre-commit hook-impl \
+_here="$(cd "$(dirname "$0")" && pwd)"
+REPO="$(cd "$_here/../.." && pwd)"
+INSTALL_PYTHON="${PRE_COMMIT_PYTHON:-$REPO/.venv/bin/python3}"
+_remote="$1"
+_url="$2"
+
+# Git names every ref update on stdin, one line of
+# `<local ref> <local sha> <remote ref> <remote sha>` per ref. `pre-commit
+# hook-impl` consumes that stream and boils it down to a single from/to pair, so
+# a push carrying several branches would leave all but one of them unchecked.
+# The local shas are captured here and handed on out of band; stdin is then
+# replayed verbatim so pre-commit still sees exactly what git sent.
+#
+# All-zero shas are ref deletions -- there is no revision to read an export out
+# of -- and are dropped.
+_bd_updates="$(cat)"
+BD_PUSHED_REVISIONS="$(printf '%s\n' "$_bd_updates" \
+  | awk '$2 ~ /^[0-9a-fA-F]+$/ && $2 !~ /^0+$/ { print $2 }' \
+  | sort -u | tr '\n' ' ')"
+export BD_PUSHED_REVISIONS
+
+# The repo's venv first, PATH second, and a hard failure last -- the same order
+# .beads/hooks/pre-commit uses. Skipping silently when pre-commit is not on PATH
+# is how this hook came to do nothing at all: the drift guard it exists to run
+# was never reached on a machine that had not activated the virtualenv.
+if [ -x "$INSTALL_PYTHON" ]; then
+  printf '%s\n' "$_bd_updates" | "$INSTALL_PYTHON" -mpre_commit hook-impl \
     --config=.pre-commit-config.yaml \
     --hook-type=pre-push \
-    --hook-dir "$_here" -- "$@"
+    --hook-dir "$_here" -- "$_remote" "$_url"
+elif command -v pre-commit >/dev/null 2>&1; then
+  printf '%s\n' "$_bd_updates" | pre-commit hook-impl \
+    --config=.pre-commit-config.yaml \
+    --hook-type=pre-push \
+    --hook-dir "$_here" -- "$_remote" "$_url"
+else
+  echo '`pre-commit` not found.  Did you forget to activate your virtualenv?' 1>&2
+  exit 1
 fi
+exit $?

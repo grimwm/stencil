@@ -133,27 +133,44 @@ NO_ARTIFACT = (
 )
 
 
-def pushed_revision() -> str:
-    """The revision whose export the push would publish.
+def is_object_name(candidate: str) -> bool:
+    """A hex object name that is not the all-zero sha git uses for a deletion.
 
-    HEAD is only that revision when you happen to be standing on the branch you
-    are pushing; `git push origin other-branch` from main would otherwise check
-    main's export and let the pushed one through unexamined.
-
-    Git names the refs on stdin, but `pre-commit hook-impl` consumes that before
-    this hook runs. pre-commit re-publishes the local end of the update as
-    PRE_COMMIT_TO_REF, which is the same information. It arrives from the
-    environment, so it is validated as a hex object name before it is used --
-    an all-zero sha means a branch deletion, which has no revision to read.
+    Every revision reaches this program through the environment, so none of them
+    is handed to git before it has been shown to be an object name and nothing
+    else.
     """
-    candidate = os.environ.get("PRE_COMMIT_TO_REF", "").strip()
-    if re.fullmatch(r"[0-9a-fA-F]{7,64}", candidate) and candidate.strip("0"):
-        return candidate
-    return "HEAD"
+    return bool(re.fullmatch(r"[0-9a-fA-F]{7,64}", candidate)) and bool(
+        candidate.strip("0")
+    )
 
 
-def committed_export() -> tuple[str | None, str]:
-    """The export as of the revision being pushed.
+def pushed_revisions() -> list[str]:
+    """Every revision whose export the push would publish.
+
+    HEAD is only one of them when you happen to be standing on the single branch
+    you are pushing; `git push origin other-branch` from main would otherwise
+    check main's export, and `git push --all` would check one branch and let the
+    rest through unexamined. Branches can carry different historical exports, so
+    one of them agreeing proves nothing about the others.
+
+    Git names every ref update on stdin, but `pre-commit hook-impl` consumes
+    that stream and reduces it to a single from/to pair. .beads/hooks/pre-push
+    captures the local shas before handing the stream on, and passes them here
+    as BD_PUSHED_REVISIONS. PRE_COMMIT_TO_REF is the fallback for a hook chain
+    without that wrapper, and HEAD the fallback for no hook at all.
+    """
+    for variable in ("BD_PUSHED_REVISIONS", "PRE_COMMIT_TO_REF"):
+        revisions = [
+            r for r in os.environ.get(variable, "").split() if is_object_name(r)
+        ]
+        if revisions:
+            return revisions
+    return ["HEAD"]
+
+
+def committed_export(revision: str = "HEAD") -> tuple[str | None, str]:
+    """The export as of one revision being pushed.
 
     Returns the export and, when it could not be read, what git said. The
     caller has to tell an export that was never tracked apart from a repository
@@ -165,7 +182,7 @@ def committed_export() -> tuple[str | None, str]:
     """
     try:
         result = subprocess.run(
-            ["git", "show", f"{pushed_revision()}:{EXPORT.as_posix()}"],
+            ["git", "show", f"{revision}:{EXPORT.as_posix()}"],
             capture_output=True,
             text=True,
             encoding="utf-8",
@@ -217,53 +234,61 @@ def main() -> int:
     if shutil.which("bd") is None:
         return 0
 
-    committed, unreadable = committed_export()
-    if committed is None:
-        if not unreadable or any(h in unreadable for h in NO_ARTIFACT):
-            # No git, no revision, or the export has never been tracked. There
-            # is no pushed state to hold the database against.
-            return 0
-        # The revision exists and git could not read the export out of it.
-        print(
-            f"cannot read {EXPORT} from the revision being pushed:"
-            f"\n\n{unreadable}",
-            file=sys.stderr,
-        )
-        return 1
-
+    # One snapshot for the whole push: every pushed revision is held against the
+    # same database, which is what "the export matches the database" has to mean
+    # when a push carries more than one ref.
     exported, why = fresh_export()
     if exported is None:
         if NO_DATABASE in why.lower():
             return 0
-        # bd is installed and HEAD carries an export, but the database will not
-        # read. Returning 0 here would look exactly like agreement.
+        # bd is installed and the database will not read. Returning 0 here would
+        # look exactly like agreement.
         print(
             f"cannot check {EXPORT} against the beads database:\n\n{why}",
             file=sys.stderr,
         )
         return 1
 
-    # Deliberately not gated on the file existing: deleting it must not be a
-    # way to push a stale commit. Absent, there is simply no working copy for
-    # the advice to take into account.
-    working_tree = (
-        EXPORT.read_text(encoding="utf-8") if EXPORT.exists() else None
-    )
+    # Deliberately not gated on the file existing: deleting it must not be a way
+    # to push a stale commit. Absent, there is simply no working copy for the
+    # advice to take into account.
+    working_tree = EXPORT.read_text(encoding="utf-8") if EXPORT.exists() else None
 
-    drift = describe_drift(committed, exported, working_tree=working_tree)
-    if drift is None:
-        return 0
+    for revision in pushed_revisions():
+        committed, unreadable = committed_export(revision)
+        if committed is None:
+            if not unreadable or any(h in unreadable for h in NO_ARTIFACT):
+                # No git, no repository, or the export has never been tracked in
+                # this revision. Nothing to hold the database against.
+                continue
+            print(
+                f"cannot read {EXPORT} from {describe(revision)}:\n\n{unreadable}",
+                file=sys.stderr,
+            )
+            return 1
 
-    revision = pushed_revision()
-    where = "HEAD" if revision == "HEAD" else f"{revision[:12]}, the revision being pushed"
-    print(f"{EXPORT} in {where} disagrees with the beads database:\n", file=sys.stderr)
-    print(drift, file=sys.stderr)
-    print(
-        "\nIf the difference is deliberate, commit it deliberately -- the point"
-        "\nof this check is that the two never diverge without someone saying so.",
-        file=sys.stderr,
-    )
-    return 1
+        drift = describe_drift(committed, exported, working_tree=working_tree)
+        if drift is None:
+            continue
+
+        print(
+            f"{EXPORT} in {describe(revision)} disagrees with the beads "
+            "database:\n",
+            file=sys.stderr,
+        )
+        print(drift, file=sys.stderr)
+        print(
+            "\nIf the difference is deliberate, commit it deliberately -- the point"
+            "\nof this check is that the two never diverge without someone saying so.",
+            file=sys.stderr,
+        )
+        return 1
+
+    return 0
+
+
+def describe(revision: str) -> str:
+    return "HEAD" if revision == "HEAD" else f"{revision[:12]}, a revision being pushed"
 
 
 if __name__ == "__main__":
