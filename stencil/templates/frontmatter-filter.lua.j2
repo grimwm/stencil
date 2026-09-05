@@ -65,7 +65,7 @@ local CONTEXT = { "program", "section", "term" }
 -- with nothing after it would open a byline row with nothing to put in it.
 local BLANKABLE = {
   "program", "section", "term", "author", "date", "lang", "dir",
-  "brand", "brand-alt",
+  "brand", "brand-alt", "points",
 }
 
 -- What `brand` is taken to be a picture of rather than a name.
@@ -187,6 +187,28 @@ function Meta(meta)
       })
       meta["brand-is-image"] = true
     end
+  end
+
+  -- Points is a number the reader cares about, so the badge says "1 pt" rather
+  -- than "1 pts". Computed here because a pandoc template cannot compare a
+  -- value -- the same reason `date` is filled in here rather than there.
+  --
+  -- A value that is not a number renders verbatim, so `points: "extra credit"`
+  -- is a usable escape hatch rather than a build failure. There is nothing to
+  -- validate about it: unlike a date, any string is a legible answer to "what
+  -- is this worth".
+  local points = text_of(meta.points)
+  if points then
+    local count = tonumber(points)
+    local label
+    if count == nil then
+      label = points
+    elseif count == 1 then
+      label = points .. " pt"
+    else
+      label = points .. " pts"
+    end
+    meta["points-label"] = pandoc.Inlines({ pandoc.Str(label) })
   end
 
   local has_context = false

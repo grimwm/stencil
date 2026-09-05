@@ -44,6 +44,30 @@
       margin-top: 0.5rem;
     }
 
+    /* What the document is worth, beside the title. Sits inside .doc-title,
+       so like .doc-subtitle it has to opt out of that block's 2.2rem/700
+       rather than inherit it -- a badge that outranks the title is the same
+       inversion .doc-subtitle was fixed for, and the print block would carry
+       it into the PDF.
+
+       Colors are literal rather than tokens: there is no token layer to hang
+       them on yet, and the theming release converts them along with the other
+       fifty-odd in this file. */
+    .doc-points {
+      display: inline-block;
+      margin-left: 0.5rem;
+      padding: 0.15em 0.55em;
+      border-radius: 999px;
+      background: #e8eef7;
+      color: #29417a;
+      font-family: var(--font-sans);
+      font-size: 0.95rem;
+      font-weight: 600;
+      line-height: 1.4;
+      white-space: nowrap;
+      vertical-align: middle;
+    }
+
     /* The header's two rows. Identity sits on the left of each, context on the
        right, so a document with a course and a term costs two lines instead of
        five. align-items: baseline so the course sits on the title's baseline
