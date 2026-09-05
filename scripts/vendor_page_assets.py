@@ -35,6 +35,12 @@ FILES = {
     "highlight-github.min.css": (
         "https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github.min.css"
     ),
+    # The dark counterpart, pinned to the same release as the light one so a
+    # bump cannot move only half the pair.
+    "highlight-github-dark.min.css": (
+        "https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0"
+        "/styles/github-dark.min.css"
+    ),
     "highlight.min.js": (
         "https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"
     ),

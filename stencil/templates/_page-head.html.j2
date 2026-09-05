@@ -72,6 +72,11 @@
 
   <!-- Highlight.js for code syntax highlighting -->
   <style>{{ assets.highlight_css }}</style>
+  <!-- The dark counterpart, scoped in assets.py to :root[data-theme="dark"]
+       and wrapped here in @media screen. Same containment rule as every other
+       dark declaration: print cannot match the block, so a printed listing
+       keeps the light theme with nothing to undo. -->
+  <style>@media screen { {{ assets.highlight_css_dark }} }</style>
 
   <!-- Crimson Pro (serif) + Inter (sans) + JetBrains Mono; latin + latin-ext only -->
   <style>{{ assets.fonts_css }}</style>

@@ -23,6 +23,13 @@ STYLESHEETS = ["_page-style.css.j2", "_slide-style.css.j2"]
 
 COLOUR = re.compile(r"#[0-9a-fA-F]{3,8}\b|\brgba?\(|\bhsla?\(")
 
+THEME_CONFIG = {
+    "templates": [{"src": "html-template.html.j2"}],
+    "packages": {
+        "demo": {"name": "Demo", "package_type": "none", "docs": ["a.md"]}
+    },
+}
+
 
 def source(template: str) -> str:
     return (TEMPLATES / template).read_text()
@@ -373,3 +380,57 @@ def test_every_byline_block_opts_out_of_the_title_scale():
     assert {".doc-meta", ".doc-facts", ".doc-context"} <= named, (
         f"a byline block still inherits the title's 2.2rem: {named}"
     )
+
+
+def test_the_dark_code_theme_is_sealed_in_media_screen(generate_package):
+    """The vendored dark highlight theme is a dark declaration like any other
+    and obeys the same containment: print must not see it, or a printed code
+    listing comes out white-on-black."""
+    page = (generate_package(THEME_CONFIG) / "html-template.html").read_text()
+    assert ':root[data-theme="dark"] .hljs{' in page, "dark theme not emitted"
+    sealed = "".join(screen_blocks(page))
+    assert ':root[data-theme="dark"] .hljs{' in sealed, (
+        "the dark code theme is outside @media screen; print would see it"
+    )
+
+
+
+SCRIPTS = TEMPLATES / "_page-scripts.html.j2"
+
+
+def test_mermaid_stashes_its_source_before_the_first_render():
+    """mermaid.run() replaces the element's contents with SVG, so a redraw has
+    nothing to redraw from unless the source was kept."""
+    js = SCRIPTS.read_text()
+    assert "dataset.mermaidSource = text" in js
+    assert js.index("dataset.mermaidSource = text") < js.index("await renderMermaid()")
+
+
+def test_mermaid_ready_is_set_once_and_never_cleared():
+    """html-to-pdf.js blocks on this flag. A redraw that reset it would hang
+    the build until the two-minute timeout."""
+    js = SCRIPTS.read_text()
+    assert js.count("window.__mermaidReady = true") == 1
+    assert "__mermaidReady = false" not in js
+    assert "delete window.__mermaidReady" not in js
+    # And the ready event fires once, so the tab code runs once.
+    assert js.count("new Event('mermaid-ready')") == 1
+
+
+def test_mermaid_redraw_skips_the_subscription_callback():
+    """subscribe() calls back immediately with the current theme. Redrawing on
+    that call would render every diagram twice on load, doubling the slowest
+    part of the page."""
+    js = SCRIPTS.read_text()
+    m = re.search(r"__stencilTheme\.subscribe\(function \(\) \{(.*?)\n      \}\);", js, re.S)
+    assert m, "no theme subscription"
+    assert "firstCall" in m.group(1), "the immediate callback is not skipped"
+
+
+def test_mermaid_reads_its_palette_from_the_tokens():
+    """A hardcoded second palette drifts from the first. These are read off
+    the live custom properties, so a token change moves the diagrams too."""
+    js = SCRIPTS.read_text()
+    assert "getPropertyValue" in js
+    for token in ["--surface", "--text", "--accent"]:
+        assert f"token('{token}')" in js, token

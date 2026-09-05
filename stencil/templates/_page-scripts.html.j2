@@ -19,62 +19,134 @@
   <script>
   (async function() {
     const mermaid = globalThis.mermaid;
-    mermaid.initialize({ startOnLoad: false, theme: 'neutral' });
+
+    // Mermaid bakes its colours into the SVG at draw time, so CSS cannot
+    // repaint a rendered diagram and a theme change has to redraw it. Reading
+    // the palette from the live tokens rather than hardcoding a second one
+    // keeps diagrams matching the page instead of approximating it.
+    function themeVariables() {
+      const css = getComputedStyle(document.documentElement);
+      const token = (name) => css.getPropertyValue(name).trim();
+      return {
+        background: token('--surface'),
+        primaryColor: token('--surface-accent'),
+        primaryTextColor: token('--text'),
+        primaryBorderColor: token('--accent'),
+        secondaryColor: token('--surface-sunken'),
+        tertiaryColor: token('--surface-muted'),
+        lineColor: token('--text-muted'),
+        textColor: token('--text'),
+        mainBkg: token('--surface-accent'),
+        nodeBorder: token('--accent'),
+      };
+    }
+
+    // The source is gone once mermaid.run() replaces the element's contents
+    // with SVG, so it is stashed before the first render and restored on every
+    // one after it.
     document.querySelectorAll('pre code.language-mermaid, pre.mermaid').forEach((el) => {
       const pre = el.tagName === 'PRE' ? el : el.closest('pre');
       if (!pre) return;
       const text = (el.tagName === 'PRE' ? el : el).textContent.replace(/^\n|\n$$/g, '');
       const div = document.createElement('div');
       div.className = 'mermaid';
+      div.dataset.mermaidSource = text;
       div.textContent = text;
       pre.insertAdjacentElement('afterend', div);
       pre.remove();
     });
-    await mermaid.run({ querySelector: '.mermaid' });
-    const mermaidContainers = document.querySelectorAll('.mermaid');
-    if (mermaidContainers.length > 1) {
-      document.querySelectorAll('.mermaid').forEach((container, i) => {
-        const prefix = 'mermaid-' + i + '-';
-        const svg = container.querySelector('svg');
-        if (!svg) return;
-        const idMap = {};
-        svg.querySelectorAll('[id]').forEach((el) => {
-          const oldId = el.getAttribute('id');
-          if (oldId) {
-            const newId = prefix + oldId;
-            idMap[oldId] = newId;
-            el.setAttribute('id', newId);
-          }
-        });
-        function updateRef(attrValue) {
-          if (!attrValue || !attrValue.startsWith('#')) return attrValue;
-          const oldId = attrValue.slice(1);
-          return idMap[oldId] !== undefined ? '#' + idMap[oldId] : attrValue;
+
+    async function renderMermaid() {
+      const diagrams = document.querySelectorAll('.mermaid');
+      if (!diagrams.length) return;
+      diagrams.forEach((div) => {
+        // A redraw has to undo the last one: restore the source and clear the
+        // flag mermaid sets, or run() skips the element as already done.
+        if (div.dataset.mermaidSource !== undefined) {
+          div.textContent = div.dataset.mermaidSource;
         }
-        function updateUrlRefs(val) {
-          if (!val || !val.includes('url(#')) return val;
-          return val.replace(/url\(#([^)]+)\)/g, (_, id) =>
-            idMap[id] !== undefined ? 'url(#' + idMap[id] + ')' : 'url(#' + id + ')');
-        }
-        svg.querySelectorAll('[href]').forEach((el) => {
-          const href = el.getAttribute('href');
-          if (href) el.setAttribute('href', updateRef(href));
-        });
-        svg.querySelectorAll('*').forEach((el) => {
-          const xhref = el.getAttributeNS('http://www.w3.org/1999/xlink', 'href');
-          if (xhref) el.setAttributeNS('http://www.w3.org/1999/xlink', 'href', updateRef(xhref));
-          ['fill', 'stroke', 'clip-path', 'mask', 'filter', 'style', 'marker-end', 'marker-start', 'marker-mid'].forEach((attr) => {
-            const val = el.getAttribute(attr);
-            if (val) {
-              const updated = updateUrlRefs(val);
-              if (updated !== val) el.setAttribute(attr, updated);
+        delete div.dataset.processed;
+        div.removeAttribute('data-processed');
+      });
+      mermaid.initialize({
+        startOnLoad: false,
+        theme: 'base',
+        themeVariables: themeVariables(),
+      });
+      await mermaid.run({ querySelector: '.mermaid' });
+      prefixSvgIds();
+    }
+
+    // Re-applied after every render: mermaid numbers ids from scratch each
+    // time, so a second diagram would duplicate the first's (WCAG 4.1.1).
+    function prefixSvgIds() {
+      const mermaidContainers = document.querySelectorAll('.mermaid');
+      if (mermaidContainers.length > 1) {
+        document.querySelectorAll('.mermaid').forEach((container, i) => {
+          const prefix = 'mermaid-' + i + '-';
+          const svg = container.querySelector('svg');
+          if (!svg) return;
+          const idMap = {};
+          svg.querySelectorAll('[id]').forEach((el) => {
+            const oldId = el.getAttribute('id');
+            if (oldId) {
+              const newId = prefix + oldId;
+              idMap[oldId] = newId;
+              el.setAttribute('id', newId);
             }
           });
+          function updateRef(attrValue) {
+            if (!attrValue || !attrValue.startsWith('#')) return attrValue;
+            const oldId = attrValue.slice(1);
+            return idMap[oldId] !== undefined ? '#' + idMap[oldId] : attrValue;
+          }
+          function updateUrlRefs(val) {
+            if (!val || !val.includes('url(#')) return val;
+            return val.replace(/url\(#([^)]+)\)/g, (_, id) =>
+              idMap[id] !== undefined ? 'url(#' + idMap[id] + ')' : 'url(#' + id + ')');
+          }
+          svg.querySelectorAll('[href]').forEach((el) => {
+            const href = el.getAttribute('href');
+            if (href) el.setAttribute('href', updateRef(href));
+          });
+          svg.querySelectorAll('*').forEach((el) => {
+            const xhref = el.getAttributeNS('http://www.w3.org/1999/xlink', 'href');
+            if (xhref) el.setAttributeNS('http://www.w3.org/1999/xlink', 'href', updateRef(xhref));
+            ['fill', 'stroke', 'clip-path', 'mask', 'filter', 'style', 'marker-end', 'marker-start', 'marker-mid'].forEach((attr) => {
+              const val = el.getAttribute(attr);
+              if (val) {
+                const updated = updateUrlRefs(val);
+                if (updated !== val) el.setAttribute(attr, updated);
+              }
+            });
+          });
         });
-      });
+      }
     }
+
+    await renderMermaid();
+
+    // Set once, after the FIRST render, and never cleared. html-to-pdf.js
+    // blocks on this flag; a redraw that reset it would hang the build.
+    // Safe because a PDF build loads the page fresh with empty storage and
+    // prefers-color-scheme forced light, so the theme never changes there
+    // and the diagram is drawn exactly once -- the redraw path fires only
+    // on a click, which cannot happen during a build.
     window.__mermaidReady = true;
     window.dispatchEvent(new Event('mermaid-ready'));
+
+    // Redraw when the theme changes. Nothing above is repeated: the flag
+    // stays set and the ready event is not fired again, so the tab code
+    // and the PDF driver each see exactly one signal.
+    if (window.__stencilTheme) {
+      let firstCall = true;
+      window.__stencilTheme.subscribe(function () {
+        // subscribe() calls back immediately with the current theme; the
+        // diagram it would redraw has just been drawn.
+        if (firstCall) { firstCall = false; return; }
+        renderMermaid();
+      });
+    }
   })();
   </script>
 
