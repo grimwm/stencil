@@ -39,6 +39,16 @@ def build(render, key: str, value: str):
     )
 
 
+def line(soup, selector: str) -> str:
+    """One header line, whitespace-normalized.
+
+    Pandoc hard-wraps its output, so `Sep 12, 2026` arrives as `Sep\\n12,
+    2026`. That is formatting, not content -- the same reason test_byline.py
+    normalizes before comparing.
+    """
+    return " ".join(soup.select_one(selector).get_text().split())
+
+
 ACCEPTED = [
     "2026-09-01",
     "2026-09-01T21:45",
@@ -115,3 +125,81 @@ def test_blank_keys_render_as_if_absent(render):
     assert absent.returncode == 0, absent.stderr
     assert blank.returncode == 0, blank.stderr
     assert blank_path.read_text() == absent_path.read_text()
+
+
+def test_issued_and_due_render_labelled(render_soup):
+    soup = render_soup(
+        "doc",
+        "d.md",
+        text=document('title: "T"\ndate: 2026-09-01\ndue: 2026-09-12T23:59\n'),
+    )
+    assert line(soup, ".doc-issued") == "Issued Sep 01, 2026"
+    assert line(soup, ".doc-due") == "Due Sep 12, 2026 · 23:59"
+
+
+def test_a_written_time_renders_and_a_missing_one_does_not(render_soup):
+    soup = render_soup(
+        "doc",
+        "d.md",
+        text=document('title: "T"\ndate: 2026-09-01T21:45\ndue: 2026-09-12\n'),
+    )
+    assert "21:45" in line(soup, ".doc-issued")
+    assert ":" not in line(soup, ".doc-due")
+
+
+def test_the_time_element_carries_the_original_iso(render_soup):
+    soup = render_soup(
+        "doc", "d.md", text=document('title: "T"\ndue: 2026-09-12T23:59\n')
+    )
+    assert soup.select_one(".doc-due time")["datetime"] == "2026-09-12T23:59"
+
+
+def test_show_date_stamps_date_only(render_soup):
+    soup = render_soup(
+        "doc", "d.md", text=document('title: "T"\nshow_date: true\n')
+    )
+    issued = line(soup, ".doc-issued")
+    assert issued.startswith("Issued ")
+    assert ":" not in issued
+
+
+def test_a_written_date_still_beats_show_date(render_soup):
+    soup = render_soup(
+        "doc",
+        "d.md",
+        text=document('title: "T"\ndate: 2026-09-01\nshow_date: true\n'),
+    )
+    assert "Sep 01, 2026" in line(soup, ".doc-issued")
+
+
+def test_due_alone_opens_the_byline(render_soup):
+    soup = render_soup(
+        "doc", "d.md", text=document('title: "T"\ndue: 2026-09-12\n')
+    )
+    assert soup.select_one(".doc-byline") is not None
+    assert soup.select_one(".doc-issued") is None
+    assert "Due Sep 12, 2026" in line(soup, ".doc-due")
+
+
+def test_the_deck_byline_never_strands_a_separator(render_soup):
+    soup = render_soup(
+        "slide", "deck.md", text=document('title: "T"\ndue: 2026-09-12\n')
+    )
+    meta = line(soup, ".deck-meta")
+    assert meta == "Due Sep 12, 2026"
+
+
+def test_the_deck_byline_joins_all_three(render_soup):
+    soup = render_soup(
+        "slide",
+        "deck.md",
+        text=document(
+            'title: "T"\nauthor: Ada Lovelace\ndate: 2026-09-01\n'
+            "due: 2026-09-12T23:59\n"
+        ),
+    )
+    meta = line(soup, ".deck-meta")
+    assert meta == (
+        "Ada Lovelace · Issued Sep 01, 2026 "
+        "· Due Sep 12, 2026 · 23:59"
+    )

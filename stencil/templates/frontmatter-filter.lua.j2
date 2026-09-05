@@ -324,7 +324,7 @@ function Meta(meta)
     has_context = has_context or meta[key] ~= nil
   end
   meta["has-context"] = (has_context or meta.brand ~= nil) or nil
-  meta["has-byline"] = (meta.author ~= nil or meta.date ~= nil) or nil
+  meta["has-byline"] = (meta.author ~= nil or has_date or has_due) or nil
 
   return meta
 end
