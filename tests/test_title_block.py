@@ -89,11 +89,9 @@ def print_block(css) -> str:
     Slicing to the first closing brace stops inside @page and hides every rule
     after it, which makes the tests below pass for no reason.
     """
-    # Anchored backwards from stencil's own rule: Bootstrap is inlined into
-    # this stylesheet and ships an @media print block of its own, which comes
-    # first and contains none of these selectors.
-    start = css.rfind("@media print", 0, css.index(".doc-title { font-size:"))
-    assert start != -1, "no @media print block around stencil's print rules"
+    # `css` starts past Bootstrap, which ships an @media print block of its
+    # own, so the first one here is stencil's.
+    start = css.index("@media print")
     depth = 0
     for i in range(css.index("{", start), len(css)):
         if css[i] == "{":
@@ -127,20 +125,43 @@ def test_the_subtitle_does_not_match_the_title_for_weight(css):
 
 
 # --- in print --------------------------------------------------------------
+#
+# Print does not restate the scale. Every size above is in rem, a rem is the
+# root font size, so rescaling the root once carries the whole scale across --
+# and there is no second list of sizes to fall out of step with the first.
+# Restating them in pt is what put .doc-subtitle at 21.6pt under an 18pt title
+# and inverted the heading scale at h4.
+
+BODY_REM = 1.125  # the body rule at the top of the stylesheet
+PRINTED_BODY_PT = 11.0  # what a document's body text has always printed at
 
 
-def test_the_print_block_scales_the_subtitle_too(print_block):
-    """Left out, it keeps a rem value that outgrows the title's 18pt."""
-    assert size_pt(rule(print_block, ".doc-subtitle")) < size_pt(
-        rule(print_block, ".doc-title")
-    )
+def root_pt(print_block: str) -> float:
+    return size_pt(rule(print_block, "html"))
 
 
-def test_the_printed_subtitle_stays_above_the_byline(print_block):
-    """Guards the over-correction: it is a name, not a footnote."""
-    assert size_pt(rule(print_block, ".doc-subtitle")) > size_pt(
-        rule(print_block, ".doc-meta")
-    )
+def test_print_rescales_the_root(print_block):
+    assert root_pt(print_block) > 0
+
+
+def test_print_restates_no_size_the_scale_already_gives(print_block):
+    """The guard that keeps the two media on one scale. Any of these coming
+    back means a second scale, and a second scale drifts from the first."""
+    restated = [
+        selector
+        for selector in (".doc-title", ".doc-subtitle", ".doc-meta", *LEVELS)
+        if re.search(
+            r"(?m)^[ \t]*" + re.escape(selector) + r"\s*\{[^}]*font-size", print_block
+        )
+    ]
+    assert not restated, f"print restates a size for {restated}"
+
+
+def test_the_root_keeps_body_text_where_it_has_always_printed(print_block):
+    """Why 9.78pt and not a round number: it is what puts 1.125rem on 11pt.
+    Change the root and this says what it costs."""
+    printed = root_pt(print_block) * BODY_REM
+    assert abs(printed - PRINTED_BODY_PT) < 0.05, f"body would print at {printed:.2f}pt"
 
 
 # --- what actually comes out of the printer --------------------------------
@@ -197,25 +218,17 @@ def assert_strictly_descending(labels, sizes) -> None:
 
 
 def test_a_section_heading_does_not_outrank_the_title(css):
-    """Needs stencil to state a size for h1 at all, rather than inherit one."""
+    """Needs stencil to state a size for h1 at all, rather than inherit one.
+
+    One scale serves both media, so this holds in print too -- and
+    test_the_printed_heading_scale_never_inverts proves it off a real PDF
+    rather than trusting that the root carries it across.
+    """
     assert size_rem(rule(css, "h1")) < size_rem(rule(css, ".doc-title"))
 
 
-def test_every_screen_heading_level_steps_down(css):
+def test_every_heading_level_steps_down(css):
     assert_strictly_descending(LEVELS, [size_rem(rule(css, t)) for t in LEVELS])
-
-
-def test_every_printed_heading_level_steps_down(print_block):
-    """h4 was the break: unset in print, so it kept a rem that outgrew h1."""
-    assert_strictly_descending(
-        LEVELS, [size_pt(rule(print_block, t)) for t in LEVELS]
-    )
-
-
-def test_the_printed_title_outranks_every_heading(print_block):
-    title = size_pt(rule(print_block, ".doc-title"))
-    for tag in LEVELS:
-        assert size_pt(rule(print_block, tag)) < title, f"{tag} is not below the title"
 
 
 HEADINGS_SOURCE = """---

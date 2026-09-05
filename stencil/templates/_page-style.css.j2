@@ -310,8 +310,19 @@
         margin: 1in;
       }
 
+      /* One type scale, two media. Every size above is in rem, and a rem is
+         the root font size -- so print rescales the root once and the whole
+         scale follows, instead of restating each size in pt and inverting the
+         moment one is forgotten.
+
+         9.78pt keeps body, at 1.125rem, on the 11pt it has always printed at.
+         Screen leaves the root alone: pinning it there would override the
+         reader's own font-size preference, which print has no equivalent of. */
+      html {
+        font-size: 9.78pt;
+      }
+
       body {
-        font-size: 11pt;
         line-height: 1.5;
       }
 
@@ -320,24 +331,6 @@
         padding: 0;
       }
 
-      .doc-title { font-size: 18pt; }
-      /* Without this the subtitle keeps its screen 1.4rem, which is 16.8pt
-         against the title's 18pt -- and was 21.6pt when it was 1.8rem, so the
-         name printed larger than the assignment. Every size in this block is
-         pt for that reason: a rem here is measured against the root font size,
-         not against the title beside it. */
-      .doc-subtitle { font-size: 13pt; }
-      .doc-meta { font-size: 10pt; }
-      h1 { font-size: 16pt; }
-      h2 { font-size: 14pt; }
-      h3 { font-size: 12pt; }
-      /* h4..h6 were left out, so they kept Bootstrap's rem -- absolute against
-         the root font size, not relative to the headings beside them. h4
-         printed at 22.3 against h1's 21.3, so the scale inverted at h4 in
-         every document stencil printed. Same hole as .doc-subtitle above. */
-      h4 { font-size: 11pt; }
-      h5 { font-size: 10.5pt; }
-      h6 { font-size: 10pt; }
 
       h1, h2, h3, h4, h5, h6 {
         page-break-after: avoid;
@@ -348,11 +341,11 @@
       }
 
       pre {
-        font-size: 9pt;
+        font-size: 0.92rem;
       }
 
       table {
-        font-size: 10pt;
+        font-size: 1.02rem;
       }
 
       thead {
