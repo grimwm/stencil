@@ -27,7 +27,7 @@ def badge(soup, selector: str = ".doc-points") -> str | None:
 
 
 @pytest.mark.parametrize(
-    "value,expected",
+    ("value", "expected"),
     [
         ("1", "1 pt"),
         ("0", "0 pts"),

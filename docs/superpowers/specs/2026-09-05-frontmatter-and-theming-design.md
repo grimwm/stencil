@@ -162,7 +162,7 @@ screen reader announces and `pdftotext` extracts.
 ```css
 header.doc-title {
   display: grid;
-  grid-template-columns: minmax(18rem, 1fr) auto;
+  grid-template-columns: minmax(18rem, 1fr) minmax(0, auto);
   align-items: baseline;
   column-gap: 1.5rem;
   row-gap: 0.35rem;
@@ -176,7 +176,13 @@ Source order becomes `.doc-identity`, `.doc-byline`, `.doc-context` — so title
 badge → subtitle → author → dates → context. The rendered layout is unchanged.
 
 The `18rem` basis is carried over from the flex rule it replaces, preserving the
-existing wrap threshold. Under the existing `max-width: 40rem` query the grid
+existing wrap threshold.
+The context column is `minmax(0, auto)`, not a bare `auto`. An `auto` track will
+not shrink below its own min-content width, so a long brand or program beside
+the identity column's 18rem floor could push the header wider than the page --
+the flex row this replaces would have wrapped instead. A zero minimum lets the
+context wrap inside its column.
+Under the existing `max-width: 40rem` query the grid
 collapses to `grid-template-columns: 1fr` and every child resets to
 `grid-column: 1; grid-row: auto`, so it stacks in source order — which is the
 narrow-viewport improvement, not a regression: author now genuinely follows the

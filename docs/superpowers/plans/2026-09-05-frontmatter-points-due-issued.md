@@ -901,7 +901,7 @@ In `_page-style.css.j2`, replace the `.doc-headrow, .doc-byline` rule and the
        two-line identity block. */
     header.doc-title {
       display: grid;
-      grid-template-columns: minmax(18rem, 1fr) auto;
+      grid-template-columns: minmax(18rem, 1fr) minmax(0, auto);
       align-items: baseline;
       column-gap: 1.5rem;
       row-gap: 0.35rem;
@@ -933,6 +933,12 @@ In `_page-style.css.j2`, replace the `.doc-headrow, .doc-byline` rule and the
 
 Delete the now-duplicated `.doc-byline { margin-top: 0.6rem; }` rule further
 down and fold `margin-top: 0.6rem` into the block above.
+
+The context column is `minmax(0, auto)`, not a bare `auto`. An `auto` track will
+not shrink below its own min-content width, so a long brand or program beside
+the identity column's 18rem floor could push the header wider than the page --
+the flex row this replaces would have wrapped instead. A zero minimum lets the
+context wrap inside its column.
 
 - [ ] **Step 5: Reset placement on narrow viewports**
 

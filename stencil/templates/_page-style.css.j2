@@ -79,7 +79,8 @@
        written second so the author follows the subtitle for a screen reader
        and for pdftotext, and placement puts the context back up on row one.
        align-items: baseline so the course sits on the title's baseline rather
-       than floating at the top of a two-line identity block. */
+       than floating at the top of a two-line identity block.
+
        The context column is minmax(0, auto), not auto. A bare `auto` track
        refuses to shrink below its own min-content width, so a long brand or
        program beside the identity column's 18rem floor could push the header

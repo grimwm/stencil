@@ -18,6 +18,7 @@ hold the document side to the relationship the decks already keep.
 from __future__ import annotations
 
 import re
+from pathlib import Path
 
 import pytest
 from pypdf import PdfReader
@@ -286,3 +287,43 @@ def test_the_points_badge_is_subordinate_to_the_title(css):
     title = size_rem(rule(css, ".doc-title"))
     badge = size_rem(rule(css, ".doc-points"))
     assert badge < title, f"badge {badge}rem is not below title {title}rem"
+
+
+def test_the_header_grid_rule_survives_the_parser(css):
+    """A stray `*/` upstream silently deletes this rule.
+
+    The prose above `header.doc-title` is a CSS comment. Close it twice --
+    which is what happens when someone appends a paragraph after the existing
+    `*/` -- and the orphaned text becomes part of this rule's selector
+    prelude. The declaration block is then dropped whole, the header falls
+    back to block layout, and the context stacks under the byline instead of
+    sitting beside the title.
+
+    Nothing else here notices: every other assertion in this suite reads the
+    DOM or the stylesheet as text, and both are unchanged by a rule the parser
+    threw away.
+    """
+    declarations = rule(css, "header.doc-title")
+    assert "display: grid" in declarations
+    assert "grid-template-columns" in declarations
+
+
+@pytest.mark.parametrize(
+    "template", ["_page-style.css.j2", "_slide-style.css.j2"]
+)
+def test_the_stylesheet_comments_are_balanced(template):
+    """The general form of the bug above: more `*/` than `/*`.
+
+    Reads the template rather than the `css` fixture, which slices from the
+    first `/* Document title` and so orphans every terminator ahead of it --
+    an imbalance of its own making, not one worth reporting.
+    """
+    source = (
+        Path(__file__).parent.parent / "stencil" / "templates" / template
+    ).read_text()
+    opens = source.count("/*")
+    closes = source.count("*/")
+    assert opens == closes, (
+        f"{template}: {opens} comment openers against {closes} terminators; "
+        "an unbalanced pair silently eats the rule that follows it"
+    )
