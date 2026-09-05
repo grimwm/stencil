@@ -29,6 +29,8 @@ still carries a stale export -- which is the same silence in a new place.
 from __future__ import annotations
 
 import json
+import os
+import re
 import shutil
 import subprocess
 import sys
@@ -118,11 +120,44 @@ def _with_advice(message: str, exported: str, working_tree: str | None) -> str:
     )
 
 
-def committed_export() -> str | None:
-    """The export as HEAD has it -- what the push would actually deliver.
+# git failures that mean "there is no committed export here" rather than
+# "something is wrong". Each is a state the check has nothing to say about;
+# anything else -- a corrupt object, an unreadable pack -- is not.
+NO_ARTIFACT = (
+    "does not exist",
+    "exists on disk, but not in",
+    "not a git repository",
+    "unknown revision",
+    "ambiguous argument",
+    "invalid object name",
+)
 
-    None when there is nothing to compare against: outside a git repo, before
-    the first commit, or when the export has never been tracked.
+
+def pushed_revision() -> str:
+    """The revision whose export the push would publish.
+
+    HEAD is only that revision when you happen to be standing on the branch you
+    are pushing; `git push origin other-branch` from main would otherwise check
+    main's export and let the pushed one through unexamined.
+
+    Git names the refs on stdin, but `pre-commit hook-impl` consumes that before
+    this hook runs. pre-commit re-publishes the local end of the update as
+    PRE_COMMIT_TO_REF, which is the same information. It arrives from the
+    environment, so it is validated as a hex object name before it is used --
+    an all-zero sha means a branch deletion, which has no revision to read.
+    """
+    candidate = os.environ.get("PRE_COMMIT_TO_REF", "").strip()
+    if re.fullmatch(r"[0-9a-fA-F]{7,64}", candidate) and candidate.strip("0"):
+        return candidate
+    return "HEAD"
+
+
+def committed_export() -> tuple[str | None, str]:
+    """The export as of the revision being pushed.
+
+    Returns the export and, when it could not be read, what git said. The
+    caller has to tell an export that was never tracked apart from a repository
+    it could not read, and only git knows which it is.
 
     Decoded as UTF-8 explicitly. The export carries em-dashes and middots, and
     text mode otherwise decodes with the locale encoding -- which is ASCII on a
@@ -130,7 +165,7 @@ def committed_export() -> str | None:
     """
     try:
         result = subprocess.run(
-            ["git", "show", f"HEAD:{EXPORT.as_posix()}"],
+            ["git", "show", f"{pushed_revision()}:{EXPORT.as_posix()}"],
             capture_output=True,
             text=True,
             encoding="utf-8",
@@ -138,10 +173,10 @@ def committed_export() -> str | None:
     except OSError:
         # No git on this machine. subprocess raises rather than returning
         # non-zero, and an exception out of a hook is worse than the drift.
-        return None
+        return None, ""
     if result.returncode != 0:
-        return None
-    return result.stdout
+        return None, (result.stderr or "").strip()
+    return result.stdout, ""
 
 
 # What bd prints when the workspace has no database at all. That state is
@@ -182,11 +217,19 @@ def main() -> int:
     if shutil.which("bd") is None:
         return 0
 
-    committed = committed_export()
+    committed, unreadable = committed_export()
     if committed is None:
-        # Not a git repo, no HEAD yet, or the export has never been committed.
-        # There is no pushed state to hold the database against.
-        return 0
+        if not unreadable or any(h in unreadable for h in NO_ARTIFACT):
+            # No git, no revision, or the export has never been tracked. There
+            # is no pushed state to hold the database against.
+            return 0
+        # The revision exists and git could not read the export out of it.
+        print(
+            f"cannot read {EXPORT} from the revision being pushed:"
+            f"\n\n{unreadable}",
+            file=sys.stderr,
+        )
+        return 1
 
     exported, why = fresh_export()
     if exported is None:
@@ -211,7 +254,9 @@ def main() -> int:
     if drift is None:
         return 0
 
-    print(f"{EXPORT} in HEAD disagrees with the beads database:\n", file=sys.stderr)
+    revision = pushed_revision()
+    where = "HEAD" if revision == "HEAD" else f"{revision[:12]}, the revision being pushed"
+    print(f"{EXPORT} in {where} disagrees with the beads database:\n", file=sys.stderr)
     print(drift, file=sys.stderr)
     print(
         "\nIf the difference is deliberate, commit it deliberately -- the point"

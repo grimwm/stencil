@@ -193,11 +193,17 @@ A pre-push hook now refuses the push when they do, naming the issues that differ
 It is installed by `pre-commit install` along with the commit-stage hooks. When it
 fires, run `bd export -o .beads/issues.jsonl` and commit that before pushing again.
 
-It compares the database against the export **in `HEAD`**, not the copy in the
-working tree. beads rewrites `.beads/issues.jsonl` outside of any commit, so a
-working copy that agrees with the database proves nothing about the commit being
-pushed — exporting without committing leaves the push failing, and the hook says
-so rather than repeating the export advice.
+It compares the database against the export **in the revision being pushed**,
+never the copy in the working tree. beads rewrites `.beads/issues.jsonl` outside
+of any commit, so a working copy that agrees with the database proves nothing
+about the commit being pushed — exporting without committing leaves the push
+failing, and the hook says so rather than repeating the export advice.
+
+The revision comes from `PRE_COMMIT_TO_REF`, falling back to `HEAD`. Git names
+the refs on stdin, but `pre-commit hook-impl` consumes that before the check
+runs; pre-commit re-publishes the local end of the update, which is the same
+information. Without it, `git push origin other-branch` from `main` would check
+`main`'s export and let the pushed one through unexamined.
 
 ### This file is the one to edit; CLAUDE.md is only a pointer
 

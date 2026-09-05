@@ -146,7 +146,7 @@ def test_the_committed_export_comes_from_head(drift_check, repo, monkeypatch):
     monkeypatch.chdir(repo)
     (repo / ".beads" / "issues.jsonl").write_text(jsonl(CLOSED))
 
-    assert drift_check.committed_export() == jsonl(OPEN)
+    assert drift_check.committed_export()[0] == jsonl(OPEN)
 
 
 def test_an_uncommitted_export_cannot_hide_a_stale_head(
@@ -184,7 +184,7 @@ def test_an_export_never_committed_is_left_alone(
     (tmp_path / ".beads" / "issues.jsonl").write_text(jsonl(OPEN))
     monkeypatch.setattr(drift_check, "fresh_export", lambda: (jsonl(CLOSED), ""))
 
-    assert drift_check.committed_export() is None
+    assert drift_check.committed_export()[0] is None
     assert drift_check.main() == 0
 
 
@@ -227,7 +227,7 @@ def test_a_missing_git_is_left_alone(drift_check, monkeypatch):
 
     monkeypatch.setattr(subprocess, "run", no_git)
 
-    assert drift_check.committed_export() is None
+    assert drift_check.committed_export()[0] is None
 
 
 def test_a_non_ascii_export_is_read_as_utf8(drift_check, repo, monkeypatch):
@@ -251,7 +251,7 @@ def test_a_non_ascii_export_is_read_as_utf8(drift_check, repo, monkeypatch):
         ["git", "commit", "-qm", "unicode"], cwd=repo, check=True, capture_output=True
     )
 
-    assert "Résumé — dash" in drift_check.committed_export()
+    assert "Résumé — dash" in drift_check.committed_export()[0]
 
 
 # Failing open ---------------------------------------------------------------
@@ -302,5 +302,83 @@ def test_no_database_on_this_machine_is_left_alone(
         "fresh_export",
         lambda: (None, "Error: no beads database found\nHint: run 'bd init'"),
     )
+
+    assert drift_check.main() == 0
+
+
+# Which revision is being pushed ---------------------------------------------
+#
+# HEAD is only the revision a push delivers when you happen to be standing on
+# the branch you are pushing. `git push origin other-branch` from main would
+# otherwise validate main's export against the database and pass, while the
+# export actually being published went unchecked.
+#
+# Git names the refs on stdin, but `pre-commit hook-impl` consumes that before
+# this hook runs. pre-commit re-publishes the local end as PRE_COMMIT_TO_REF.
+
+
+def test_the_pushed_revision_is_preferred_over_head(drift_check, repo, monkeypatch):
+    """The export as of the commit being pushed, not the one checked out."""
+    import subprocess
+
+    monkeypatch.chdir(repo)
+    first = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=repo, capture_output=True, text=True
+    ).stdout.strip()
+
+    (repo / ".beads" / "issues.jsonl").write_text(jsonl(CLOSED))
+    subprocess.run(["git", "add", "-A"], cwd=repo, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "commit", "-qm", "move on"], cwd=repo, check=True, capture_output=True
+    )
+
+    monkeypatch.setenv("PRE_COMMIT_TO_REF", first)
+
+    assert drift_check.committed_export()[0] == jsonl(OPEN)
+
+
+def test_a_deleted_branch_falls_back_to_head(drift_check, repo, monkeypatch):
+    """Git names an all-zero sha for a deletion; there is no revision to read."""
+    monkeypatch.chdir(repo)
+    monkeypatch.setenv("PRE_COMMIT_TO_REF", "0" * 40)
+
+    assert drift_check.committed_export()[0] == jsonl(OPEN)
+
+
+def test_a_junk_ref_is_not_passed_to_git(drift_check, repo, monkeypatch):
+    """The value arrives from the environment, so it is validated before use."""
+    monkeypatch.chdir(repo)
+    monkeypatch.setenv("PRE_COMMIT_TO_REF", "HEAD; rm -rf /")
+
+    assert drift_check.committed_export()[0] == jsonl(OPEN)
+
+
+def test_an_unreadable_repository_blocks_the_push(
+    drift_check, repo, monkeypatch, bd_installed
+):
+    """A corrupt object is not the same as an export that was never tracked.
+
+    Both leave nothing to compare; only one of them is a state worth pushing
+    past, and treating them alike is how the check ends up silent about a
+    repository it could not read.
+    """
+    monkeypatch.chdir(repo)
+    monkeypatch.setattr(
+        drift_check, "committed_export", lambda: (None, "fatal: bad object HEAD")
+    )
+    monkeypatch.setattr(drift_check, "fresh_export", lambda: (jsonl(OPEN), ""))
+
+    assert drift_check.main() == 1
+
+
+def test_an_untracked_export_still_passes(drift_check, repo, monkeypatch, bd_installed):
+    """The benign half of the same branch: git says the path is not in there."""
+    monkeypatch.chdir(repo)
+    monkeypatch.setattr(
+        drift_check,
+        "committed_export",
+        lambda: (None, "fatal: path '.beads/issues.jsonl' does not exist in 'HEAD'"),
+    )
+    monkeypatch.setattr(drift_check, "fresh_export", lambda: (jsonl(CLOSED), ""))
 
     assert drift_check.main() == 0
