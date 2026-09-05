@@ -193,6 +193,12 @@ A pre-push hook now refuses the push when they do, naming the issues that differ
 It is installed by `pre-commit install` along with the commit-stage hooks. When it
 fires, run `bd export -o .beads/issues.jsonl` and commit that before pushing again.
 
+It compares the database against the export **in `HEAD`**, not the copy in the
+working tree. beads rewrites `.beads/issues.jsonl` outside of any commit, so a
+working copy that agrees with the database proves nothing about the commit being
+pushed — exporting without committing leaves the push failing, and the hook says
+so rather than repeating the export advice.
+
 ### This file is the one to edit; CLAUDE.md is only a pointer
 
 `CLAUDE.md` contains a single line, `@AGENTS.md`, and should stay that way. Agent

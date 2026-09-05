@@ -89,3 +89,104 @@ def test_an_unparseable_commit_is_reported_rather_than_crashing(drift_check):
 
     assert drift is not None
     assert "not valid JSONL" in drift
+
+
+# The comparison basis --------------------------------------------------------
+#
+# describe_drift above is pure and was well covered from the start. What was
+# not covered is which two exports main() hands it, and that is where the guard
+# leaked: it read .beads/issues.jsonl from the working tree, which beads
+# rewrites outside of any commit. A push could therefore be allowed while HEAD
+# and the database genuinely disagreed -- the precise silence stn-cix exists to
+# break.
+
+
+@pytest.fixture
+def repo(tmp_path):
+    """A git repo with a committed export, and helpers to move each side."""
+    import subprocess
+
+    def git(*args):
+        subprocess.run(
+            ["git", *args], cwd=tmp_path, check=True, capture_output=True, text=True
+        )
+
+    git("init", "-q")
+    git("config", "user.email", "test@example.invalid")
+    git("config", "user.name", "Test")
+    beads = tmp_path / ".beads"
+    beads.mkdir()
+    (beads / "issues.jsonl").write_text(jsonl(OPEN))
+    git("add", "-A")
+    git("commit", "-qm", "commit the export")
+    return tmp_path
+
+
+def test_the_committed_export_comes_from_head(drift_check, repo, monkeypatch):
+    """Not from the working tree, which beads rewrites between commits."""
+    monkeypatch.chdir(repo)
+    (repo / ".beads" / "issues.jsonl").write_text(jsonl(CLOSED))
+
+    assert drift_check.committed_export() == jsonl(OPEN)
+
+
+def test_an_uncommitted_export_cannot_hide_a_stale_head(
+    drift_check, repo, monkeypatch
+):
+    """The regression. The working tree agreeing with the database is not proof.
+
+    Before this, main() compared the working-tree file against a fresh export.
+    Running `bd export` without committing made those two agree, so the guard
+    passed while the commit being pushed still carried the old export.
+    """
+    monkeypatch.chdir(repo)
+    # Exactly the masking state: working tree matches the database, HEAD does not.
+    (repo / ".beads" / "issues.jsonl").write_text(jsonl(CLOSED))
+    monkeypatch.setattr(drift_check, "fresh_export", lambda: jsonl(CLOSED))
+
+    assert drift_check.main() == 1
+
+
+def test_a_committed_export_matching_the_database_passes(
+    drift_check, repo, monkeypatch
+):
+    monkeypatch.chdir(repo)
+    monkeypatch.setattr(drift_check, "fresh_export", lambda: jsonl(OPEN))
+
+    assert drift_check.main() == 0
+
+
+def test_an_export_never_committed_is_left_alone(drift_check, tmp_path, monkeypatch):
+    """Outside a repo, or before the export is tracked, there is no push to guard."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / ".beads").mkdir()
+    (tmp_path / ".beads" / "issues.jsonl").write_text(jsonl(OPEN))
+    monkeypatch.setattr(drift_check, "fresh_export", lambda: jsonl(CLOSED))
+
+    assert drift_check.committed_export() is None
+    assert drift_check.main() == 0
+
+
+def test_an_export_that_is_current_but_uncommitted_says_so(drift_check):
+    """The remediation differs: `bd export` has already been run, so commit it.
+
+    Telling someone to re-export a file they just exported is how a guard
+    trains people to ignore it.
+    """
+    drift = drift_check.describe_drift(
+        jsonl(OPEN), jsonl(CLOSED), working_tree=jsonl(CLOSED)
+    )
+
+    assert drift is not None
+    assert "uncommitted" in drift
+
+
+def test_a_stale_export_is_told_to_re_export(drift_check):
+    """The opposite state, and the opposite instruction."""
+    drift = drift_check.describe_drift(
+        jsonl(OPEN), jsonl(CLOSED), working_tree=jsonl(OPEN)
+    )
+
+    assert drift is not None
+    assert "bd export" in drift
+    assert "uncommitted" not in drift
