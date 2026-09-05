@@ -2,7 +2,7 @@
 # What `pkg` puts into the submission. One rule for every package type:
 #
 #   md/*.md    a glob -- expands in sorted order
-#   md         a directory -- every file under it, at any depth
+#   md         a directory -- every file under it, at any depth, dotfiles aside
 #   intro.md   anything else -- passed through as written, in the listed position
 #
 # Nothing is filtered by extension and nothing is inferred from a name: to take
@@ -19,8 +19,10 @@ pkg_expand = $(if $(findstring *,$(1)),$(sort $(wildcard $(1))),$(1))
 # the whole tree. find rather than $(wildcard) because make has no recursive
 # glob; -type f drops the directories themselves, and LC_ALL=C sorts by byte so
 # the reading order does not shift with the caller's locale. $(wildcard x/.) is
-# make's directory test.
-pkg_expand = $(if $(wildcard $(1)/.),$(shell find $(1) -type f | LC_ALL=C sort),$(if $(findstring *,$(1)),$(sort $(wildcard $(1))),$(1)))
+# make's directory test. Dotfiles are skipped where zip -r keeps them: zip does
+# not care what is in a file and pandoc does, so the stray .DS_Store that zip
+# would harmlessly archive is a failed build here.
+pkg_expand = $(if $(wildcard $(1)/.),$(shell find $(1) -type f -not -path '*/.*' | LC_ALL=C sort),$(if $(findstring *,$(1)),$(sort $(wildcard $(1))),$(1)))
 {% endif %}
 PKG_SOURCES = $(foreach s,$(PKG_SOURCE_SPECS),$(call pkg_expand,$(s)))
 

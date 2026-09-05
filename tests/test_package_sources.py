@@ -106,6 +106,12 @@ def test_doc_expansion_takes_every_file_under_a_directory(doc_pkg_makefile):
     assert "$(wildcard $(1)/*.md)" not in doc_pkg_makefile, "no extension filter"
 
 
+def test_doc_expansion_skips_dotfiles(doc_pkg_makefile):
+    """zip -r keeps them harmlessly; pandoc handed a .DS_Store fails the build.
+    -path rather than -name so a file under a dot-directory goes too."""
+    assert "-not -path '*/.*'" in doc_pkg_makefile
+
+
 def test_doc_expansion_sorts_by_byte_not_by_locale(doc_pkg_makefile):
     """find's output order is unspecified, so reading order needs the sort."""
     assert "LC_ALL=C sort" in doc_pkg_makefile
