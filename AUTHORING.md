@@ -359,6 +359,28 @@ than an error. Listed because "it parsed" reads a lot like "it worked":
 
 Anything else you put in the front matter is carried along by pandoc and read by nothing.
 
+### Light, dark and system
+
+Every generated page carries a three-way theme control — light, dark, or follow the
+operating system. It sits top right on a document and in the toolbar on a deck. Nothing in
+the front matter turns it on or off; it is simply there.
+
+The choice is remembered. On `file://` URLs a browser pools every local page into one
+storage origin, so picking dark once applies to every handout you open afterwards, not just
+the one in front of you.
+
+**PDFs are always light.** Not by a setting that could be got wrong — by construction. Every
+dark declaration lives inside an `@media screen` block, and print does not match `@media screen`, so the light values are the only ones a printer or a PDF ever sees. That holds for
+`make pdf` and for your browser's own Ctrl+P alike, whatever the page looked like on screen
+when you pressed it.
+
+Two consequences worth knowing:
+
+- **Diagrams are redrawn when the theme changes**, because Mermaid bakes its colours into the
+  SVG as it draws. Nothing is required of you; a diagram simply follows the page.
+- **`make check-access` checks both themes**, clicking the control the way a reader would.
+  A colour that only fails in dark is still a failure.
+
 ### Optional content
 
 Wrap anything in a `hidden` fenced div and it is dropped from the normal build:
