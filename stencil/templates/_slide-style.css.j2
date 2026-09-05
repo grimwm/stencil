@@ -37,10 +37,15 @@
       color: #8a93a5;
     }
 
-    /* The slide's own heading is its title bar, whatever level it came in at. */
-    .slide > h1:first-child,
-    .slide > h2:first-child,
-    .slide > h3:first-child {
+    /* The slide's own heading is its title bar, whatever level it came in at.
+       The title slide is excluded: its .deck-title is an h1, and it is
+       :first-child exactly when no context line precedes it. This selector
+       scores (0,2,1) against .deck-title's (0,2,0), so it captured the deck
+       title and sized it as a section heading -- and only when `program:` was
+       unset, which is what made it look like a print bug (stn-tum). */
+    .slide:not(.slide--title) > h1:first-child,
+    .slide:not(.slide--title) > h2:first-child,
+    .slide:not(.slide--title) > h3:first-child {
       margin-top: 0;
       padding-bottom: 0.4rem;
       border-bottom: 2px solid var(--accent-color);
@@ -49,7 +54,7 @@
       line-height: 1.25;
     }
 
-    .slide > h3:first-child { font-size: 1.5rem; }
+    .slide:not(.slide--title) > h3:first-child { font-size: 1.5rem; }
 
     .slide > :last-child { margin-bottom: 0; }
 
@@ -66,13 +71,24 @@
       color: #fff;
     }
 
-    .slide--title .deck-course {
+    /* Program, section and term on one line above the title. A deck has the
+       width for all three, so unlike the document header this does not wrap
+       the term onto its own line. */
+    .slide--title .deck-context {
       font-family: var(--font-sans);
       font-size: 0.95rem;
       letter-spacing: 0.14em;
       text-transform: uppercase;
       color: rgba(255, 255, 255, 0.78);
       margin-bottom: 1rem;
+    }
+
+    /* Generated between siblings, so no combination of the three leaves a
+       separator with nothing on one side of it. */
+    .slide--title .deck-context span + span::before {
+      content: "\00b7";
+      margin: 0 0.45em;
+      color: rgba(255, 255, 255, 0.5);
     }
 
     .slide--title .deck-title {
@@ -280,9 +296,16 @@
         bottom: 0.05in;
       }
 
-      .slide > h1:first-child,
-      .slide > h2:first-child,
-      .slide > h3:first-child { font-size: 20pt; }
+      /* The title slide is excluded because its .deck-title is an h1 that is
+         :first-child exactly when the front matter sets no program -- so
+         the screen rule above carries the same exclusion and the same
+         reason. Restating a size for .deck-title here would be a second
+         scale to keep in step with the first; the exclusion is the fix, and
+         tests/test_frontmatter.py measures the result off a real PDF. */
+      .slide:not(.slide--title) > h1:first-child,
+      .slide:not(.slide--title) > h2:first-child,
+      .slide:not(.slide--title) > h3:first-child { font-size: 20pt; }
+
 
       .slide--title {
         background: #29417a !important;

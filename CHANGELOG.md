@@ -9,6 +9,50 @@ and the closed epics in `.beads/issues.jsonl` are the readable index.
 How the version gets bumped is written down in
 [AGENTS.md](AGENTS.md#cutting-a-release), not here.
 
+## 0.7.0
+
+A document says what it belongs to, and `show_date: no` means no.
+
+- **`program`, `section` and `term` front matter.** The institutional context a
+  handout carries: what it belongs to, which instance of that, and when. A
+  document renders them top right, opposite the title; a deck puts them on one
+  line above it. The names avoid `course`/`semester` deliberately — they read
+  the same to an instructor and to anyone running a training program.
+
+- **The document header is two columns.** Title and subtitle on the left of the
+  first row with the context opposite them, author on the second with the date
+  opposite. A file setting everything costs two lines instead of five. Below
+  roughly 640px it collapses back to one left-aligned stack.
+
+  The date moved out of `.doc-meta` and into `.doc-date`, so the middot that
+  joined it to the author list is gone.
+
+- **`show_date: yes` stamps the build date.** And `show_date: no` withholds it,
+  which is worth stating because it did not used to. Pandoc reads YAML 1.2,
+  where `true` and `false` are the only booleans, so `no` arrived at the
+  template as the *string* `"no"` — as truthy as `"yes"`. The new
+  `frontmatter-filter.lua` settles it before any template asks. An explicit
+  `date:` still wins; the stamp is the build host's day, not the container's.
+
+- **The package `name` is no longer injected as a document's `course`.** It was
+  reaching pandoc as `--metadata course=`, which overrides front matter, so an
+  author who set `course:` had it silently discarded — and a package name was
+  never a course in the first place. `name` is a `stencil --list` label again.
+  This is the one behavior change to look at when upgrading: a deck that showed
+  its package name above the title now shows nothing there until it sets
+  `program:`.
+
+- **A deck's title no longer prints at slide-heading size** (stn-tum). The title
+  slide's `.deck-title` is an `h1`, and `.slide > h1:first-child` outscores
+  `.slide--title .deck-title` on specificity — so the title was sized as a
+  section heading exactly when no context line preceded it. Adding a `course:`
+  pushed a `<p>` in front and gave the title its size back, which is why it
+  looked like a print-only bug. Both media now exclude the title slide.
+
+- **AUTHORING.md lists the keys stencil does *not* render.** `abstract`,
+  `keywords`, `lang`, `toc` and the rest parse fine and do nothing, which reads
+  a lot like working.
+
 ## 0.6.0
 
 One type scale instead of two, and a way to ask which stencil you are running.

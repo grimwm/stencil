@@ -1,0 +1,113 @@
+--[[ Normalizes the front matter that the page and slide templates read.
+
+Three jobs, every one of them something a pandoc template cannot do for itself:
+a template can ask `$if(x)$`, but it cannot compare a string, OR two keys
+together, or fill one key in from another.
+
+* `show_date` is coerced to a boolean. Pandoc reads YAML 1.2, where `true` and
+  `false` are the only booleans -- `show_date: no` arrives as the *string*
+  "no", and `$if(show_date)$` fires on any non-empty string. So the obvious
+  thing to write meant the exact opposite of itself, silently, in the
+  direction that publishes something the author asked to withhold.
+
+* `date` is filled from the build date when `show_date` is on and the author
+  wrote no date of their own. Done here rather than in the template so the
+  byline keeps asking one question, `$if(date)$`, rather than three.
+
+* `has-context` and `has-byline` answer "is any of these set?" for the header
+  rows, which exist only when they have something to hold.
+
+Blank values are erased throughout, so `course:` with nothing after it behaves
+as though the key were absent rather than rendering an empty span. Pandoc
+already does this for some shapes and not others; doing it once here is
+cheaper than knowing which is which.
+]]
+
+-- Everything a person might reasonably write to mean "no". Compared after
+-- lowercasing and trimming, so `No` and ` off ` land here too.
+local FALSE = {
+  [""] = true,
+  ["no"] = true,
+  ["false"] = true,
+  ["off"] = true,
+  ["0"] = true,
+  ["none"] = true,
+  ["null"] = true,
+}
+
+-- The document's institutional context: what it belongs to, which instance of
+-- that, and when. Named to survive outside a university -- `program` covers a
+-- course and a training program equally -- while staying what an instructor
+-- would say out loud.
+local CONTEXT = { "program", "section", "term" }
+
+-- Every key whose blank form must be indistinguishable from its absent form.
+-- `author` and `date` are here for the header rows below: an empty author is
+-- falsy to `$if(author)$` but not to `~= nil`, so without this an `author:`
+-- with nothing after it would open a byline row with nothing to put in it.
+local BLANKABLE = { "program", "section", "term", "author", "date" }
+
+local function trim(text)
+  -- match, not a chained gsub: gsub returns the replacement count as a second
+  -- value, which would ride along into whatever this feeds.
+  return text:match("^%s*(.-)%s*$")
+end
+
+--- The metadata value as a trimmed string, or nil when it holds nothing.
+local function text_of(value)
+  if value == nil then
+    return nil
+  end
+  -- MetaBool reaches the Lua API as a plain boolean, which stringify would
+  -- render "true"/"false" -- fine for the truthiness test below, wrong for
+  -- anything that goes on the page. Callers that care check the type first.
+  if type(value) == "boolean" then
+    return tostring(value)
+  end
+  local text = trim(pandoc.utils.stringify(value))
+  if text == "" then
+    return nil
+  end
+  return text
+end
+
+--- Whether a metadata value means yes. Absent means no.
+local function truthy(value)
+  if value == nil then
+    return false
+  end
+  if type(value) == "boolean" then
+    return value
+  end
+  local text = text_of(value)
+  return text ~= nil and not FALSE[text:lower()]
+end
+
+function Meta(meta)
+  -- A blank key is an absent key. Do this before anything reads them.
+  for _, key in ipairs(BLANKABLE) do
+    if meta[key] ~= nil and text_of(meta[key]) == nil then
+      meta[key] = nil
+    end
+  end
+
+  local show = truthy(meta.show_date)
+  -- Written back as a real boolean so a template asking $if(show_date)$ gets
+  -- the answer this filter computed rather than the author's spelling of it.
+  meta.show_date = show or nil
+
+  if show and text_of(meta.date) == nil then
+    -- The Makefile passes the build host's date; os.date is the fallback for
+    -- a hand-run pandoc, and inside the container that is UTC.
+    meta.date = text_of(meta["build-date"]) or os.date("%Y-%m-%d")
+  end
+
+  local has_context = false
+  for _, key in ipairs(CONTEXT) do
+    has_context = has_context or meta[key] ~= nil
+  end
+  meta["has-context"] = has_context or nil
+  meta["has-byline"] = (meta.author ~= nil or meta.date ~= nil) or nil
+
+  return meta
+end

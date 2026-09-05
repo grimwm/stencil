@@ -440,6 +440,7 @@ def generate_package(
     # filters it needs so a config can't forget them.
     if context.get("has_pages"):
         doc_templates = [
+            {"src": "frontmatter-filter.lua.j2"},
             {"src": "hidden-filter.lua.j2"},
             {"src": "mermaid-figure-filter.lua.j2"},
             {"src": "embed-images.lua.j2"},
@@ -538,6 +539,7 @@ def get_generated_files(config: dict) -> list[str]:
 
     # Templates always injected in generate_package for markdown-rendering packages
     shared_page_files = [
+        "frontmatter-filter.lua",
         "hidden-filter.lua",
         "mermaid-figure-filter.lua",
         "embed-images.lua",

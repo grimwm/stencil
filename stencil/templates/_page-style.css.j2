@@ -44,13 +44,78 @@
       margin-top: 0.5rem;
     }
 
-    /* Byline: author(s) and date, from the front matter. Inside .doc-title, so it
-       has to opt out of that block's 2.2rem/700 rather than inherit it. */
-    .doc-meta {
+    /* The header's two rows. Identity sits on the left of each, context on the
+       right, so a document with a course and a term costs two lines instead of
+       five. align-items: baseline so the course sits on the title's baseline
+       rather than floating at the top of a two-line identity block. */
+    .doc-headrow,
+    .doc-byline {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: baseline;
+      gap: 0.35rem 1.5rem;
+    }
+
+    /* The flex-basis is the wrap threshold: once the title has less than 18rem
+       the context drops to its own line rather than being squeezed to one word
+       per line. */
+    .doc-identity {
+      flex: 1 1 18rem;
+      min-width: 0;
+    }
+
+    /* Both right-hand columns push themselves over rather than relying on
+       space-between, which would strand a lone date on the left. */
+    .doc-context,
+    .doc-date {
+      margin-left: auto;
+      text-align: right;
+    }
+
+    /* Byline: author(s) and date, from the front matter. Both of these sit
+       inside .doc-title, so they have to opt out of that block's 2.2rem/700
+       rather than inherit it. */
+    .doc-meta,
+    .doc-date,
+    .doc-context {
       font-size: 1rem;
       font-weight: 400;
       color: #5a6270;
+    }
+
+    .doc-byline {
       margin-top: 0.6rem;
+    }
+
+    /* Course and section share a line; the term takes its own. Separators are
+       generated between siblings so no combination leaves a stray middot with
+       nothing on one side of it. */
+    .doc-context span + span::before {
+      content: "\00b7";
+      /* The whole gap, and symmetric: _doc-body.html.j2 emits these spans on
+         one line precisely so no collapsed newline lands on one side. */
+      margin: 0 0.4rem;
+      color: #99a1b0;
+    }
+
+    .doc-term {
+      display: block;
+    }
+
+    /* Two classes, so it outranks the sibling rule above without !important:
+       the term starts a line, and a line does not open with a separator. */
+    .doc-context .doc-term::before {
+      content: none;
+    }
+
+    /* Narrow viewports: nothing is wide enough for two columns, so the header
+       becomes the plain left-aligned stack it used to be. */
+    @media (max-width: 40rem) {
+      .doc-context,
+      .doc-date {
+        margin-left: 0;
+        text-align: left;
+      }
     }
 
     /* Headings: sans-serif with accent borders.
