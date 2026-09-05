@@ -143,7 +143,11 @@
        now only because it was the only one there. */
     .doc-date-label {
       font-weight: 600;
-      color: #7a828f;
+      /* 4.98:1 on white. The muted grey this started at, #7a828f, was 3.88:1
+         -- under AA for text this size, and `make check-access` runs pa11y at
+         WCAG 2.1 AA. A label naming which date you are looking at is not
+         decoration, so it takes the text threshold rather than the 3:1 one. */
+      color: #687080;
       margin-right: 0.3em;
     }
 

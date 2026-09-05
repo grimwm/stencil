@@ -69,8 +69,9 @@ show_date: true, no date  ->  Issued Sep 05          (date-only)
   author-list separator already used in `.doc-meta`.
 - The visible text is wrapped in `<time datetime="...">` carrying the **exact
   original ISO string**, so the HTML stays machine-readable regardless of how
-  the display is abbreviated. PDFs keep only the visible text, which is why the
-  display itself remains lossless.
+  the display is abbreviated. That guarantee is HTML-only: a PDF keeps the
+  visible text and nothing else, so a printed handout genuinely does not carry
+  the year. That is the accepted cost of the bullet above, not an oversight.
 - The auto-filled build date is rendered date-only. The build stamp's clock time
   is an artifact of when `make` ran, not a fact about the document.
 

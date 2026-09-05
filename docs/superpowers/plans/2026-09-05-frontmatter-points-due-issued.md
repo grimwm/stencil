@@ -506,7 +506,7 @@ end
 
 --- The display form: MMM DD, and the time only when one was written.
 local function format_stamp(stamp)
-  local text = string.format("%s %02d, %04d", MONTHS[stamp.month], stamp.day, stamp.year)
+  local text = string.format("%s %02d", MONTHS[stamp.month], stamp.day)
   if stamp.hour then
     text = text .. " " .. utf8.char(0x00B7) .. " "
         .. string.format("%02d:%02d", stamp.hour, stamp.min)
