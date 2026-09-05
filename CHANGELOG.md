@@ -9,6 +9,43 @@ and the closed epics in `.beads/issues.jsonl` are the readable index.
 How the version gets bumped is written down in
 [AGENTS.md](AGENTS.md#cutting-a-release), not here.
 
+## 0.11.0
+
+- **`points` renders as a badge beside the title.** `points: 50` reads `50 pts`
+  and `points: 1` reads `1 pt`; the plural is decided in the lua filter, which
+  can compare a value where a pandoc template cannot. A non-numeric value
+  renders verbatim, so `points: "extra credit"` works.
+
+  This replaces a `subtitle: "Points: 50"` convention, which overloaded a
+  presentation field with a data field so that nothing could query or validate
+  it.
+
+- **`due` is a new key, and `date` now renders as `Issued`.** Both take
+  `yyyy-mm-dd` or `yyyy-mm-ddThh:mm` and render as `Due Sep 12 · 23:59`, with
+  the time shown only when one was written. Two bare dates in one column cannot
+  be told apart, which is why the build stamp grew a label it never needed while
+  it was the only date there.
+
+  Neither prints the year — a handout is read inside a term the reader already
+  knows. Unprinted rather than lost: each date is wrapped in a `<time datetime>`
+  carrying the full ISO string.
+
+  `date` accepted any string before this and now accepts only the grammar above,
+  a behaviour change with nothing in tree relying on the old latitude.
+  Validation gates on shape, then field ranges, then the calendar, so the
+  message names what actually broke rather than restating the grammar every
+  time. The calendar gate is an `os.time` round-trip rather than a
+  days-in-month table: `os.time` normalizes a day the month does not have, so
+  comparing the fields back is what detects it, and the leap rules come from
+  the platform `mktime` instead of a century rule here that nothing would
+  exercise until 2100.
+
+- **The document header is a grid, and its source order is its reading order.**
+  The byline has always sat under the title on screen; in source order
+  `.doc-context` came between the subtitle and the author, which is the order a
+  screen reader announces and `pdftotext` extracts. Nothing moves visually. On a
+  narrow viewport the header now stacks identity, byline, context.
+
 ## 0.10.3
 
 - **Stopped naming a private consumer.** AGENTS.md, four comments in

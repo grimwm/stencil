@@ -25,8 +25,8 @@ ______________________________________________________________________
 | key         | shape                              | renders as                                                | placement                       |
 | ----------- | ---------------------------------- | --------------------------------------------------------- | ------------------------------- |
 | `points`    | number, or any string              | `50 pts`, `1 pt`, `1.5 pts`; a non-numeric value verbatim | badge beside the title          |
-| `due`       | `yyyy-mm-dd` or `yyyy-mm-ddThh:mm` | `Due Sep 12, 2026 · 23:59`                                | byline row, right, under Issued |
-| `date`      | `yyyy-mm-dd` or `yyyy-mm-ddThh:mm` | `Issued Sep 01, 2026 · 21:45`                             | byline row, right               |
+| `due`       | `yyyy-mm-dd` or `yyyy-mm-ddThh:mm` | `Due Sep 12 · 23:59`                                      | byline row, right, under Issued |
+| `date`      | `yyyy-mm-dd` or `yyyy-mm-ddThh:mm` | `Issued Sep 01 · 21:45`                                   | byline row, right               |
 | `show_date` | boolean-ish, unchanged             | fills `date` with the build date when `date` is absent    | —                               |
 
 All three new/changed keys join `BLANKABLE` in `frontmatter-filter.lua`, so a key
@@ -42,15 +42,20 @@ string for the `datetime` attribute; the `-label` keys carry the rendered text.
 One grammar for both date keys. The time renders **iff the author wrote one**:
 
 ```
-date: 2026-09-01          ->  Issued Sep 01, 2026
-date: 2026-09-01T21:45    ->  Issued Sep 01, 2026 · 21:45
-due:  2026-09-12          ->  Due Sep 12, 2026
-due:  2026-09-12T23:59    ->  Due Sep 12, 2026 · 23:59
-show_date: true, no date  ->  Issued Sep 05, 2026     (date-only)
+date: 2026-09-01          ->  Issued Sep 01
+date: 2026-09-01T21:45    ->  Issued Sep 01 · 21:45
+due:  2026-09-12          ->  Due Sep 12
+due:  2026-09-12T23:59    ->  Due Sep 12 · 23:59
+show_date: true, no date  ->  Issued Sep 05          (date-only)
 ```
 
 - Month abbreviations are the C-locale three-letter forms: `Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec`.
-- The day is zero-padded (`Sep 05`), per the `MMM DD, YYYY` spelling requested.
+- The day is zero-padded (`Sep 05`).
+- **No year.** A handout is read inside a term the reader already knows, and
+  `term:` is usually in the header saying so. This reverses the earlier
+  position in this section that the visible form must stay lossless for print:
+  the year is unprinted rather than lost, and the `<time datetime>` attribute
+  still carries it for anything reading the page rather than looking at it.
 - Time is 24-hour, zero-padded.
 - The separator between date and time is a middot with hair spaces, matching the
   author-list separator already used in `.doc-meta`.
@@ -213,7 +218,7 @@ context column stays institutional:
         CS 425 · Fall 2026
     Kanban Board Simulation ⟨50 pts⟩
           Pull, Don't Push
-  William Grim · Issued Sep 05, 2026 · Due Sep 12, 2026 · 23:59
+  William Grim · Issued Sep 05 · Due Sep 12 · 23:59
 ```
 
 `_slide-body.html.j2` already branches on `$if(author)$` to decide whether the
