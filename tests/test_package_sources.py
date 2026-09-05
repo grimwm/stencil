@@ -112,6 +112,21 @@ def test_doc_expansion_skips_dotfiles(doc_pkg_makefile):
     assert "-not -path '*/.*'" in doc_pkg_makefile
 
 
+def test_the_walk_has_a_branch_for_each_shell(doc_pkg_makefile):
+    """make runs recipes through cmd on Windows, which has no find -- and whose
+    own find.exe is a text search that would fail obscurely rather than
+    cleanly. Both branches must yield relative, forward-slashed, sorted files."""
+    assert "ifeq ($(OS),Windows_NT)" in doc_pkg_makefile
+    assert "Get-ChildItem" in doc_pkg_makefile
+    assert "find $(1) -type f" in doc_pkg_makefile
+
+
+def test_neither_walk_keeps_dotfiles(doc_pkg_makefile):
+    """Same rule on both platforms, spelled in each one's own syntax."""
+    assert "-not -path '*/.*'" in doc_pkg_makefile
+    assert "-notmatch '(^|/)\\.'" in doc_pkg_makefile
+
+
 def test_doc_expansion_sorts_by_byte_not_by_locale(doc_pkg_makefile):
     """find's output order is unspecified, so reading order needs the sort."""
     assert "LC_ALL=C sort" in doc_pkg_makefile
@@ -162,7 +177,9 @@ def test_the_suffix_reaches_both_the_html_and_the_pdf(doc_pkg_makefile):
 
 def test_pkg_refuses_an_empty_expansion(doc_pkg_makefile):
     """Otherwise pandoc reads stdin and the build hangs with no output."""
-    assert 'test -n "$(PKG_SOURCES)"' in "\n".join(recipe(doc_pkg_makefile, "pkg"))
+    assert "$(error package_sources matched nothing" in "\n".join(
+        recipe(doc_pkg_makefile, "pkg")
+    )
 
 
 def test_pkg_checks_for_the_image_it_actually_runs(doc_pkg_makefile):
