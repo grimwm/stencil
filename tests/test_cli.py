@@ -95,3 +95,34 @@ def test_a_config_that_loads_is_returned_unchanged(tmp_path):
         "output_dir": "out",
         "packages": {"demo": {"package_type": "none"}},
     }
+
+
+# --- stencil version -------------------------------------------------------
+
+
+def test_version_reports_the_version(tmp_path):
+    """Asked from anywhere, including outside a project.
+
+    It is usually asked because something is wrong with the install -- four
+    course venvs were found running three different stencils while a template
+    fix appeared not to work -- so requiring a .config.yaml to answer it would
+    withhold the answer exactly when it is wanted.
+    """
+    import stencil
+
+    result = run_cli("version", cwd=tmp_path)
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == f"stencil {stencil.__version__}"
+
+
+def test_the_reported_version_is_the_installed_one():
+    """pyproject reads __version__, so the module and the distribution agree by
+    construction. When they do not, the install is stale -- reinstall it."""
+    from importlib.metadata import version
+
+    import stencil
+
+    assert version("stencil") == stencil.__version__, (
+        "installed distribution disagrees with the source; re-run pip install"
+    )

@@ -37,6 +37,7 @@ stencil [--config PATH] COMMAND [OPTIONS]
 | `clean`   | Remove generated files (`--all` for all packages) |
 | `install` | Update `.gitignore` with stencil-managed entries  |
 | `help`    | Show help (optionally for a specific command)     |
+| `version` | Print the installed stencil version               |
 
 **Examples:**
 

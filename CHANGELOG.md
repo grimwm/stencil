@@ -9,6 +9,33 @@ and the closed epics in `.beads/issues.jsonl` are the readable index.
 How the version gets bumped is written down in
 [AGENTS.md](AGENTS.md#cutting-a-release), not here.
 
+## 0.6.0
+
+One type scale instead of two, and a way to ask which stencil you are running.
+
+- **Print rescales the root rather than restating every size.** Sizes are in
+  `rem` throughout, and a `rem` is the root font size, so `@media print` now
+  sets `html { font-size: 9.78pt }` once and the whole scale follows. 9.78pt is
+  what puts body text, at `1.125rem`, on the 11pt it has always printed at.
+
+  This removes the defect class 0.5.0 fixed three instances of. There is no
+  longer a second list of sizes that can fall out of step with the first, and a
+  test now fails if print restates a size the shared scale already gives.
+
+  Two visible consequences. Print inherits the screen proportions, so a
+  document's title prints at 21.5pt rather than 18pt. And the root carries
+  Bootstrap's `rem`-based padding and margins with it, so spacing tightens by
+  about 18% and documents get shorter — a 12-page handout measured 11 pages.
+  Everything else lands within ~2% of 0.5.0.
+
+- **`stencil version`.** Prints the installed version, and answers before
+  reading a config, because the question is usually asked when an install is
+  suspect. The version now lives in `stencil/__init__.py` with `pyproject.toml`
+  reading it, so the module and the installed distribution cannot disagree
+  except by a stale install — which is the thing the command exists to reveal.
+  Four course venvs were found running three different stencils while a
+  template fix appeared not to work.
+
 ## 0.5.0
 
 Typography fixes in the document stylesheet. Every generated document and deck

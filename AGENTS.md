@@ -293,9 +293,13 @@ is how the literal string "False" once reached generated TypeScript where a file
 The version in `pyproject.toml` is bumped **by hand**, in the commit that also
 updates `CHANGELOG.md`, and the tag is cut from that commit:
 
+The version lives in `stencil/__init__.py`; `pyproject.toml` reads it from there
+via `[tool.setuptools.dynamic]`, so there is one place to change and the module
+and the installed distribution cannot drift apart. `stencil version` prints it.
+
 ```bash
 # on a branch, in the PR that ships the release
-$EDITOR pyproject.toml CHANGELOG.md    # bump version, add the entry
+$EDITOR stencil/__init__.py CHANGELOG.md    # bump __version__, add the entry
 # after the PR merges:
 git switch main && git pull
 git tag -a v0.3.0 -m "stencil 0.3.0"
