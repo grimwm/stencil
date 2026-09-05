@@ -48,8 +48,14 @@ local FALSE = {
 -- everything below then treats it exactly as though the document had written
 -- it -- which is what keeps a config brand and a front-matter brand from
 -- drifting into two behaviours.
-local CONFIG_BRAND = {% if config_brand %}{{ config_brand | tojson }}{% else %}nil{% endif %}
-local CONFIG_BRAND_ALT = {% if config_brand_alt %}{{ config_brand_alt | tojson }}{% else %}nil{% endif %}
+-- Inline conditionals rather than {% raw %}{% if %}{% endraw %} blocks: the environment sets
+-- trim_blocks, which eats the newline after a block tag and welded these two
+-- declarations onto one line. `nil` and `local` then ran together into the
+-- identifier `nillocal`, which Lua accepts -- so CONFIG_BRAND read an
+-- undefined global and CONFIG_BRAND_ALT quietly became a global instead of a
+-- local. Both still evaluated to nil, which is why nothing failed.
+local CONFIG_BRAND = {{ (config_brand | tojson) if config_brand else "nil" }}
+local CONFIG_BRAND_ALT = {{ (config_brand_alt | tojson) if config_brand_alt else "nil" }}
 
 local CONTEXT = { "program", "section", "term" }
 
