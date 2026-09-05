@@ -61,17 +61,38 @@ show_date: true, no date  ->  Issued Sep 05, 2026     (date-only)
 - The auto-filled build date is rendered date-only. The build stamp's clock time
   is an artifact of when `make` ran, not a fact about the document.
 
-**Validation.** Fields are range-checked (month `01`–`12`, day `01`–`31`, hour
-`00`–`23`, minute `00`–`59`). Anything not matching one of the two accepted
-shapes fails the build with a message naming both, in the manner
-`frontmatter-filter.lua` already uses for a missing `brand-alt`.
+**Validation.** Three gates, in order. A value failing any of them fails the
+build, in the manner `frontmatter-filter.lua` already uses for a missing
+`brand-alt` — while the author is still looking at the document.
 
-*Documented limitation:* calendar validity is not checked. `2026-02-30` passes
-the range check and renders as `Feb 30, 2026`. Full validation would mean an
-`os.time` round-trip, which normalizes silently rather than rejecting, and
-dragging the container clock into a pure string transform buys less than it
-costs. If this ever bites, the fix is an explicit days-in-month table, not
-`os.time`.
+1. **Shape.** The string matches `yyyy-mm-dd` or `yyyy-mm-ddThh:mm` exactly.
+   Anything else fails with a message naming both accepted shapes.
+1. **Range.** Month `01`–`12`, hour `00`–`23`, minute `00`–`59`.
+1. **Calendar.** The day is checked against the actual length of that month in
+   that year.
+
+The calendar check is an explicit days-in-month table, deliberately not an
+`os.time` round-trip: `os.time` *normalizes* an out-of-range day rather than
+rejecting it, so `2026-02-30` would come back as March 2 and the build would
+succeed having silently moved the deadline. It also drags the container's clock
+and time zone into what is otherwise pure string work.
+
+```
+Jan 31  Feb 28/29  Mar 31  Apr 30  May 31  Jun 30
+Jul 31  Aug 31     Sep 30  Oct 31  Nov 30  Dec 31
+```
+
+February is 29 days when `year % 4 == 0 and (year % 100 ~= 0 or year % 400 == 0)`
+— the full Gregorian rule, not the `% 4` shortcut. The shortcut is correct for
+every year a course handout will plausibly carry, which is exactly why it would
+never be caught if it were wrong; the complete rule is three more operators.
+
+The error names the specific failure rather than restating the grammar, since
+the grammar is not what was violated:
+
+```
+due: 2026-02-30 is not a real date -- February 2026 has 28 days.
+```
 
 **Back-compat.** Imposing strict ISO on `date` is a behavior change — the key
 accepts any string today. The measured cost is zero: no handout in the consuming
@@ -215,6 +236,13 @@ Dates:
 - `show_date` auto-fill renders date-only
 - an author-written `date` still beats `show_date`
 - each rejected shape fails the build with a message naming both accepted shapes
+- out-of-range fields fail: month `00`/`13`, hour `24`, minute `60`
+- calendar validity, parametrized over the table: the last valid day of every
+  month is accepted and the day after it is rejected (`2026-01-31` yes,
+  `2026-01-32` no; `2026-04-30` yes, `2026-04-31` no)
+- leap years across all four branches of the Gregorian rule: `2024-02-29`
+  accepted, `2026-02-29` rejected, `2000-02-29` accepted, `1900-02-29` rejected
+- the calendar error names the month and its real length, not the grammar
 - blank `date:` / `due:` behave as absent
 - `has-byline` opens the row for `due` alone
 
@@ -422,6 +450,5 @@ ______________________________________________________________________
 - Theming the PDF. PDFs are light, always, by construction.
 - A per-document or per-package default theme in `.config.yaml`. Nothing has
   asked for it; the viewer's choice is the only input.
-- Calendar-accurate date validation (see A.1).
 - Any change to the pandoc filter order, which `AGENTS.md` documents as
   load-bearing.
