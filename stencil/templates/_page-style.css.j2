@@ -74,7 +74,6 @@
       --deck-toolbar-fg: #55607a;
       --deck-toolbar-hover: #1d2f5c;
       --deck-presenting-bg: #e9edf4;
-      --badge-plate: rgba(16, 26, 52, 0.35);
 
       /* Print-only, and deliberately not the screen values. These are their
          own tokens rather than literals so the drift guard can stay absolute:
@@ -122,30 +121,6 @@
       margin-top: 0.5rem;
     }
 
-    /* What the document is worth, beside the title. Sits inside .doc-title,
-       so like .doc-subtitle it has to opt out of that block's 2.2rem/700
-       rather than inherit it -- a badge that outranks the title is the same
-       inversion .doc-subtitle was fixed for, and the print block would carry
-       it into the PDF.
-
-       No white-space: nowrap. A non-numeric `points` renders verbatim and can
-       be long, and nowrap would push it past the page edge; the non-breaking
-       space frontmatter-filter.lua puts between the number and its unit is
-       what keeps "50 pts" together without forbidding a wrap. */
-    .doc-points {
-      display: inline-block;
-      margin-left: 0.5rem;
-      padding: 0.15em 0.55em;
-      border-radius: 999px;
-      background: var(--surface-accent);
-      color: var(--accent);
-      font-family: var(--font-sans);
-      font-size: 0.95rem;
-      font-weight: 600;
-      line-height: 1.4;
-      overflow-wrap: anywhere;
-      vertical-align: middle;
-    }
 
     /* The header's two rows, as a grid rather than two flex rows.
 
@@ -195,8 +170,7 @@
 
     /* Both right-hand columns push themselves over rather than relying on
        space-between, which would strand a lone date on the left. */
-    .doc-context,
-    .doc-date {
+    .doc-context {
       margin-left: auto;
       text-align: right;
     }
@@ -225,9 +199,6 @@
       margin-right: 0.3em;
     }
 
-    .doc-due {
-      margin-top: 0.15rem;
-    }
 
     /* Brand: what the document belongs to, above the program it is part of.
        A name sits larger and darker than the context lines under it, so the
@@ -294,10 +265,15 @@
         grid-column: 1;
         grid-row: auto;
       }
-      .doc-context,
-      .doc-date {
+      .doc-context {
         margin-left: 0;
         text-align: left;
+      }
+      /* Stacked, the facts have no blank space to spread into, so they close
+         up behind their separators instead of drifting apart. */
+      .doc-facts {
+        justify-content: flex-start;
+        gap: 0.45rem;
       }
     }
 
@@ -742,7 +718,6 @@
         --deck-toolbar-fg: #a8b0bd;
         --deck-toolbar-hover: #3f5da8;
         --deck-presenting-bg: #14171c;
-        --badge-plate: rgba(255, 255, 255, 0.16);
 
         /* Bootstrap, mapped from our own tokens rather than through
            data-bs-theme. Bootstrap's dark block lives inside the vendored
@@ -835,4 +810,30 @@
       .theme-toggle-host {
         display: none !important;
       }
+    }
+
+    /* Issued, Due and Points on one line, spread across whatever horizontal
+       space the author leaves. space-between rather than a fixed gap: the
+       point is to use the width, and the separators are real elements so they
+       are spaced with everything else rather than hugging the item after
+       them.
+
+       flex: 1 with min-width: 0 so a long author shortens this group instead
+       of pushing it off the page. */
+    .doc-facts {
+      flex: 1;
+      min-width: 0;
+      display: flex;
+      flex-wrap: wrap;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 0.35rem 0.5rem;
+    }
+
+    .doc-fact {
+      white-space: nowrap;
+    }
+
+    .doc-fact-sep {
+      color: var(--text-faint);
     }

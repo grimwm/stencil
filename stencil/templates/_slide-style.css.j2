@@ -141,33 +141,6 @@
       max-width: 46rem;
     }
 
-    /* The title slide sits on the accent gradient, so the badge is a
-       translucent plate rather than the light one documents use. Subordinate
-       to .deck-title's 2.9rem for the reason .doc-points is subordinate to the
-       document title.
-
-       The plate darkens rather than lightens. A translucent white one washes
-       toward the page as the gradient reaches its light end (#3c5da8), and
-       white text on that lands near 4:1 -- under AA for text this size, which
-       `make check-access` runs pa11y to catch. Darkening holds well clear of
-       the threshold at both gradient stops.
-
-       No white-space: nowrap. A non-numeric `points` renders verbatim and can
-       be long, and nowrap would push it off a narrow slide; the non-breaking
-       space frontmatter-filter.lua puts between the number and its unit is
-       what keeps "50 pts" together without forbidding a wrap. */
-    .slide--title .deck-points {
-      display: inline-block;
-      margin-left: 0.6rem;
-      padding: 0.12em 0.5em;
-      border-radius: 999px;
-      background: var(--badge-plate);
-      color: var(--on-accent);
-      font-size: 1.1rem;
-      font-weight: 600;
-      overflow-wrap: anywhere;
-      vertical-align: middle;
-    }
 
     .slide--title .deck-meta {
       font-family: var(--font-sans);

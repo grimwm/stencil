@@ -251,9 +251,8 @@ def test_the_byline_labels_every_field_it_names():
     """Author sits beside Issued and Due, so it is labelled like them. An
     unlabelled author next to two labelled dates reads as an oversight."""
     body = (TEMPLATES / "_doc-body.html.j2").read_text()
-    assert '<span class="doc-label">Author</span>' in body
-    assert '<span class="doc-label">Issued</span>' in body
-    assert '<span class="doc-label">Due</span>' in body
+    for field in ["Author", "Issued", "Due", "Points"]:
+        assert f'<span class="doc-label">{field}</span>' in body, field
 
 
 HEAD = TEMPLATES / "_page-head.html.j2"

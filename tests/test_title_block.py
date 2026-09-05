@@ -276,19 +276,6 @@ def test_the_printed_heading_scale_never_inverts(to_pdf):
     assert_strictly_descending(words, sizes)
 
 
-def test_the_points_badge_is_subordinate_to_the_title(css):
-    """The badge sits inside .doc-title, so an omitted font-size would inherit
-    that block's 2.2rem -- the same inversion .doc-subtitle exists to prevent,
-    and the print block would carry it into the PDF just as it did there.
-
-    Asserted against the stylesheet rather than a rendered PDF because the
-    relationship is a stated one: measuring glyphs would test the renderer.
-    """
-    title = size_rem(rule(css, ".doc-title"))
-    badge = size_rem(rule(css, ".doc-points"))
-    assert badge < title, f"badge {badge}rem is not below title {title}rem"
-
-
 def test_the_header_grid_rule_survives_the_parser(css):
     """A stray `*/` upstream silently deletes this rule.
 

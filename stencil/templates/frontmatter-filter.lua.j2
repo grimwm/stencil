@@ -254,6 +254,31 @@ function Meta(meta)
     end
   end
 
+  -- Points is a number the reader cares about, so the badge says "1 pt" rather
+  -- than "1 pts". Computed here because a pandoc template cannot compare a
+  -- value -- the same reason `date` is filled in here rather than there.
+  --
+  -- A value that is not a number renders verbatim, so `points: "extra credit"`
+  -- is a usable escape hatch rather than a build failure. There is nothing to
+  -- validate about it: unlike a date, any string is a legible answer to "what
+  -- is this worth".
+  local points = text_of(meta.points)
+  if points then
+    local count = tonumber(points)
+    local label
+    if count == nil then
+      -- Verbatim, and it may be long. The badge is allowed to wrap for this
+      -- case; the non-breaking space below is what keeps the ordinary case
+      -- from wrapping with it.
+      label = points
+    elseif count == 1 then
+      label = points .. NBSP .. "pt"
+    else
+      label = points .. NBSP .. "pts"
+    end
+    meta["points-label"] = pandoc.Inlines({ pandoc.Str(label) })
+  end
+
   local show = truthy(meta.show_date)
   -- Written back as a real boolean so a template asking $if(show_date)$ gets
   -- the answer this filter computed rather than the author's spelling of it.
@@ -269,11 +294,25 @@ function Meta(meta)
 
   local has_date = stamp_keys(meta, "date")
   local has_due = stamp_keys(meta, "due")
-  meta["has-dates"] = (has_date or has_due) or nil
-  -- Two keys OR'd together, which a pandoc template cannot do for itself --
-  -- the deck byline needs to know whether anything precedes Due before it
-  -- emits a separator in front of it.
+  local has_points = meta["points-label"] ~= nil
+
+  -- The byline's right-hand group: Issued, Due and Points, spread across the
+  -- space the author does not use. It exists only when it has something in
+  -- it.
+  meta["has-facts"] = (has_date or has_due or has_points) or nil
+
+  -- Separators, emitted as their own elements so the flex row can space them
+  -- evenly rather than hanging them off whichever item follows. Each one asks
+  -- "is anything in front of me?", which is several keys OR'd together and so
+  -- cannot be done in a pandoc template.
+  meta["sep-before-due"] = has_date or nil
+  meta["sep-before-points"] = (has_date or has_due) or nil
+
+  -- The deck byline is one inline run including the author, so its questions
+  -- are the same shape with the author added.
   meta["due-needs-separator"] = (meta.author ~= nil or has_date) or nil
+  meta["points-needs-separator"] =
+    (meta.author ~= nil or has_date or has_due) or nil
 
   if meta.brand == nil and CONFIG_BRAND ~= nil then
     meta.brand = pandoc.Inlines({ pandoc.Str(CONFIG_BRAND) })
@@ -308,37 +347,17 @@ function Meta(meta)
     end
   end
 
-  -- Points is a number the reader cares about, so the badge says "1 pt" rather
-  -- than "1 pts". Computed here because a pandoc template cannot compare a
-  -- value -- the same reason `date` is filled in here rather than there.
-  --
-  -- A value that is not a number renders verbatim, so `points: "extra credit"`
-  -- is a usable escape hatch rather than a build failure. There is nothing to
-  -- validate about it: unlike a date, any string is a legible answer to "what
-  -- is this worth".
-  local points = text_of(meta.points)
-  if points then
-    local count = tonumber(points)
-    local label
-    if count == nil then
-      -- Verbatim, and it may be long. The badge is allowed to wrap for this
-      -- case; the non-breaking space below is what keeps the ordinary case
-      -- from wrapping with it.
-      label = points
-    elseif count == 1 then
-      label = points .. NBSP .. "pt"
-    else
-      label = points .. NBSP .. "pts"
-    end
-    meta["points-label"] = pandoc.Inlines({ pandoc.Str(label) })
-  end
 
   local has_context = false
   for _, key in ipairs(CONTEXT) do
     has_context = has_context or meta[key] ~= nil
   end
   meta["has-context"] = (has_context or meta.brand ~= nil) or nil
-  meta["has-byline"] = (meta.author ~= nil or has_date or has_due) or nil
+  -- Points joined the byline when the badge left the title, so the row
+  -- has to open for it too -- a document whose only byline fact is what
+  -- it is worth still has a byline.
+  meta["has-byline"] =
+    (meta.author ~= nil or has_date or has_due or has_points) or nil
 
   return meta
 end

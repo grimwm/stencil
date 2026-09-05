@@ -225,3 +225,58 @@ def test_the_deck_byline_joins_all_three(render_soup):
     assert meta == (
         "Author Ada Lovelace · Issued Sep 01 · Due Sep 12 · 23:59"
     )
+
+
+def facts(soup) -> list[str]:
+    """The byline's fact row, as rendered, separators included.
+
+    Readable at all because the separators are real elements now. While they
+    were ::before content they were absent from the DOM, so a stranded one was
+    invisible to every structural test here -- the layout had to be driven in
+    a browser to see it.
+    """
+    row = soup.select_one(".doc-facts")
+    if row is None:
+        return []
+    return [" ".join(c.get_text().split()) for c in row.find_all(recursive=False)]
+
+
+def test_the_facts_row_joins_issued_due_and_points(render_soup):
+    soup = render_soup(
+        "doc",
+        "f.md",
+        text=document(
+            'title: "T"\ndate: 2026-09-01\ndue: 2026-09-12T23:59\npoints: 50\n'
+        ),
+    )
+    assert facts(soup) == [
+        "Issued Sep 01",
+        "·",
+        "Due Sep 12 · 23:59",
+        "·",
+        "Points 50 pts",
+    ]
+
+
+@pytest.mark.parametrize(
+    ("front_matter", "expected"),
+    [
+        ('date: 2026-09-01\n', ["Issued Sep 01"]),
+        ('due: 2026-09-12\n', ["Due Sep 12"]),
+        ('points: 50\n', ["Points 50 pts"]),
+        ('date: 2026-09-01\npoints: 50\n',
+         ["Issued Sep 01", "·", "Points 50 pts"]),
+        ('due: 2026-09-12\npoints: 50\n',
+         ["Due Sep 12", "·", "Points 50 pts"]),
+    ],
+)
+def test_no_combination_strands_a_separator(render_soup, front_matter, expected):
+    """A separator is conditional on something preceding it AND on the item it
+    precedes existing. Emitted on the first condition alone -- which is how it
+    was first written -- a document with a date and no due renders a trailing
+    middot with nothing after it.
+    """
+    soup = render_soup("doc", "f.md", text=document(f'title: "T"\n{front_matter}'))
+    assert facts(soup) == expected
+    assert not facts(soup)[0].startswith("·")
+    assert not facts(soup)[-1].endswith("·") or len(facts(soup)) == 1
