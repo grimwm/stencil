@@ -22,7 +22,8 @@
       padding-bottom: 2rem;
     }
 
-    /* Document title - H1 size + 0.2rem, bold */
+    /* Document title. Outranks every heading beneath it -- see the heading
+       block below, which has to state its own sizes for that to hold. */
     .doc-title {
       font-family: var(--font-sans);
       font-size: 2.2rem;
@@ -32,9 +33,13 @@
       border-bottom: 2px solid var(--accent-color);
     }
 
+    /* Subordinate to the title, the way .deck-subtitle is on a title slide.
+       font-weight is spelled out rather than left off: this div sits inside
+       .doc-title, so an omitted weight inherits that block's 700 instead of
+       falling back to normal. */
     .doc-subtitle {
-      font-size: 1.8rem;
-      font-weight: 700;
+      font-size: 1.4rem;
+      font-weight: 400;
       color: #555;
       margin-top: 0.5rem;
     }
@@ -48,7 +53,13 @@
       margin-top: 0.6rem;
     }
 
-    /* Headings: sans-serif with accent borders */
+    /* Headings: sans-serif with accent borders.
+
+       The sizes are stated here rather than inherited from Bootstrap, whose
+       heading scale is viewport-relative -- calc(1.375rem + 1.5vw) -- so h1
+       measured 39.4px against the title's 35.2px and grew with the window
+       while the title stayed where it was. The steps track the print block's
+       ratios against body text, so a heading keeps its rank in both media. */
     h1, h2, h3, h4, h5, h6 {
       font-family: var(--font-sans);
       font-weight: 600;
@@ -56,14 +67,23 @@
     }
 
     h1 {
+      font-size: 1.75rem;
       padding-bottom: 0.5rem;
       border-bottom: 2px solid var(--accent-color);
     }
 
     h2 {
+      font-size: 1.45rem;
       padding-bottom: 0.25rem;
       border-bottom: 1px solid #dee2e6;
     }
+
+    /* h4 lands on body size deliberately: below it a heading is told apart by
+       weight and the sans face rather than by being bigger. */
+    h3 { font-size: 1.25rem; }
+    h4 { font-size: 1.125rem; }
+    h5 { font-size: 1.05rem; }
+    h6 { font-size: 1rem; }
 
     /* Blockquotes as callout cards */
     blockquote {
@@ -301,10 +321,23 @@
       }
 
       .doc-title { font-size: 18pt; }
+      /* Without this the subtitle keeps its screen 1.4rem, which is 16.8pt
+         against the title's 18pt -- and was 21.6pt when it was 1.8rem, so the
+         name printed larger than the assignment. Every size in this block is
+         pt for that reason: a rem here is measured against the root font size,
+         not against the title beside it. */
+      .doc-subtitle { font-size: 13pt; }
       .doc-meta { font-size: 10pt; }
       h1 { font-size: 16pt; }
       h2 { font-size: 14pt; }
       h3 { font-size: 12pt; }
+      /* h4..h6 were left out, so they kept Bootstrap's rem -- absolute against
+         the root font size, not relative to the headings beside them. h4
+         printed at 22.3 against h1's 21.3, so the scale inverted at h4 in
+         every document stencil printed. Same hole as .doc-subtitle above. */
+      h4 { font-size: 11pt; }
+      h5 { font-size: 10.5pt; }
+      h6 { font-size: 10pt; }
 
       h1, h2, h3, h4, h5, h6 {
         page-break-after: avoid;
