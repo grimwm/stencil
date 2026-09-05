@@ -148,10 +148,16 @@ stencil clean <pkg>         # remove what stencil generated  (--all)
 stencil install             # refresh the managed .gitignore section
 ```
 
-**There is no test suite yet** — tracked as `stn-rxn`. Until there is one, verify a
-template change by generating a package into a scratch directory and running pandoc
-through the entrypoint the generated `docker-compose.yml` declares, rather than by
-reading the template and reasoning about it.
+```bash
+pytest -m 'not integration'   # unit assertions on the rendered scaffolding
+pytest                        # adds the container-backed builds
+```
+
+The `integration` tests drive a real pandoc container and headless Chromium. They
+skip rather than fail when no runtime is found, so a contributor without docker
+still gets a useful run — but a template change is not verified until they have
+run, because reading a template and reasoning about it is how the citeproc
+ordering bugs got in.
 
 ## Architecture Overview
 
@@ -223,6 +229,35 @@ to keep current rather than two that drift.
 `bd` manages its own blocks in both files between `BEGIN`/`END` markers and may write
 into `CLAUDE.md` again. That is expected and fine — leave it. Do not restore, expand,
 or re-collapse `CLAUDE.md` to protect the import.
+
+### Cutting a release
+
+The version in `pyproject.toml` is bumped **by hand**, in the commit that also
+updates `CHANGELOG.md`, and the tag is cut from that commit:
+
+```bash
+# on a branch, in the PR that ships the release
+$EDITOR pyproject.toml CHANGELOG.md    # bump version, add the entry
+# after the PR merges:
+git switch main && git pull
+git tag -a v0.3.0 -m "stencil 0.3.0"
+git push origin v0.3.0
+```
+
+Deriving the version from the tag instead (setuptools-scm and friends) was
+considered and rejected: it adds a build-time dependency, makes the version
+unreadable in the file where a person looks for it, and buys reproducibility
+that nothing here needs — no consumer pins stencil, deliberately, so the
+version is a reference point rather than a contract.
+
+What a tag is for, given nobody pins: `git diff v0.3.0..HEAD -- stencil/templates/`
+is a real question with a real answer when a handout starts rendering wrong.
+Against an untagged history it is archaeology.
+
+Bump the minor for anything that changes what a generated package contains or
+how it builds; the patch for fixes that leave the output the same. There is
+deliberately no written policy on what breaks a consumer, because no consumer
+pins.
 
 ### The pandoc filter order is load-bearing — do not reorder it
 
