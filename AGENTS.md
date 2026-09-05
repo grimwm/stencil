@@ -220,6 +220,41 @@ order `.beads/hooks/pre-commit` uses. It previously skipped silently when
 `pre-commit` was not on `PATH`, which meant the drift guard never ran at all on
 a machine without an activated virtualenv.
 
+### The drift guard's test weight is accepted, and here is why
+
+`tests/test_export_drift.py` is the largest test file in the repository, and every
+line of it is about beads bookkeeping rather than about anything stencil generates.
+That is a fair thing to object to, it was objected to, and the answer is: keep it.
+Recorded here so the question does not get re-litigated from scratch (`stn-dqb`).
+
+The guard has caught three things, none of which anything else would have caught:
+
+- a database that had regressed to an earlier snapshot,
+- a history rewrite that changed a committed blob without touching the database,
+- and the hook not running **at all** on the maintainer's machine, because the
+  wrapper was gated on `command -v pre-commit` and failed open.
+
+The third is the one that settles it. A guard that silently does not run is worse
+than no guard, because it is also a belief that you are covered. Nothing but a test
+finds that.
+
+Two alternatives were considered and rejected:
+
+- **Trim to the cases that have actually fired.** Rejected because the cases that
+  fired were not the ones anyone would have predicted — `git push --all` checking
+  one branch and letting the rest through was defensive until it wasn't. Having
+  been wrong about which cases matter is poor grounds for a second guess. The
+  defensive cases are also cheap: variations on one harness, not new machinery.
+- **Move the guard and its tests out of stencil.** Right in principle — nothing
+  about this is stencil-specific, and it belongs in beads or a shared hook
+  package. Rejected for now because it would make stencil depend on something
+  that does not exist, to fix a problem that is aesthetic. Revisit when a second
+  repository needs the same guard; that is the trigger, and until then the
+  duplication cost is zero.
+
+The cost being accepted is a reader's surprise at the file sizes, and the fix for
+that is this paragraph rather than less coverage.
+
 ### This file is the one to edit; CLAUDE.md is only a pointer
 
 `CLAUDE.md` contains a single line, `@AGENTS.md`, and should stay that way. Agent
