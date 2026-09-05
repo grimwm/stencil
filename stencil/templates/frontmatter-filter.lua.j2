@@ -142,6 +142,10 @@ local MONTHS = {
   "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
 }
 
+-- Joins a number to its unit, so "50 pts" never breaks across two lines while
+-- the badge is still free to wrap a long verbatim `points` string.
+local NBSP = utf8.char(0x00A0)
+
 local SHAPES = "expected yyyy-mm-dd or yyyy-mm-ddThh:mm"
 
 --- The last day of month `m` in year `y`.
@@ -315,11 +319,14 @@ function Meta(meta)
     local count = tonumber(points)
     local label
     if count == nil then
+      -- Verbatim, and it may be long. The badge is allowed to wrap for this
+      -- case; the non-breaking space below is what keeps the ordinary case
+      -- from wrapping with it.
       label = points
     elseif count == 1 then
-      label = points .. " pt"
+      label = points .. NBSP .. "pt"
     else
-      label = points .. " pts"
+      label = points .. NBSP .. "pts"
     end
     meta["points-label"] = pandoc.Inlines({ pandoc.Str(label) })
   end

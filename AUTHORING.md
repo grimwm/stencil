@@ -299,8 +299,11 @@ template sees it — pandoc reads YAML 1.2, where `no` is the *string* `"no"` ra
 without `frontmatter-filter.lua` normalizing it first, `show_date: no` would print a date.
 
 Writing your own `date:` beats `show_date` — a date you wrote is the date you meant — so use one or
-the other, not both. The stamp is the build machine's day, not the container's UTC one, and it is
-date-only: the clock reading when `make` ran says nothing about the document.
+the other, not both. Under `make` the stamp is the build machine's day, passed in as `build-date`,
+rather than the container's UTC one. Running pandoc directly passes nothing, and the filter falls
+back to the date inside the container — UTC — which can be a day off from yours either side of
+midnight. Either way it is date-only: the clock reading when the build ran says nothing about the
+document.
 
 #### `lang` and `dir`
 

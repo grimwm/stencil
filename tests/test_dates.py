@@ -56,8 +56,20 @@ ACCEPTED = [
     "2000-02-29",  # leap, % 400
     "1900-02-28",  # pre-1970, negative time_t
     "2038-12-31",  # past the 32-bit time_t cliff
+    # The last real day of every month, so a wrong table would show up as a
+    # rejected date rather than only as an accepted impossible one.
     "2026-01-31",
+    "2026-02-28",
+    "2026-03-31",
     "2026-04-30",
+    "2026-05-31",
+    "2026-06-30",
+    "2026-07-31",
+    "2026-08-31",
+    "2026-09-30",
+    "2026-10-31",
+    "2026-11-30",
+    "2026-12-31",
 ]
 
 REJECTED = [
@@ -75,8 +87,19 @@ REJECTED = [
     "2026-02-29",  # not a leap year
     "1900-02-29",  # century, not a leap year
     "2100-02-29",  # century, not a leap year
+    # The day after the last real day of every month. February's is the
+    # 2026-02-29 already listed above as the non-leap case.
     "2026-01-32",
+    "2026-03-32",
     "2026-04-31",
+    "2026-05-32",
+    "2026-06-31",
+    "2026-07-32",
+    "2026-08-32",
+    "2026-09-31",
+    "2026-10-32",
+    "2026-11-31",
+    "2026-12-32",
 ]
 
 

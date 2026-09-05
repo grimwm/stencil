@@ -25,7 +25,7 @@ pandoc 3.10.0.0 in a container; pytest with BeautifulSoup and pypdf.
   reads it from there.
 - Date grammar is exactly `yyyy-mm-dd` or `yyyy-mm-ddThh:mm`, for both `date`
   and `due`. Nothing else is accepted.
-- Rendered date form is `MMM DD, YYYY`, zero-padded day, optionally followed by
+- Rendered date form is `MMM DD`, zero-padded day, no year, optionally followed by
   ` · HH:MM` in 24-hour time. The time renders **iff the author wrote one**.
 - Calendar validation is an `os.time` round-trip with `hour = 12`, never a
   hand-rolled days-in-month table. `hour = 12` keeps the value clear of DST
@@ -504,7 +504,7 @@ local function parse_stamp(key, text)
   return { year = y, month = m, day = d, hour = hh, min = mm }
 end
 
---- The display form: MMM DD, YYYY, and the time only when one was written.
+--- The display form: MMM DD, and the time only when one was written.
 local function format_stamp(stamp)
   local text = string.format("%s %02d, %04d", MONTHS[stamp.month], stamp.day, stamp.year)
   if stamp.hour then
@@ -556,7 +556,7 @@ In `function Meta(meta)`, replace the `show_date` / `date` block with:
 - [ ] **Step 5: Run the tests and make sure they pass**
 
 Run: `python3 -m pytest tests/test_dates.py -v`
-Expected: PASS, 53 tests.
+Expected: PASS. Every case in ACCEPTED and REJECTED, for both keys.
 
 If any `ACCEPTED` case fails, check `last_day_of` first: confirm `day = 0`
 resolves backwards in this image with
@@ -617,8 +617,8 @@ def test_issued_and_due_render_labelled(render_soup):
     )
     issued = soup.select_one(".doc-issued")
     due = soup.select_one(".doc-due")
-    assert " ".join(issued.get_text().split()) == "Issued Sep 01, 2026"
-    assert " ".join(due.get_text().split()) == "Due Sep 12, 2026 · 23:59"
+    assert " ".join(issued.get_text().split()) == "Issued Sep 01"
+    assert " ".join(due.get_text().split()) == "Due Sep 12 · 23:59"
 
 
 def test_a_written_time_renders_and_a_missing_one_does_not(render_soup):
@@ -651,7 +651,7 @@ def test_a_written_date_still_beats_show_date(render_soup):
         "doc", "d.md",
         text=document('title: "T"\ndate: 2026-09-01\nshow_date: true\n'),
     )
-    assert "Sep 01, 2026" in soup.select_one(".doc-issued").get_text()
+    assert "Sep 01" in soup.select_one(".doc-issued").get_text()
 
 
 def test_due_alone_opens_the_byline(render_soup):
@@ -660,7 +660,7 @@ def test_due_alone_opens_the_byline(render_soup):
     )
     assert soup.select_one(".doc-byline") is not None
     assert soup.select_one(".doc-issued") is None
-    assert "Due Sep 12, 2026" in soup.select_one(".doc-due").get_text()
+    assert "Due Sep 12" in soup.select_one(".doc-due").get_text()
 
 
 def test_the_deck_byline_never_strands_a_separator(render_soup):
@@ -668,7 +668,7 @@ def test_the_deck_byline_never_strands_a_separator(render_soup):
         "slide", "deck.md", text=document('title: "T"\ndue: 2026-09-12\n')
     )
     meta = " ".join(soup.select_one(".deck-meta").get_text().split())
-    assert meta == "Due Sep 12, 2026"
+    assert meta == "Due Sep 12"
 
 
 def test_the_deck_byline_joins_all_three(render_soup):
@@ -681,8 +681,8 @@ def test_the_deck_byline_joins_all_three(render_soup):
     )
     meta = " ".join(soup.select_one(".deck-meta").get_text().split())
     assert meta == (
-        "Ada Lovelace · Issued Sep 01, 2026 "
-        "· Due Sep 12, 2026 · 23:59"
+        "Ada Lovelace · Issued Sep 01 "
+        "· Due Sep 12 · 23:59"
     )
 ```
 
@@ -782,7 +782,7 @@ and `test_date_only_renders_on_its_own`, change every
 `assert when(soup) == "2026-09-02"` to:
 
 ```python
-    assert when(soup) == "Issued Sep 02, 2026"
+    assert when(soup) == "Issued Sep 02"
 ```
 
 - [ ] **Step 8: Run the full suite**
@@ -1052,10 +1052,10 @@ When the document was issued, and when it is owed. Both take an ISO date, and
 optionally a 24-hour time after a `T`:
 
 ```yaml
-date: 2026-09-01          # Issued Sep 01, 2026
-date: 2026-09-01T21:45    # Issued Sep 01, 2026 · 21:45
-due: 2026-09-12           # Due Sep 12, 2026
-due: 2026-09-12T23:59     # Due Sep 12, 2026 · 23:59
+date: 2026-09-01          # Issued Sep 01
+date: 2026-09-01T21:45    # Issued Sep 01 · 21:45
+due: 2026-09-12           # Due Sep 12
+due: 2026-09-12T23:59     # Due Sep 12 · 23:59
 ```
 
 The time appears only when you write one. `yyyy-mm-dd` and `yyyy-mm-ddThh:mm`
@@ -1096,7 +1096,7 @@ At the top of `CHANGELOG.md`, under `# Changelog`'s preamble:
   with a data field so that nothing could query or validate it.
 
 - **`due` is a new key, and `date` now renders as `Issued`.** Both take
-  `yyyy-mm-dd` or `yyyy-mm-ddThh:mm` and render as `Sep 12, 2026 · 23:59`, with
+  `yyyy-mm-dd` or `yyyy-mm-ddThh:mm` and render as `Sep 12 · 23:59`, with
   the time shown only when one was written. Two bare dates in one column cannot
   be told apart, which is why the build stamp grew a label it never needed while
   it was alone.
@@ -1146,7 +1146,8 @@ ______________________________________________________________________
 
 - [ ] `python3 -m pytest` passes in full, from the repo root.
 - [ ] `git diff main --stat` touches only: the five templates, the three docs,
-  `stencil/__init__.py`, and the four test files.
+  `stencil/__init__.py`, the four test files, and this plan plus the
+  spec it implements.
 - [ ] A real handout builds and its header looks unchanged apart from the badge
   and the two labelled dates.
 

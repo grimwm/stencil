@@ -52,7 +52,12 @@
 
        Colors are literal rather than tokens: there is no token layer to hang
        them on yet, and the theming release converts them along with the other
-       fifty-odd in this file. */
+       fifty-odd in this file.
+
+       No white-space: nowrap. A non-numeric `points` renders verbatim and can
+       be long, and nowrap would push it past the page edge; the non-breaking
+       space frontmatter-filter.lua puts between the number and its unit is
+       what keeps "50 pts" together without forbidding a wrap. */
     .doc-points {
       display: inline-block;
       margin-left: 0.5rem;
@@ -64,7 +69,7 @@
       font-size: 0.95rem;
       font-weight: 600;
       line-height: 1.4;
-      white-space: nowrap;
+      overflow-wrap: anywhere;
       vertical-align: middle;
     }
 
@@ -75,9 +80,15 @@
        and for pdftotext, and placement puts the context back up on row one.
        align-items: baseline so the course sits on the title's baseline rather
        than floating at the top of a two-line identity block. */
+       The context column is minmax(0, auto), not auto. A bare `auto` track
+       refuses to shrink below its own min-content width, so a long brand or
+       program beside the identity column's 18rem floor could push the header
+       wider than the page -- the flex row this replaces would have wrapped
+       instead. A zero minimum lets the context wrap inside its column, which
+       is the behaviour worth keeping. */
     header.doc-title {
       display: grid;
-      grid-template-columns: minmax(18rem, 1fr) auto;
+      grid-template-columns: minmax(18rem, 1fr) minmax(0, auto);
       align-items: baseline;
       column-gap: 1.5rem;
       row-gap: 0.35rem;

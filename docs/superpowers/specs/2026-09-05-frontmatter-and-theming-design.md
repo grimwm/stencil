@@ -32,10 +32,18 @@ ______________________________________________________________________
 All three new/changed keys join `BLANKABLE` in `frontmatter-filter.lua`, so a key
 written with nothing after it is indistinguishable from an absent one.
 
-The filter computes five keys for the templates to read, so each template asks
-one question rather than reimplementing the logic: `points-label`, `date-label`,
-`date-iso`, `due-label`, `due-iso`. The `-iso` pair carries the author's original
-string for the `datetime` attribute; the `-label` keys carry the rendered text.
+The filter computes seven keys for the templates to read, so each template asks
+one question rather than reimplementing the logic.
+
+Five are rendered: `points-label`, `date-label`, `date-iso`, `due-label`,
+`due-iso`. The `-iso` pair carries the author's original string for the
+`datetime` attribute; the `-label` keys carry the rendered text.
+
+Two are internal, and exist only because a pandoc template cannot OR two keys
+together: `has-dates` (`date-label` or `due-label`) opens the date wrapper in
+`_doc-body.html.j2`, and `due-needs-separator` (`author` or `date-label`) tells
+`_slide-body.html.j2` whether anything precedes Due on the deck byline. Both
+also gate `has-byline`.
 
 ### Dates
 
