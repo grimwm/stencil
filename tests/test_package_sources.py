@@ -100,10 +100,20 @@ def test_a_bare_string_is_accepted_as_a_one_entry_list():
 # --- the expansion rule ----------------------------------------------------
 
 
-def test_doc_expansion_takes_every_file_in_a_directory(doc_pkg_makefile):
-    """$(wildcard $(1)/*), not $(wildcard $(1)/*.md)."""
-    assert "$(sort $(wildcard $(1)/*))" in doc_pkg_makefile
-    assert "$(wildcard $(1)/*.md)" not in doc_pkg_makefile
+def test_doc_expansion_takes_every_file_under_a_directory(doc_pkg_makefile):
+    """find, not a wildcard: make has no recursive glob, and zip -r recurses."""
+    assert "find $(1) -type f" in doc_pkg_makefile
+    assert "$(wildcard $(1)/*.md)" not in doc_pkg_makefile, "no extension filter"
+
+
+def test_doc_expansion_sorts_by_byte_not_by_locale(doc_pkg_makefile):
+    """find's output order is unspecified, so reading order needs the sort."""
+    assert "LC_ALL=C sort" in doc_pkg_makefile
+
+
+def test_doc_expansion_drops_the_directories_themselves(doc_pkg_makefile):
+    """pandoc would fail on one, and a tree walk turns them up."""
+    assert "-type f" in doc_pkg_makefile
 
 
 def test_zip_hands_a_directory_over_whole(makefile):
