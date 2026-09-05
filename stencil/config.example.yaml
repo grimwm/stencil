@@ -109,7 +109,7 @@ templates:
 #   package_sources: What `pkg` puts into package_name (zip default: [htdocs]).
 #                   A list, resolved by one rule for every package type:
 #                     md/*.md   a glob -- expands in sorted order
-#                     md        a directory -- everything in it
+#                     md        a directory -- every file under it, recursively
 #                     intro.md  anything else -- as written, in the listed order
 #                   Nothing is filtered by extension and nothing is inferred
 #                   from a name: for just the markdown in a folder, say md/*.md.

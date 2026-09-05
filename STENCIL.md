@@ -213,18 +213,18 @@ slide breaks, layout fences, presenter-only content, present mode and printing -
 
 ### Package Configuration
 
-| Field             | Required | Description                                                                                                                                                |
-| ----------------- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `name`            | No       | Display name (defaults to package ID)                                                                                                                      |
-| `dir`             | No       | Output subdirectory (defaults to package ID)                                                                                                               |
-| `package_type`    | Yes      | `doc` for HTML documents, `zip` for submissions                                                                                                            |
-| `docs`            | No       | List of markdown files to convert to HTML docs                                                                                                             |
-| `slides`          | No       | List of markdown files to convert to slide decks                                                                                                           |
-| `package_name`    | zip only | Submission filename (a `doc` using `package_sources` needs one too, ending in `.pdf`)                                                                      |
-| `package_sources` | No       | What `pkg` puts into `package_name` (zip default: `[htdocs]`); a glob expands sorted, a directory means everything in it, anything else is used as written |
-| `services`        | No       | Docker services: `web`, `mysql`                                                                                                                            |
-| `copy_files`      | No       | Static files/dirs to copy from a files directory                                                                                                           |
-| `deps_script`     | No       | Install scripts keyed by OS                                                                                                                                |
+| Field             | Required | Description                                                                                                                                                                |
+| ----------------- | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `name`            | No       | Display name (defaults to package ID)                                                                                                                                      |
+| `dir`             | No       | Output subdirectory (defaults to package ID)                                                                                                                               |
+| `package_type`    | Yes      | `doc` for HTML documents, `zip` for submissions                                                                                                                            |
+| `docs`            | No       | List of markdown files to convert to HTML docs                                                                                                                             |
+| `slides`          | No       | List of markdown files to convert to slide decks                                                                                                                           |
+| `package_name`    | zip only | Submission filename (a `doc` using `package_sources` needs one too, ending in `.pdf`)                                                                                      |
+| `package_sources` | No       | What `pkg` puts into `package_name` (zip default: `[htdocs]`); a glob expands sorted, a directory means every file under it, recursively, anything else is used as written |
+| `services`        | No       | Docker services: `web`, `mysql`                                                                                                                                            |
+| `copy_files`      | No       | Static files/dirs to copy from a files directory                                                                                                                           |
+| `deps_script`     | No       | Install scripts keyed by OS                                                                                                                                                |
 
 All package fields are available as template context variables. Custom fields can be added and
 accessed in your templates.
