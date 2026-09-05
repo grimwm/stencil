@@ -1,12 +1,88 @@
 {# Shared page styling: typography, callouts, code, tables, figures, print rules.
    Included by html-template.html.j2 and slide-template.html.j2. #}
+    /* The light palette, and the only unconditional definition of it. Dark
+       values live in exactly one place -- an @media screen block at the foot
+       of this file -- because print cannot match that block, so these values
+       apply to every printed page with nothing to undo.
+
+       Every colour in this file and in _slide-style.css.j2 is one of these
+       tokens. A hardcoded colour is a value that escapes theming: right in
+       light, wrong in dark, and invisible to a suite that reads structure.
+       tests/test_theme.py fails on one. */
     :root {
       --font-serif: 'Crimson Pro', Georgia, 'Times New Roman', serif;
       --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
       --font-mono: 'JetBrains Mono', 'Fira Code', Consolas, Monaco, monospace;
-      --accent-color: #29417a;
+
+      /* Surfaces */
+      --surface: #fff;
+      --surface-sunken: #f6f8fa;
+      --surface-muted: #f5f7fa;
+      --surface-accent: #e8eef7;
+      --surface-accent-on: #d2def2;
+
+      /* Text. Every one of these is measured against --surface in
+         tests/test_theme.py; the Issued/Due label already shipped once at
+         3.88:1 and had to be raised. */
+      --text: #212529;
+      --text-subtle: #555;
+      --text-muted: #5a6270;
+      --text-label: #687080;
+      --text-strong: #3a424f;
+      --text-faint: #99a1b0;
+
+      /* Lines */
+      --border: #dee2e6;
+      --border-muted: #c8c8c8;
+
+      /* Accent, and what sits on top of it */
+      --accent: #29417a;
+      --on-accent: #fff;
+      --on-accent-muted: rgba(255, 255, 255, 0.85);
+      --on-accent-fill: rgba(255, 255, 255, 0.15);
+
+      /* Callout card */
       --card-bg: #fffdf5;
       --card-border: #c8b48c;
+
+      /* Code */
+      --code-inline: #c7254e;
+      --hl-builtin: #c85200;
+      --hl-string: #0550ae;
+
+      --shadow-card: rgba(0, 0, 0, 0.08);
+      --focus-ring: #ffbf47;
+
+      /* Deck tokens. Defined here rather than in _slide-style.css.j2 because
+         a deck includes this file, so there is one :root, not two. */
+      --deck-surface: #fff;
+      --deck-border: #d8dee9;
+      --deck-shadow: rgba(20, 30, 60, 0.10);
+      --deck-shadow-md: rgba(20, 30, 60, 0.16);
+      --deck-shadow-lg: rgba(20, 30, 60, 0.26);
+      --deck-counter: #8a93a5;
+      --deck-accent-from: #29417a;
+      --deck-accent-to: #3c5da8;
+      --deck-accent-edge: #22335e;
+      --deck-body-text: #2c3444;
+      --deck-quote-bg: #eef2fb;
+      --deck-quote-border: #c3cfe8;
+      --deck-toolbar-bg: rgba(255, 255, 255, 0.94);
+      --deck-toolbar-border: #ccd4e2;
+      --deck-toolbar-fg: #55607a;
+      --deck-toolbar-hover: #1d2f5c;
+      --deck-presenting-bg: #e9edf4;
+      --badge-plate: rgba(16, 26, 52, 0.35);
+
+      /* Print-only, and deliberately not the screen values. These are their
+         own tokens rather than literals so the drift guard can stay absolute:
+         every colour in the file is a token, with no exemption to remember. */
+      --print-th-bg: #e8e8e8;
+      --print-stripe-bg: #f5f5f5;
+      --print-card-bg: #fffef8;
+      --print-deck-bg: #29417a;
+      --print-deck-fg: #fff;
+      --print-deck-quote-bg: #eef2fb;
     }
 
     /* Academic fonts */
@@ -30,7 +106,7 @@
       font-weight: 700;
       margin-bottom: 1.5rem;
       padding-bottom: 0.5rem;
-      border-bottom: 2px solid var(--accent-color);
+      border-bottom: 2px solid var(--accent);
     }
 
     /* Subordinate to the title, the way .deck-subtitle is on a title slide.
@@ -40,7 +116,7 @@
     .doc-subtitle {
       font-size: 1.4rem;
       font-weight: 400;
-      color: #555;
+      color: var(--text-subtle);
       margin-top: 0.5rem;
     }
 
@@ -49,10 +125,6 @@
        rather than inherit it -- a badge that outranks the title is the same
        inversion .doc-subtitle was fixed for, and the print block would carry
        it into the PDF.
-
-       Colors are literal rather than tokens: there is no token layer to hang
-       them on yet, and the theming release converts them along with the other
-       fifty-odd in this file.
 
        No white-space: nowrap. A non-numeric `points` renders verbatim and can
        be long, and nowrap would push it past the page edge; the non-breaking
@@ -63,8 +135,8 @@
       margin-left: 0.5rem;
       padding: 0.15em 0.55em;
       border-radius: 999px;
-      background: #e8eef7;
-      color: #29417a;
+      background: var(--surface-accent);
+      color: var(--accent);
       font-family: var(--font-sans);
       font-size: 0.95rem;
       font-weight: 600;
@@ -135,7 +207,7 @@
     .doc-context {
       font-size: 1rem;
       font-weight: 400;
-      color: #5a6270;
+      color: var(--text-muted);
     }
 
     /* "Issued" and "Due" name which date is which. Two bare dates in one
@@ -147,7 +219,7 @@
          -- under AA for text this size, and `make check-access` runs pa11y at
          WCAG 2.1 AA. A label naming which date you are looking at is not
          decoration, so it takes the text threshold rather than the 3:1 one. */
-      color: #687080;
+      color: var(--text-label);
       margin-right: 0.3em;
     }
 
@@ -162,7 +234,7 @@
     .doc-brand {
       font-size: 1.15rem;
       font-weight: 600;
-      color: #3a424f;
+      color: var(--text-strong);
       margin-bottom: 0.2rem;
     }
 
@@ -190,7 +262,7 @@
       /* The whole gap, and symmetric: _doc-body.html.j2 emits these spans on
          one line precisely so no collapsed newline lands on one side. */
       margin: 0 0.4rem;
-      color: #99a1b0;
+      color: var(--text-faint);
     }
 
     .doc-term {
@@ -243,13 +315,13 @@
     h1 {
       font-size: 1.75rem;
       padding-bottom: 0.5rem;
-      border-bottom: 2px solid var(--accent-color);
+      border-bottom: 2px solid var(--accent);
     }
 
     h2 {
       font-size: 1.45rem;
       padding-bottom: 0.25rem;
-      border-bottom: 1px solid #dee2e6;
+      border-bottom: 1px solid var(--border);
     }
 
     /* h4 lands on body size deliberately: below it a heading is told apart by
@@ -268,7 +340,7 @@
       margin-left: 3em;
       font-style: italic;
       font-size: inherit;
-      box-shadow: 2px 2px 8px rgba(0,0,0,0.08);
+      box-shadow: 2px 2px 8px var(--shadow-card);
     }
 
     blockquote p:last-child {
@@ -277,7 +349,7 @@
 
     blockquote strong {
       font-style: normal;
-      color: var(--accent-color);
+      color: var(--accent);
     }
 
     /* Task lists: pandoc wraps each item as <li><label><input type=checkbox>text</label>.
@@ -309,7 +381,7 @@
       height: 1em;
       /* Native control, so a checked box renders its tick in every browser and
          stays clickable on screen; accent-color just tints it to match. */
-      accent-color: var(--accent-color);
+      accent-color: var(--accent);
     }
 
     /* Ordered task lists. Pandoc puts class="task-list" on a <ul> only -- an
@@ -329,7 +401,7 @@
          the box -- but with only that, the box lands hard against the
          ordinal instead and the same complaint reads "1.[ ] text". */
       margin: 0 0.45em 0 0.35em;
-      accent-color: var(--accent-color);
+      accent-color: var(--accent);
     }
 
     /* Code: mono font */
@@ -338,15 +410,15 @@
     }
 
     pre {
-      background: #f6f8fa;
-      border: 1px solid #dee2e6;
+      background: var(--surface-sunken);
+      border: 1px solid var(--border);
       border-radius: 6px;
       padding: 1rem;
     }
 
     code {
       font-size: 0.875em;
-      color: #c7254e;
+      color: var(--code-inline);
     }
 
     pre code {
@@ -354,9 +426,9 @@
     }
 
     /* Highlight.js contrast fixes for WCAG 2.1 AA */
-    .hljs-built_in { color: #c85200; }
-    .hljs-string { color: #0550ae; }
-    .hljs-symbol { color: #c85200; }
+    .hljs-built_in { color: var(--hl-builtin); }
+    .hljs-string { color: var(--hl-string); }
+    .hljs-symbol { color: var(--hl-builtin); }
 
     /* Tables: header color, borders */
     table {
@@ -385,18 +457,18 @@
       text-align: left;
       padding: 0.5rem 0.75rem;
       caption-side: top;
-      background: #e8eef7;
-      border: 1px solid #c8c8c8;
+      background: var(--surface-accent);
+      border: 1px solid var(--border-muted);
       border-bottom: none;
     }
 
     thead {
-      background: #d2def2;
+      background: var(--surface-accent-on);
     }
 
     th, td {
       padding: 0.5rem 0.75rem;
-      border: 1px solid #c8c8c8;
+      border: 1px solid var(--border-muted);
       text-align: left;
     }
 
@@ -406,7 +478,7 @@
     }
 
     tbody tr:nth-child(even) {
-      background: #f5f7fa;
+      background: var(--surface-muted);
     }
 
     /* Display math: block + centered */
@@ -425,7 +497,7 @@
       text-align: center;
       margin-top: 0.5rem;
       font-size: 0.95em;
-      color: #555;
+      color: var(--text-subtle);
       white-space: normal;
     }
 
@@ -453,7 +525,7 @@
 
     /* Navigation tabs - Bootstrap overrides */
     .nav-tabs.problem-tabs {
-      background: var(--accent-color);
+      background: var(--accent);
       border-radius: 6px 6px 0 0;
       border: none;
       padding: 0.5rem 0.5rem 0;
@@ -461,7 +533,7 @@
     }
 
     .nav-tabs.problem-tabs .nav-link {
-      color: rgba(255,255,255,0.85);
+      color: var(--on-accent-muted);
       font-family: var(--font-sans);
       font-size: 0.95rem;
       font-weight: 500;
@@ -472,22 +544,22 @@
     }
 
     .nav-tabs.problem-tabs .nav-link:hover {
-      color: #fff;
-      background: rgba(255,255,255,0.15);
+      color: var(--on-accent);
+      background: var(--on-accent-fill);
     }
 
     .nav-tabs.problem-tabs .nav-link.active {
-      background: #fff;
-      color: var(--accent-color);
+      background: var(--surface);
+      color: var(--accent);
       border: none;
     }
 
     .tab-content {
-      border: 1px solid #dee2e6;
+      border: 1px solid var(--border);
       border-top: none;
       border-radius: 0 0 6px 6px;
       padding: 1.5rem;
-      background: #fff;
+      background: var(--surface);
     }
 
     .tab-pane h1:first-child,
@@ -543,19 +615,19 @@
       }
 
       thead {
-        background: #e8e8e8 !important;
+        background: var(--print-th-bg) !important;
         -webkit-print-color-adjust: exact;
         print-color-adjust: exact;
       }
 
       tbody tr:nth-child(even) {
-        background: #f5f5f5 !important;
+        background: var(--print-stripe-bg) !important;
         -webkit-print-color-adjust: exact;
         print-color-adjust: exact;
       }
 
       blockquote {
-        background: #fffef8 !important;
+        background: var(--print-card-bg) !important;
         box-shadow: none;
         -webkit-print-color-adjust: exact;
         print-color-adjust: exact;
