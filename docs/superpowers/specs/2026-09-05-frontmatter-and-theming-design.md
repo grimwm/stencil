@@ -67,25 +67,46 @@ build, in the manner `frontmatter-filter.lua` already uses for a missing
 
 1. **Shape.** The string matches `yyyy-mm-dd` or `yyyy-mm-ddThh:mm` exactly.
    Anything else fails with a message naming both accepted shapes.
-1. **Range.** Month `01`–`12`, hour `00`–`23`, minute `00`–`59`.
-1. **Calendar.** The day is checked against the actual length of that month in
+1. **Range.** Month `01`–`12`, hour `00`–`23`, minute `00`–`59`. The calendar
+   gate below would catch a bad month on its own — `month = 13` normalizes into
+   the following January and fails the comparison — but it would report it as a
+   date the calendar does not contain, which is not what went wrong. Checking
+   the range first buys a message that names the field.
+1. **Calendar.** The day is checked against the real length of that month in
    that year.
 
-The calendar check is an explicit days-in-month table, deliberately not an
-`os.time` round-trip: `os.time` *normalizes* an out-of-range day rather than
-rejecting it, so `2026-02-30` would come back as March 2 and the build would
-succeed having silently moved the deadline. It also drags the container's clock
-and time zone into what is otherwise pure string work.
+The calendar check is a round-trip through Lua's `os` library, **not** a
+hand-rolled days-in-month table and leap rule:
 
-```
-Jan 31  Feb 28/29  Mar 31  Apr 30  May 31  Jun 30
-Jul 31  Aug 31     Sep 30  Oct 31  Nov 30  Dec 31
+```lua
+local t = os.time({ year = y, month = m, day = d, hour = 12 })
+local back = os.date("*t", t)
+local ok = back.year == y and back.month == m and back.day == d
 ```
 
-February is 29 days when `year % 4 == 0 and (year % 100 ~= 0 or year % 400 == 0)`
-— the full Gregorian rule, not the `% 4` shortcut. The shortcut is correct for
-every year a course handout will plausibly carry, which is exactly why it would
-never be caught if it were wrong; the complete rule is three more operators.
+`os.time` *normalizes* an out-of-range day rather than rejecting it — `2026-02-30`
+comes back as March 2. That normalization is the detector: compare the fields
+back against what was written, and any date the calendar does not contain fails
+the comparison. The Gregorian rules, leap years included, come from the platform
+`mktime` rather than from code in this repository.
+
+`hour = 12` is load-bearing. A date pinned to midnight can cross a day boundary
+in a zone observing a DST transition, which would fail a date the calendar does
+contain. Noon is far enough from every transition that no shift reaches it.
+
+Verified in the render image (`pandoc/core:3.10.0.0`), covering all four branches
+of the Gregorian rule and both ends of the `time_t` range:
+
+```
+2026-02-30 -> 2026-03-02  reject      2024-02-29 -> match   accept
+2026-02-29 -> 2026-03-01  reject      2000-02-29 -> match   accept   (400-year)
+1900-02-29 -> 1900-03-01  reject      2038-12-31 -> match   accept   (64-bit)
+2100-02-29 -> 2100-03-01  reject      1900-02-28 -> match   accept   (pre-1970)
+```
+
+The earlier draft of this spec ruled `os.time` out on the grounds that it
+normalizes rather than rejects. That was wrong: normalizing is only a hazard if
+the normalized value is what you use.
 
 The error names the specific failure rather than restating the grammar, since
 the grammar is not what was violated:
@@ -237,12 +258,20 @@ Dates:
 - an author-written `date` still beats `show_date`
 - each rejected shape fails the build with a message naming both accepted shapes
 - out-of-range fields fail: month `00`/`13`, hour `24`, minute `60`
-- calendar validity, parametrized over the table: the last valid day of every
-  month is accepted and the day after it is rejected (`2026-01-31` yes,
+- calendar validity, parametrized over all twelve months: the last real day of
+  each is accepted and the day after it is rejected (`2026-01-31` yes,
   `2026-01-32` no; `2026-04-30` yes, `2026-04-31` no)
 - leap years across all four branches of the Gregorian rule: `2024-02-29`
   accepted, `2026-02-29` rejected, `2000-02-29` accepted, `1900-02-29` rejected
+- `1900-02-28` and `2038-12-31` are accepted, pinning both ends of the `time_t`
+  range the round-trip depends on
 - the calendar error names the month and its real length, not the grammar
+
+The leap-year and `time_t` cases are not redundant with the probe recorded in
+A.1. That probe confirmed the approach works in today's image; these assert it
+keeps working when the image is bumped, which is the only time it could
+plausibly break.
+
 - blank `date:` / `due:` behave as absent
 - `has-byline` opens the row for `due` alone
 
