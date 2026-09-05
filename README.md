@@ -8,6 +8,10 @@ Two companion guides: [STENCIL.md](STENCIL.md) describes the bundled templates a
 configuration; the [Authoring Guide](AUTHORING.md) covers writing the markdown itself, including
 when to build a document and when to build a slide deck.
 
+[TEMPLATE-PACKS.md](TEMPLATE-PACKS.md) is a design, not a feature: how a course repo
+could depend on its scaffolding instead of keeping a directory of it. Not built yet;
+the trigger to build it is written down there.
+
 ## Installation
 
 Install directly from GitHub:
