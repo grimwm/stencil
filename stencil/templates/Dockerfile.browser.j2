@@ -31,4 +31,23 @@ RUN printf '%s\n' \
   '  }' \
   '}' > /opt/pa11y.json
 
+# A second pa11y config that drives the theme control before measuring.
+#
+# pa11y has no --run-before; it has `actions`, which is better here anyway --
+# clicking the real segment exercises the same path a reader does rather than
+# asserting about a page that was set up some other way.
+#
+# Checking one theme would leave the dark palette unmeasured, and its contrast
+# ratios are the ones nobody has looked at: 0.11.0 shipped a label at 3.88:1
+# that looked entirely unremarkable.
+RUN printf '%s\n' \
+  '{' \
+  '  "chromeLaunchConfig": {' \
+  '    "args": ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"]' \
+  '  },' \
+  '  "actions": [' \
+  '    "click element .theme-toggle__option[data-theme=\"dark\"]"' \
+  '  ]' \
+  '}' > /opt/pa11y-dark.json
+
 WORKDIR /workspace

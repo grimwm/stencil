@@ -29,14 +29,21 @@
       --text-muted: #5a6270;
       --text-label: #687080;
       --text-strong: #3a424f;
-      --text-faint: #99a1b0;
+      --text-faint: #6b7280;
 
       /* Lines */
       --border: #dee2e6;
       --border-muted: #c8c8c8;
 
       /* Accent, and what sits on top of it */
+      /* Two roles, two tokens. --accent is ink: text, borders, rules, and it
+         has to be legible ON a surface. --accent-fill is a background that
+         --on-accent text sits on. They are the same colour in light, which is
+         exactly why one token survived until dark mode made --accent light
+         and every filled control turned white-on-pale -- the deck's Present
+         button measured 2.35:1. */
       --accent: #29417a;
+      --accent-fill: #29417a;
       --on-accent: #fff;
       --on-accent-muted: rgba(255, 255, 255, 0.85);
       --on-accent-bright: rgba(255, 255, 255, 0.9);
@@ -516,7 +523,7 @@
 
     /* Navigation tabs - Bootstrap overrides */
     .nav-tabs.problem-tabs {
-      background: var(--accent);
+      background: var(--accent-fill);
       border-radius: 6px 6px 0 0;
       border: none;
       padding: 0.5rem 0.5rem 0;
@@ -696,6 +703,7 @@
         --border-muted: #3d4552;
 
         --accent: #8fa9e0;
+        --accent-fill: #2f4680;
         --on-accent: #fff;
         --on-accent-muted: rgba(255, 255, 255, 0.85);
         --on-accent-bright: rgba(255, 255, 255, 0.9);
@@ -745,6 +753,12 @@
         --bs-border-color: var(--border);
         --bs-secondary-bg: var(--surface-sunken);
         --bs-tertiary-bg: var(--surface-muted);
+        /* Bootstrap 5.3 resolves links through --bs-link-color-rgb, not
+           --bs-link-color: `a { color: rgba(var(--bs-link-color-rgb), ...) }`.
+           Setting the wrong one left every link at Bootstrap's light-mode
+           #0d6efd on a dark page -- 3.67:1, which pa11y caught. */
+        --bs-link-color-rgb: 143, 169, 224;
+        --bs-link-hover-color-rgb: 143, 169, 224;
         --bs-link-color: var(--accent);
         --bs-link-hover-color: var(--accent);
         --bs-code-color: var(--code-inline);
@@ -792,9 +806,14 @@
       cursor: pointer;
     }
 
+    /* The pressed segment is a filled chip rather than a tinted one: it
+       reads as pressed at a glance, and it puts --on-accent on
+       --accent-fill, a pair the contrast test holds at 4.5:1 in both
+       palettes. The tinted version measured 2.67:1 on the deck toolbar,
+       whose own translucent background pa11y cannot composite. */
     .theme-toggle__option[aria-checked="true"] {
-      background: var(--surface-accent);
-      color: var(--accent);
+      background: var(--accent-fill);
+      color: var(--on-accent);
     }
 
     .theme-toggle__option:focus-visible {

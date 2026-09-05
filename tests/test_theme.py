@@ -112,8 +112,11 @@ def contrast(foreground: str, background: str) -> float:
     return (max(a, b) + 0.05) / (min(a, b) + 0.05)
 
 
+# --text-faint is here too. It sat at 2.60:1 for as long as it was only
+# ::before content, which pa11y does not measure; the moment the separators
+# became real elements the checker saw it and failed.
 TEXT_TOKENS = ["--text", "--text-subtle", "--text-muted", "--text-label",
-               "--text-strong"]
+               "--text-strong", "--text-faint"]
 
 
 @pytest.mark.parametrize("token", TEXT_TOKENS)
@@ -434,3 +437,34 @@ def test_mermaid_reads_its_palette_from_the_tokens():
     assert "getPropertyValue" in js
     for token in ["--surface", "--text", "--accent"]:
         assert f"token('{token}')" in js, token
+
+
+@pytest.mark.parametrize("theme", ["light", "dark"])
+def test_on_accent_text_is_legible_on_the_accent_fill(theme):
+    """--accent is ink and --accent-fill is a background. One token doing both
+    is why the deck's Present button measured 2.35:1 in dark: --accent went
+    light so text could sit on a dark surface, and every filled control
+    inherited it while --on-accent stayed white.
+    """
+    css = strip_comments(source("_page-style.css.j2"))
+    table = dict(tokens(css))
+    if theme == "dark":
+        table.update(
+            dict(re.findall(r"(--[a-z0-9-]+)\s*:\s*([^;]+);", dark_block(css)))
+        )
+    fg = resolve(table["--on-accent"], table)
+    bg = resolve(table["--accent-fill"], table)
+    ratio = contrast(fg, bg)
+    assert ratio >= 4.5, (
+        f"{theme}: --on-accent ({fg}) on --accent-fill ({bg}) is "
+        f"{ratio:.2f}:1, under 4.5:1"
+    )
+
+
+def test_nothing_fills_with_the_ink_token():
+    """A background painted with --accent is the bug above, reintroduced."""
+    for template in STYLESHEETS:
+        css = strip_comments(source(template))
+        assert "background: var(--accent);" not in css, (
+            f"{template}: a fill uses the ink token instead of --accent-fill"
+        )

@@ -91,8 +91,16 @@
         for f in *.html; do
           [ -f "$$f" ] || continue
           case "$$f" in html-template.html|slide-template.html) continue ;; esac
-          echo "Checking $$f..."
-          pa11y --config /opt/pa11y.json --standard WCAG2AA "file:///workspace/$$f" || failed=1
+          # Both themes. The dark config clicks the theme control before
+          # measuring, so this is the rendered dark page rather than a claim
+          # about it -- and its contrast ratios are the ones nobody has looked
+          # at, 0.11.0 having shipped a 3.88:1 label that looked fine.
+          echo "Checking $$f (light)..."
+          pa11y --config /opt/pa11y.json --standard WCAG2AA \
+            "file:///workspace/$$f" || failed=1
+          echo "Checking $$f (dark)..."
+          pa11y --config /opt/pa11y-dark.json --standard WCAG2AA \
+            "file:///workspace/$$f" || failed=1
         done
         exit $$failed
     restart: "no"

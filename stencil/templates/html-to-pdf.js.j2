@@ -49,6 +49,16 @@ async function main() {
   try {
     const page = await browser.newPage();
 
+    // Defence in depth only. The stylesheet already makes it impossible for a
+    // dark rule to reach print -- every one is sealed inside @media screen,
+    // which print does not match -- and localStorage is empty in a fresh
+    // profile, so the page resolves to whatever this reports anyway. Pinned
+    // so a future Chromium default cannot quietly make that second argument
+    // untrue.
+    await page.emulateMediaFeatures([
+      { name: "prefers-color-scheme", value: "light" },
+    ]);
+
     page.on("requestfailed", (request) => {
       const failure = request.failure();
       failures.push(
