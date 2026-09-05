@@ -203,6 +203,26 @@
       accent-color: var(--accent-color);
     }
 
+    /* Ordered task lists. Pandoc puts class="task-list" on a <ul> only -- an
+       ordered one arrives as a bare <ol type="1"> carrying the very same
+       <label><input type=checkbox> items -- so not one of the rules above can
+       reach it. The box sat hard against the first letter with no gap, and
+       printed unchecked, because both fixes were spelled `ul.task-list`.
+
+       The ordinal is kept rather than replaced by the box the way a disc is:
+       the author wrote an ordered list, so the number is content rather than
+       decoration, and `1. [x]` should still say which item it is. That is the
+       whole difference from the unordered case -- there is no hanging indent
+       here, because the number already occupies that column. */
+    ol > li > label > input[type="checkbox"],
+    ol > li > input[type="checkbox"] {
+      /* Both sides. The right gap is the reported bug -- text hard against
+         the box -- but with only that, the box lands hard against the
+         ordinal instead and the same complaint reads "1.[ ] text". */
+      margin: 0 0.45em 0 0.35em;
+      accent-color: var(--accent-color);
+    }
+
     /* Code: mono font */
     code, pre {
       font-family: var(--font-mono);
@@ -433,8 +453,10 @@
       }
 
       /* Browsers drop form-control fills from print by default, which would
-         print a checked box as an empty one. */
-      ul.task-list input[type="checkbox"] {
+         print a checked box as an empty one. Not scoped to ul.task-list:
+         an ordered task list has no such class, and its checked boxes were
+         printing empty for exactly that reason. */
+      li input[type="checkbox"] {
         -webkit-print-color-adjust: exact;
         print-color-adjust: exact;
       }

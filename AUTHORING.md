@@ -52,22 +52,22 @@ infers the format from the `.md` extension and turns on its full default extensi
 authoritative reference is [pandoc's manual](https://pandoc.org/MANUAL.html#pandocs-markdown); these
 are the extensions the rest of this guide actually leans on.
 
-| Extension                | What it buys you                                                            |
-| ------------------------ | --------------------------------------------------------------------------- |
-| `fenced_divs`            | `::: {.hidden}`, `::: columns`, `::: takeaway` — every fence below          |
-| `bracketed_spans`        | `[text]{.class}` when you need a class on an inline run                     |
-| `header_attributes`      | `## Setup {#custom-id}` to pin a heading's id                               |
-| `auto_identifiers`       | Every other heading gets an id derived from its text                        |
-| `fenced_code_attributes` | ```` ```{.mermaid caption="…"} ````                                         |
-| `pipe_tables`            | The ordinary `\| a \| b \|` table                                           |
-| `tex_math_dollars`       | `$L = \lambda W$`                                                           |
-| `raw_html`               | The `<nav>` block that becomes a tab bar                                    |
-| `citations`              | `[@key]` and `@key` — see [Citations](#citations)                           |
-| `footnotes`              | `[^1]` and its definition                                                   |
-| `definition_lists`       | A term, then a `:`-prefixed definition                                      |
-| `task_lists`             | `- [ ]` and `- [x]` — the checkbox replaces the bullet                      |
-| `implicit_figures`       | An image alone in a paragraph becomes a `<figure>`, alt text as its caption |
-| `smart`                  | Straight quotes and `--` become typographic quotes and dashes               |
+| Extension                | What it buys you                                                                                            |
+| ------------------------ | ----------------------------------------------------------------------------------------------------------- |
+| `fenced_divs`            | `::: {.hidden}`, `::: columns`, `::: takeaway` — every fence below                                          |
+| `bracketed_spans`        | `[text]{.class}` when you need a class on an inline run                                                     |
+| `header_attributes`      | `## Setup {#custom-id}` to pin a heading's id                                                               |
+| `auto_identifiers`       | Every other heading gets an id derived from its text                                                        |
+| `fenced_code_attributes` | ```` ```{.mermaid caption="…"} ````                                                                         |
+| `pipe_tables`            | The ordinary `\| a \| b \|` table                                                                           |
+| `tex_math_dollars`       | `$L = \lambda W$`                                                                                           |
+| `raw_html`               | The `<nav>` block that becomes a tab bar                                                                    |
+| `citations`              | `[@key]` and `@key` — see [Citations](#citations)                                                           |
+| `footnotes`              | `[^1]` and its definition                                                                                   |
+| `definition_lists`       | A term, then a `:`-prefixed definition                                                                      |
+| `task_lists`             | `- [ ]` and `- [x]` — the checkbox replaces the bullet; `1. [ ]` keeps its number and puts the box after it |
+| `implicit_figures`       | An image alone in a paragraph becomes a `<figure>`, alt text as its caption                                 |
+| `smart`                  | Straight quotes and `--` become typographic quotes and dashes                                               |
 
 **There is one dialect, not two.** A deck and a document parse identically — same parser, same
 extensions. What differs is everything downstream of the parse: which pandoc HTML template wraps the
