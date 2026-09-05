@@ -9,6 +9,39 @@ and the closed epics in `.beads/issues.jsonl` are the readable index.
 How the version gets bumped is written down in
 [AGENTS.md](AGENTS.md#cutting-a-release), not here.
 
+## 0.9.0
+
+A document can carry the mark of what it belongs to.
+
+- **`brand` front matter, a name or a logo.** It renders at the top of the
+  header's right-hand column, above `program`, pushing the rest of the context
+  and the byline down. On a deck it sits above the title slide's context line.
+
+  The value decides which it is, rather than a second key: a `file://` prefix
+  or an image extension makes it a picture, anything else is a name. So
+  `St. Louis U.` stays text.
+
+  A picture is inlined as a `data:` URI like any other image. `file://img/logo.svg`
+  is rewritten to `img/logo.svg` before it is resolved, because
+  `embed-images.lua` classes anything matching `scheme://` as remote and leaves
+  it alone — a `file://` URI would have been the single spelling that never got
+  bundled, leaving the page carrying a path and `make pdf` failing on an asset
+  it could not fetch.
+
+  A logo is capped on both axes and never distorted -- whichever cap binds
+  first, the other dimension scales with it. Verified by measurement rather
+  than by reading the spec: a 900x60 wordmark renders 223.95x14.93 and a
+  50x600 crest renders 3.66x44, each at its exact natural ratio. A test guards
+  the `width: auto` / `height: auto` pair that makes that true, because pinning
+  either one turns the cap into a stretch silently, and only for whichever
+  logo happens to be the wrong shape.
+
+- **`brand-alt` is required when `brand` is a picture**, and the build fails
+  naming the key when it is missing. Deliberately not defaulted to `alt=""`: a
+  logo is frequently the only thing naming the institution on the page, so an
+  empty alt drops that for a screen reader, and `make check-access` runs pa11y
+  at WCAG 2.1 AA. A name needs none — it is already text.
+
 ## 0.8.0
 
 Ordered task lists get the styling bullet ones have had.

@@ -71,6 +71,29 @@
       color: #fff;
     }
 
+    /* Brand above the context line on a title slide, the same order a
+       document's header uses. White-on-gradient, so a logo with its own
+       background is the author's to supply appropriately. */
+    .slide--title .deck-brand {
+      font-family: var(--font-sans);
+      font-size: 1.35rem;
+      font-weight: 600;
+      color: #fff;
+      margin-bottom: 0.6rem;
+    }
+
+    .slide--title .deck-brand--image {
+      font-size: 0;
+      line-height: 0;
+    }
+
+    .slide--title .deck-brand img {
+      max-height: 3.5rem;
+      max-width: 18rem;
+      height: auto;
+      width: auto;
+    }
+
     /* Program, section and term on one line above the title. A deck has the
        width for all three, so unlike the document header this does not wrap
        the term onto its own line. */
