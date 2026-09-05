@@ -208,8 +208,8 @@ def test_the_deck_byline_never_strands_a_separator(render_soup):
     soup = render_soup(
         "slide", "deck.md", text=document('title: "T"\ndue: 2026-09-12\n')
     )
-    meta = line(soup, ".deck-meta")
-    assert meta == "Due Sep 12"
+    assert line(soup, ".deck-meta") == "Due Sep 12"
+    assert soup.select_one(".deck-authors") is None
 
 
 def test_the_deck_byline_joins_all_three(render_soup):
@@ -221,10 +221,10 @@ def test_the_deck_byline_joins_all_three(render_soup):
             "due: 2026-09-12T23:59\n"
         ),
     )
-    meta = line(soup, ".deck-meta")
-    assert meta == (
-        "Author Ada Lovelace · Issued Sep 01 · Due Sep 12 · 23:59"
-    )
+    # Two lines now: a team's author list gets its own, so six names and
+    # three facts cannot collide on one centred run.
+    assert line(soup, ".deck-authors") == "Ada Lovelace"
+    assert line(soup, ".deck-meta") == "Issued Sep 01 · Due Sep 12 · 23:59"
 
 
 def facts(soup) -> list[str]:
@@ -280,3 +280,26 @@ def test_no_combination_strands_a_separator(render_soup, front_matter, expected)
     assert facts(soup) == expected
     assert not facts(soup)[0].startswith("·")
     assert not facts(soup)[-1].endswith("·") or len(facts(soup)) == 1
+
+
+def test_the_header_extracts_as_words_not_a_run_on(render_soup):
+    """Every gap in the header is a real character, not only a painted one.
+
+    A flex `gap` puts space on screen and leaves nothing behind, so the header
+    copied out of the page -- or read back by pdftotext -- came out as
+    "AuthorAda Lovelace" and "Sep 01·Due". Both looked perfect in a browser.
+    """
+    soup = render_soup(
+        "doc",
+        "f.md",
+        text=document(
+            'title: "T"\nauthor:\n  - Ada Lovelace\n  - Grace Hopper\n'
+            "date: 2026-09-01\ndue: 2026-09-12T23:59\npoints: 50\n"
+        ),
+    )
+    header = " ".join(soup.select_one("header.doc-title").get_text().split())
+    assert "Author Ada Lovelace · Grace Hopper" in header
+    assert "Issued Sep 01 · Due Sep 12 · 23:59 · Points 50 pts" in header
+    # Nothing anywhere in the header is jammed against a separator or a label.
+    assert "·D" not in header and "·P" not in header and "·I" not in header
+    assert "AuthorA" not in header

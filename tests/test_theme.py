@@ -354,3 +354,22 @@ def test_the_control_is_hidden_in_print():
     assert any("theme-toggle" in b and "display: none" in b for b in print_blocks), (
         "the theme control is not hidden in print"
     )
+
+
+def test_every_byline_block_opts_out_of_the_title_scale():
+    """.doc-title is 2.2rem/700 and these are its descendants.
+
+    Naming the children is not enough: a flex container's own font-size still
+    raises a strut, so .doc-facts inherited 2.2rem and padded a 27px row to
+    60px while every child rendered at the right size. Measured in a browser,
+    invisible in the markup.
+    """
+    css = strip_comments(source("_page-style.css.j2"))
+    m = re.search(
+        r"((?:\.doc-[a-z]+,\s*)+\.doc-[a-z]+)\s*\{[^}]*font-size:\s*1rem", css, re.S
+    )
+    assert m, "no byline font-size rule"
+    named = set(re.findall(r"\.doc-[a-z]+", m.group(1)))
+    assert {".doc-meta", ".doc-facts", ".doc-context"} <= named, (
+        f"a byline block still inherits the title's 2.2rem: {named}"
+    )

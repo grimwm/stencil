@@ -117,8 +117,11 @@
     .doc-subtitle {
       font-size: 1.4rem;
       font-weight: 400;
+      font-style: italic;
       color: var(--text-subtle);
-      margin-top: 0.5rem;
+      /* Tight to the title. A subtitle belongs to the line above it, and half
+         a rem of air read as two unrelated headings rather than one unit. */
+      margin-top: 0.15rem;
     }
 
 
@@ -158,14 +161,21 @@
       grid-row: 1;
     }
 
+    /* Two stacked lines, not two columns: authors above, facts below.
+
+       An author list is the reason. Side by side, six names squeeze the facts
+       into a column too narrow to spread, and the two wrap into each other at
+       exactly the widths a project handout uses. Given the full width each,
+       a long author list simply takes another line and the facts keep their
+       own. */
     .doc-byline {
       grid-column: 1 / -1;
       grid-row: 2;
       margin-top: 0.6rem;
       display: flex;
-      flex-wrap: wrap;
-      align-items: baseline;
-      gap: 0.35rem 1.5rem;
+      flex-direction: column;
+      align-items: stretch;
+      gap: 0.3rem;
     }
 
     /* Both right-hand columns push themselves over rather than relying on
@@ -175,11 +185,14 @@
       text-align: right;
     }
 
-    /* Byline: author(s) and date, from the front matter. Both of these sit
-       inside .doc-title, so they have to opt out of that block's 2.2rem/700
-       rather than inherit it. */
+    /* Byline and context, from the front matter. All of these sit inside
+       .doc-title, so they have to opt out of that block's 2.2rem/700 rather
+       than inherit it -- and .doc-facts has to be named here even though
+       its children set their own size, because a flex container's own
+       font-size still raises a 2.2rem strut and pads the row to 60px for a
+       27px line. */
     .doc-meta,
-    .doc-date,
+    .doc-facts,
     .doc-context {
       font-size: 1rem;
       font-weight: 400;
@@ -821,7 +834,6 @@
        flex: 1 with min-width: 0 so a long author shortens this group instead
        of pushing it off the page. */
     .doc-facts {
-      flex: 1;
       min-width: 0;
       display: flex;
       flex-wrap: wrap;
@@ -832,6 +844,18 @@
 
     .doc-fact {
       white-space: nowrap;
+    }
+
+    /* Laid out as inline text rather than a flex row. Inline content wraps
+       between names on its own, and the spaces between them are real
+       characters -- a flex gap paints the space but leaves nothing to copy,
+       so the header reads "AuthorAda Lovelace" in a paste or a pdftotext. */
+    .doc-author {
+      white-space: nowrap;
+    }
+
+    .doc-author-sep {
+      color: var(--text-faint);
     }
 
     .doc-fact-sep {

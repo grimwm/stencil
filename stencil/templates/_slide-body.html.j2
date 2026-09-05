@@ -14,13 +14,22 @@ $if(subtitle)$
   <p class="deck-subtitle">$subtitle$</p>
 $endif$
 $if(has-byline)$
-  {# One line, for the reason _doc-body.html.j2 gives: a newline between these
+  {# Two lines, matching the document header: authors above, facts below. A
+     team's author list is the reason -- six names and three facts on one
+     centred run wraps into an unreadable block on a title slide.
+
+     Each line is one line of source on purpose: a newline between these
      collapses to a word space that lands on only one side of a separator.
 
-     `due-needs-separator` is computed in frontmatter-filter.lua because Due
-     needs a separator when *either* an author or an Issued date precedes it,
-     and a pandoc template cannot OR two keys together. #}
-  <p class="deck-meta">$if(author)$Author $for(author)$$author$$sep$ &middot; $endfor$$endif$$if(date-label)$$if(author)$ &middot; $endif$Issued <time datetime="$date-iso$">$date-label$</time>$endif$$if(due-label)$$if(due-needs-separator)$ &middot; $endif$Due <time datetime="$due-iso$">$due-label$</time>$endif$$if(points-label)$$if(points-needs-separator)$ &middot; $endif$Points $points-label$$endif$</p>
+     The separator flags are computed in frontmatter-filter.lua because each
+     asks whether *any* of several keys precedes it, which a pandoc template
+     cannot do. #}
+$if(author)$
+  <p class="deck-authors">$for(author)$<span class="deck-author">$author$</span>$sep$ <span class="deck-author-sep" aria-hidden="true">&middot;</span> $endfor$</p>
+$endif$
+$if(has-facts)$
+  <p class="deck-meta">$if(date-label)$Issued <time datetime="$date-iso$">$date-label$</time>$endif$$if(due-label)$$if(sep-before-due)$ &middot; $endif$Due <time datetime="$due-iso$">$due-label$</time>$endif$$if(points-label)$$if(sep-before-points)$ &middot; $endif$Points $points-label$$endif$</p>
+$endif$
 $endif$
 </section>
 $endif$

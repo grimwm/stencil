@@ -135,12 +135,32 @@
 
     .slide--title .deck-subtitle {
       font-size: 1.5rem;
+      font-style: italic;
       line-height: 1.35;
       color: var(--on-accent-bright);
       margin-bottom: 1.25rem;
       max-width: 46rem;
     }
 
+
+    /* Authors above the facts, matching the document header. flex-wrap so a
+       team's list wraps between names and stays centred rather than running
+       off the slide. */
+    .slide--title .deck-authors {
+      text-align: center;
+      font-family: var(--font-sans);
+      font-size: 1.05rem;
+      color: var(--on-accent-bright);
+      margin: 0 0 0.35rem;
+    }
+
+    .slide--title .deck-author {
+      white-space: nowrap;
+    }
+
+    .slide--title .deck-author-sep {
+      color: var(--on-accent-faint);
+    }
 
     .slide--title .deck-meta {
       font-family: var(--font-sans);
