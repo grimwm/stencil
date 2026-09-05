@@ -9,6 +9,40 @@ and the closed epics in `.beads/issues.jsonl` are the readable index.
 How the version gets bumped is written down in
 [AGENTS.md](AGENTS.md#cutting-a-release), not here.
 
+## 0.5.0
+
+Typography fixes in the document stylesheet. Every generated document and deck
+renders differently, on screen and on paper, so this is a minor bump.
+
+Three instances of one mistake: a size stated in `pt` inside `@media print` for
+some selectors, with the neighbouring ones left on `rem`. A `rem` is measured
+against the root font size, not against the element beside it, so the two units
+do not compare and the hierarchy inverts once the page is printed.
+
+- **A document's subtitle printed larger than its title.** `.doc-title` scaled
+  to 18pt while `.doc-subtitle` kept its screen `1.8rem` — 21.6pt. The student's
+  name printed 20% larger than the assignment. Only the PDF was wrong, which is
+  why it lasted (`stn-09g`).
+- **The printed heading scale inverted at `h4`.** `h1`, `h2` and `h3` had `pt`
+  sizes; `h4`, `h5` and `h6` did not, so they kept Bootstrap's `rem`. Measured
+  off a real PDF: `h1` 21.3, `h2` 18.7, `h3` 16.0, then `h4` 22.3 — larger than
+  `h1` and just under the title.
+- **On screen a section heading outranked the document title.** stencil set no
+  size for `h1`–`h6` at all, so they inherited Bootstrap's viewport-relative
+  scale, `calc(1.375rem + 1.5vw)`. `h1` measured 39.4px against the title's
+  35.2px, and resized with the window while the title stayed put.
+
+The subtitle is also no longer bold: at `1.8rem`/700 under a `2.2rem`/700 title
+it read as a second title rather than a subordinate line, and being the longer
+of the two it took the eye. It is now `1.4rem`/400.
+
+Headings now state their own sizes on screen and in print, stepping down
+monotonically under the title in both, with the screen steps tracking the print
+block's ratios against body text.
+
+Known and not fixed: a deck's title prints at the same size as a slide heading,
+and whether it does depends on an unrelated frontmatter key (`stn-tum`).
+
 ## 0.4.0
 
 An undefined name in a template is now an error rather than the empty string,
