@@ -9,6 +9,27 @@ and the closed epics in `.beads/issues.jsonl` are the readable index.
 How the version gets bumped is written down in
 [AGENTS.md](AGENTS.md#cutting-a-release), not here.
 
+## 0.8.0
+
+Ordered task lists get the styling bullet ones have had.
+
+- **`1. [ ]` no longer renders with the box jammed against the text.** Pandoc
+  puts `class="task-list"` on a `<ul>` only; an ordered task list arrives as a
+  bare `<ol type="1">` carrying the identical
+  `<label><input type=checkbox>` items. Every rule from 0.4.0's task-list work
+  was spelled `ul.task-list`, so an ordered list matched none of them — no gap
+  beside the control, no accent tint, and a checked box printed empty because
+  the print opt-out was scoped the same way.
+
+  The two are still styled differently, on purpose. A bullet list's disc is
+  decoration, so the checkbox replaces it and the text hangs off it. An ordered
+  list's number is content the author asked for, so it stays and the box takes
+  room beside it: `1. [x] done`, not `[x] done`.
+
+  The gap is on both sides of the control. With only the reported side fixed,
+  the box lands against the ordinal instead and the same complaint reads
+  `1.[ ] text`.
+
 ## 0.7.0
 
 A document says what it belongs to, and `show_date: no` means no.
