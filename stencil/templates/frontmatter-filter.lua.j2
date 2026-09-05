@@ -45,7 +45,7 @@ local CONTEXT = { "program", "section", "term" }
 -- `author` and `date` are here for the header rows below: an empty author is
 -- falsy to `$if(author)$` but not to `~= nil`, so without this an `author:`
 -- with nothing after it would open a byline row with nothing to put in it.
-local BLANKABLE = { "program", "section", "term", "author", "date" }
+local BLANKABLE = { "program", "section", "term", "author", "date", "lang", "dir" }
 
 local function trim(text)
   -- match, not a chained gsub: gsub returns the replacement count as a second

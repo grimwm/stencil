@@ -295,3 +295,59 @@ def test_the_deck_title_prints_the_same_size_either_way(to_pdf):
         f"the title printed at {sizes['bare']} without a program and "
         f"{sizes['program']} with one"
     )
+
+
+# --- lang and dir ----------------------------------------------------------
+#
+# Both templates hardcoded `<html lang="en">`, so the attribute was always
+# present -- this was never the WCAG 3.1.1 hole an absent one would be. What it
+# was is a page asserting a language it might not be written in, which is the
+# more awkward failure: a screen reader pronounces Spanish prose with English
+# phonetics and sounds confidently wrong rather than obviously broken.
+#
+# Three levels resolve it, narrowest first: front matter, then the package or
+# config-wide `lang:`, then `en`.
+
+
+def html_attrs(soup) -> dict:
+    return soup.select_one("html").attrs
+
+
+def test_the_default_is_still_english(render_soup):
+    """The behavior every existing project has. Setting nothing anywhere must
+    not start emitting a different language, or no language at all."""
+    soup = render_soup("doc", "l.md", text=document('title: "T"\n'))
+    assert html_attrs(soup)["lang"] == "en"
+
+
+def test_front_matter_names_the_language(render_soup):
+    soup = render_soup("doc", "l.md", text=document('title: "T"\nlang: es\n'))
+    assert html_attrs(soup)["lang"] == "es"
+
+
+def test_a_deck_reads_it_too(render_soup):
+    soup = render_soup("slide", "l.md", text=deck('title: "T"\nlang: fr\n'))
+    assert html_attrs(soup)["lang"] == "fr"
+
+
+def test_dir_is_absent_until_asked_for(render_soup):
+    """Browsers infer ltr. An attribute asserting it adds nothing, and one
+    asserting it wrongly reverses the page."""
+    soup = render_soup("doc", "l.md", text=document('title: "T"\nlang: en\n'))
+    assert "dir" not in html_attrs(soup)
+
+
+def test_dir_renders_when_it_is(render_soup):
+    soup = render_soup(
+        "doc", "l.md", text=document('title: "T"\nlang: ar\ndir: rtl\n')
+    )
+    attrs = html_attrs(soup)
+    assert attrs["lang"] == "ar"
+    assert attrs["dir"] == "rtl"
+
+
+def test_a_blank_lang_falls_back_rather_than_emitting_nothing(render_soup):
+    """`lang:` with nothing after it must not produce lang="", which is worse
+    than the default: it asserts an unknown language rather than no claim."""
+    soup = render_soup("doc", "l.md", text=document('title: "T"\nlang:\n'))
+    assert html_attrs(soup)["lang"] == "en"

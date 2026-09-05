@@ -14,6 +14,8 @@ against, which must stay legal.
 
 from __future__ import annotations
 
+import re
+
 import pytest
 
 from stencil.generate import build_environment, validate_config
@@ -207,3 +209,77 @@ def test_a_key_read_through_the_nested_template_env_dict_counts_as_read(check):
             "nginx.j2": "{% if (template_env | default({})).get('docroot_subdir') %}x{% endif %}\n"
         },
     )
+
+
+# --- the config-wide language default --------------------------------------
+#
+# Resolved at generation time rather than render time: the value is baked into
+# the pandoc template as the `$else$` branch of its lang attribute, so these
+# assert on the generated template rather than on a rendered page. The front
+# matter half of the precedence is in tests/test_frontmatter.py, which needs a
+# real pandoc to exercise the `$if$`.
+
+LANG_CONFIG = {
+    "templates": [{"src": "html-template.html.j2"}],
+    "packages": {"demo": {"name": "Demo", "package_type": "none", "docs": ["a.md"]}},
+}
+
+
+def generated_lang_default(generate_package, config) -> str:
+    """The language the template falls back to when front matter names none."""
+    text = (generate_package(config) / "html-template.html").read_text()
+    match = re.search(r'<html lang="\$if\(lang\)\$\$lang\$\$else\$([^"$]*)\$', text)
+    assert match, "the lang attribute is not in the shape these tests assume"
+    return match.group(1)
+
+
+def test_english_when_nothing_says_otherwise(generate_package):
+    assert generated_lang_default(generate_package, LANG_CONFIG) == "en"
+
+
+def test_a_config_wide_lang_becomes_the_default(generate_package):
+    config = {**LANG_CONFIG, "lang": "es"}
+    assert generated_lang_default(generate_package, config) == "es"
+
+
+def test_a_package_lang_outranks_the_config_wide_one(generate_package):
+    """One section taught in another language, without moving every other
+    package off the shared default."""
+    config = {
+        **LANG_CONFIG,
+        "lang": "es",
+        "packages": {
+            "demo": {
+                "name": "Demo",
+                "package_type": "none",
+                "docs": ["a.md"],
+                "lang": "fr",
+            }
+        },
+    }
+    assert generated_lang_default(generate_package, config) == "fr"
+
+
+def test_a_package_dir_is_not_read_as_a_text_direction(generate_package):
+    """`dir:` on a package is its output subdirectory and has been for the life
+    of the tool. It must not leak into the html tag as a direction."""
+    config = {
+        **LANG_CONFIG,
+        "packages": {
+            "demo": {
+                "name": "Demo",
+                "package_type": "none",
+                "docs": ["a.md"],
+                "dir": "rtl",
+            }
+        },
+    }
+    # make_package returns out/<package_id> and does not follow `dir:`, so
+    # find the template wherever generation actually put it.
+    pkg = generate_package(config)
+    generated = list(pkg.parent.rglob("html-template.html"))
+    assert len(generated) == 1, f"expected one generated template, got {generated}"
+    text = generated[0].read_text()
+
+    assert 'dir="rtl"' not in text, "a package's output dir leaked into <html dir>"
+    assert generated[0].parent.name == "rtl", "`dir:` should still pick the folder"

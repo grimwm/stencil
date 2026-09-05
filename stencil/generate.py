@@ -163,6 +163,15 @@ def get_template_context(package_id: str, config: dict) -> dict:
     context = {
         "package_id": package_id,
         "name": package.get("name", package_id),
+        # The <html lang> a page falls back to when its front matter names no
+        # language. Package first, then config-wide, then English -- which is
+        # what both templates hardcoded before this, so an existing project
+        # that sets neither renders exactly as it did.
+        #
+        # Note this is `lang` on the *package*, not `dir`: a package's `dir` is
+        # already its output subdirectory, so text direction has no config-level
+        # spelling and stays front matter only.
+        "lang": package.get("lang") or config.get("lang") or "en",
         "package_name": package_name,
         "package_dir": package.get("dir", f"{package_id}"),
         "package_type": package_type,

@@ -128,6 +128,8 @@ the pipeline reads, and what each one does on each side:
 | `author`      | Second row, under the title      | Byline on the title slide                       |
 | `date`        | Second row, opposite the author  | Byline, after the author                        |
 | `show_date`   | Stamps the build date as `date`  | Same                                            |
+| `lang`        | `<html lang>` (default `en`)     | Same                                            |
+| `dir`         | `<html dir>`, only when set      | Same                                            |
 | `slide-level` | Ignored                          | Heading level that starts a slide (default `2`) |
 
 `author` takes one name or a list of them:
@@ -197,6 +199,35 @@ without `frontmatter-filter.lua` normalizing it first, `show_date: no` would pri
 Writing your own `date:` beats `show_date` — a date you wrote is the date you meant — so use one or
 the other, not both. The stamp is the build machine's day, not the container's UTC one.
 
+#### `lang` and `dir`
+
+The language a page claims to be written in, and its text direction:
+
+```markdown
+---
+title: "Informe de Sprint"
+lang: es
+---
+```
+
+`lang` defaults to `en` and is never omitted — a page with no language is a WCAG 2.1 failure (3.1.1),
+and `make check-access` will say so. A whole project or one package can change that default without
+every file repeating it; see [STENCIL.md](STENCIL.md). Front matter wins over both.
+
+`dir` is only emitted when you set it. Browsers infer `ltr`, so an attribute saying so adds nothing,
+and one saying so wrongly reverses the page. Set it alongside a right-to-left `lang`:
+
+```markdown
+---
+title: "تقرير"
+lang: ar
+dir: rtl
+---
+```
+
+There is no config-level `dir`. A package's `dir:` is already its output subdirectory, and giving one
+key two meanings is how the package name ended up being a document's course.
+
 #### Keys that come from the build
 
 `include-<feature>`, which `WITH=` sets — see [Optional content](#optional-content) — and
@@ -214,7 +245,6 @@ than an error. Listed because "it parsed" reads a lot like "it worked":
 | ---------------------------------------------------- | ----------------------------------------------- |
 | `abstract`, `abstract-title`                         | An abstract block above the body                |
 | `keywords`, `description`                            | `<meta>` tags in the head                       |
-| `lang`, `dir`                                        | `<html lang>` and text direction                |
 | `title-prefix`                                       | A prefix on the browser tab                     |
 | `toc`, `toc-title`                                   | A table of contents (stencil passes no `--toc`) |
 | `institute`, `thanks`                                | Title-block extras on pandoc's own templates    |

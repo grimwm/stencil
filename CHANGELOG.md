@@ -49,6 +49,18 @@ A document says what it belongs to, and `show_date: no` means no.
   pushed a `<p>` in front and gave the title its size back, which is why it
   looked like a print-only bug. Both media now exclude the title slide.
 
+- **`lang` and `dir` front matter, with a config-wide default.** Both templates
+  hardcoded `<html lang="en">`, so a page written in Spanish asserted it was
+  English — a screen reader pronounced it with English phonetics and sounded
+  confidently wrong rather than obviously broken. Resolved narrowest first: a
+  document's `lang:`, then a package's or the config's, then `en`. The
+  attribute is never omitted, so nothing that renders today changes.
+
+  `dir` is front matter only and emitted only when set. There is no
+  config-level spelling for it because a package's `dir:` is already its output
+  subdirectory, and giving one key two meanings is the mistake this release
+  undoes elsewhere.
+
 - **AUTHORING.md lists the keys stencil does *not* render.** `abstract`,
   `keywords`, `lang`, `toc` and the rest parse fine and do nothing, which reads
   a lot like working.
