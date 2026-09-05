@@ -518,7 +518,9 @@ end
 ---
 --- The ISO string is kept verbatim for the <time datetime> attribute, so the
 --- HTML stays machine-readable however short the visible form gets. A PDF
---- keeps only the visible text, which is why that form stays lossless too.
+--- keeps only the visible text, which drops the year on purpose: unprinted
+--- rather than lost, per the spec's no-year decision -- the datetime
+--- attribute still carries it for anything reading rather than looking.
 local function stamp_keys(meta, key)
   local text = text_of(meta[key])
   if text == nil then
