@@ -1,0 +1,104 @@
+# yaml-language-server: $schema=https://storage.googleapis.com/coderabbit_public_assets/schema.v2.json
+#
+# Foundry-managed CodeRabbit config. Dropped into a repo as `.coderabbit.yaml` by
+# the foundry `pr-review-local` skill, which ALSO tailors the `path_instructions`
+# block to whatever stack it detects in the repo. The blocks below are the
+# always-on baseline; the skill appends stack-specific entries.
+#
+# Profile is `assertive` on purpose: we want the strict, opinionated reviewer for
+# a local pre-PR gate, not the gentle default.
+language: en-US
+early_access: false
+
+reviews:
+  profile: assertive
+  request_changes_workflow: true
+  high_level_summary: true
+  poem: false
+  review_status: true
+  collapse_walkthrough: false
+
+  # Strict, cross-cutting adversarial security pass on EVERY file. This is the
+  # baseline that always applies regardless of stack — the skill layers
+  # stack-specific instructions on top.
+  path_instructions:
+    - path: "**"
+      instructions: >
+        Act as a strict adversarial security reviewer. Hunt for cross-cutting
+        vulnerabilities across web, networking, OS, and data layers, not just
+        local style. Specifically flag: injection of any kind (SQL, NoSQL,
+        command, LDAP, template, header), authentication and authorization gaps
+        (missing checks, IDOR, privilege escalation, broken object-level
+        authorization), SSRF and unsafe outbound requests, path traversal and
+        unsafe filesystem or OS calls, insecure deserialization, secrets or
+        credentials committed in code or config, weak or missing input
+        validation at trust boundaries, unsafe handling of untrusted input from
+        the network, race conditions and TOCTOU windows, missing rate limiting
+        on sensitive endpoints, CORS and CSRF misconfiguration, insecure cookie
+        and session handling, and information disclosure through errors or logs.
+        Map findings to OWASP Top 10 / CWE where possible and state the concrete
+        exploit path, not just the smell. Prefer false positives over silence on
+        anything security-relevant.
+
+    - path: "**/*.py"
+      instructions: >
+        Flag eval/exec, pickle or yaml.load on untrusted input, and shell=True
+        or unsanitized argv in subprocess calls. Secrets must come from the
+        environment, never literals. This package shells out to git, bd and
+        container runtimes: check that return codes are inspected rather than
+        assumed, that a missing or failing external tool degrades deliberately
+        rather than crashing or silently passing, and that a guard which is
+        supposed to block on a condition cannot exit success when its input is
+        unavailable. Paths built from config or user input must not escape the
+        working directory.
+
+    - path: "scripts/**"
+      instructions: >
+        These run as git hooks. A hook that fails open is worse than no hook:
+        verify every early return that yields success is a deliberate,
+        documented decision and not an unhandled state. Check that the thing
+        being compared is the thing that will actually be pushed or committed,
+        not a mutable working-tree copy of it.
+
+    - path: "stencil/templates/**"
+      instructions: >
+        Jinja2 templates that render Makefiles, shell scripts and compose files
+        for downstream projects. Flag interpolation of config values into shell
+        or make recipes without quoting, anything that could inject a command
+        through a package or file name, and conditional blocks whose guards do
+        not enclose everything they are meant to. Generated recipes must not
+        pair mismatched output suffixes or depend on stale artifacts.
+
+    - path: ".github/workflows/**"
+      instructions: >
+        Pin actions to SHAs where practical, keep `permissions:` least
+        privilege, never use pull_request_target with a checkout of untrusted
+        code, and ensure secrets are not echoed into logs.
+
+  auto_review:
+    enabled: true
+    drafts: false
+
+  tools:
+    # Secret scanning — block credentials/keys from ever reaching a PR.
+    gitleaks:
+      enabled: true
+    # Multi-language static security analysis (taint, injection, authz).
+    semgrep:
+      enabled: true
+    # Shell script correctness/safety.
+    shellcheck:
+      enabled: true
+    # YAML / GitHub Actions / config hygiene.
+    yamllint:
+      enabled: true
+    actionlint:
+      enabled: true
+    checkov:
+      enabled: true
+    # Markdown docs.
+    markdownlint:
+      enabled: true
+
+chat:
+  auto_reply: true
