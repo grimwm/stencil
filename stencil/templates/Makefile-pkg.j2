@@ -1,19 +1,64 @@
+{% if package_type == "zip" or has_package_sources %}
+# What `pkg` puts into the submission. One rule for every package type:
+#
+#   md/*.md    a glob -- expands in sorted order
+#   md         a directory -- everything in it, not just the markdown
+#   intro.md   anything else -- passed through as written, in the listed position
+#
+# Nothing is filtered by extension and nothing is inferred from a name: to take
+# only the markdown out of a directory, say so with a glob. Expansion happens at
+# build time, so a file created after this Makefile was generated resolves too.
+PKG_SOURCE_SPECS = {{ package_sources | join(' ') }}
 {% if package_type == "zip" %}
+# zip -r walks a directory itself (dotfiles included), so a directory entry is
+# handed over whole rather than expanded into its children here.
+pkg_expand = $(if $(findstring *,$(1)),$(sort $(wildcard $(1))),$(1))
+{% else %}
+# pandoc reads files, not directories, so a directory entry is expanded into
+# everything directly inside it. $(wildcard x/.) is make's directory test.
+pkg_expand = $(if $(wildcard $(1)/.),$(sort $(wildcard $(1)/*)),$(if $(findstring *,$(1)),$(sort $(wildcard $(1))),$(1)))
+{% endif %}
+PKG_SOURCES = $(foreach s,$(PKG_SOURCE_SPECS),$(call pkg_expand,$(s)))
+
+{% endif %}
+{% if package_type == "zip" %}
+# Compress-Archive -Path takes a comma-separated list. Defined here rather than
+# borrowed from the doc template, which a zip package need not include.
+pkg_empty :=
+pkg_space := $(pkg_empty) $(pkg_empty)
+pkg_comma := ,
+
 ifeq ($(OS),Windows_NT)
 pkg: ## Create submission zip file
 	@echo Creating submission zip file...
-	powershell.exe -Command "Compress-Archive -Path {{ package_folder }} -DestinationPath \"$(PKG)\" -Force"
+	powershell.exe -Command "Compress-Archive -Path $(subst $(pkg_space),$(pkg_comma),$(PKG_SOURCES)) -DestinationPath \"$(PKG)\" -Force"
 	@echo Created $(PKG)
 	@echo Upload $(PKG) to the course website.
 else
 pkg: ## Create submission zip file
 	@echo "Creating submission zip file..."
-	zip -r $(PKG) {{ package_folder }}
+	zip -r $(PKG) $(PKG_SOURCES)
 	@echo "Created $(PKG)"
 	@echo "Upload $(PKG) to the course website."
 endif
 
+{% elif has_package_sources %}
+PKG_HTML = {{ package_stem }}$(OUTPUT_SUFFIX).html
+PKG = {{ package_stem }}$(OUTPUT_SUFFIX).pdf
+
+# One pandoc run over every source, so the result is a single flowing document
+# rather than one page per file. $(OUTPUT_SUFFIX) is on both the HTML and the
+# PDF so `make pkg with=hidden` prints the answer-key HTML into the answer-key
+# PDF rather than pairing one with the other.
+pkg: format-md ## Build {{ package_name }} from {{ package_sources | join(' ') }}
+	@test -n "$(PKG_SOURCES)" || { echo "package_sources matched nothing: $(PKG_SOURCE_SPECS)"; exit 1; }
+	@docker images -q {{ pandoc_image }} | grep -q . || $(DC) pull doc
+	$(DC) run --rm doc --metadata course="{{ name }}" $(METADATA_FLAGS) $(PKG_SOURCES) -o $(PKG_HTML)
+	$(DC) build pdf
+	$(DC) run --rm pdf $(PKG_HTML) $(PKG)
+	@echo "Created $(PKG)"
+	@echo "Upload $(PKG) to the course website."
+
 {% endif %}
 clean-pkg: ## Remove generated files
-	rm -f {% if package_type == "zip" %}$(PKG) {% endif %}{% for md in docs + slides %}{{ md | replace('.md', '.html') }} {{ md | replace('.md', '-*.html') }} {{ md | replace('.md', '.pdf') }} {{ md | replace('.md', '-*.pdf') }} {% endfor %}
-
+	rm -f {% if package_type == "zip" %}$(PKG) {% endif %}{% if has_package_sources %}{{ package_stem }}.html {{ package_stem }}-*.html {{ package_stem }}.pdf {{ package_stem }}-*.pdf {% endif %}{% for md in docs + slides %}{{ md | replace('.md', '.html') }} {{ md | replace('.md', '-*.html') }} {{ md | replace('.md', '.pdf') }} {{ md | replace('.md', '-*.pdf') }} {% endfor %}
