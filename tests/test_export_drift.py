@@ -190,3 +190,44 @@ def test_a_stale_export_is_told_to_re_export(drift_check):
     assert drift is not None
     assert "bd export" in drift
     assert "uncommitted" not in drift
+
+
+def test_a_missing_git_is_left_alone(drift_check, monkeypatch):
+    """The hook must not crash where git cannot be run.
+
+    subprocess raises rather than returning non-zero when the binary is absent,
+    and an exception out of a pre-push hook is a worse failure than the drift
+    it was looking for.
+    """
+    import subprocess
+
+    def no_git(*args, **kwargs):
+        raise FileNotFoundError("git")
+
+    monkeypatch.setattr(subprocess, "run", no_git)
+
+    assert drift_check.committed_export() is None
+
+
+def test_a_non_ascii_export_is_read_as_utf8(drift_check, repo, monkeypatch):
+    """Issue text carries em-dashes, so a hook running under LANG=C must not die.
+
+    text=True and read_text() both default to the locale encoding, which is
+    ASCII on a bare CI runner.
+    """
+    monkeypatch.chdir(repo)
+    import subprocess
+
+    # ensure_ascii=False, which is what `bd export` writes -- the real export
+    # carries several hundred raw em-dash and middot bytes.
+    raw = json.dumps(
+        {"id": "stn-1", "title": "Résumé — dash", "status": "open"},
+        ensure_ascii=False,
+    )
+    (repo / ".beads" / "issues.jsonl").write_text(raw + "\n", encoding="utf-8")
+    subprocess.run(["git", "add", "-A"], cwd=repo, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "commit", "-qm", "unicode"], cwd=repo, check=True, capture_output=True
+    )
+
+    assert "Résumé — dash" in drift_check.committed_export()

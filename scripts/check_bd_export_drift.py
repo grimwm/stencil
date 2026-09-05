@@ -123,12 +123,22 @@ def committed_export() -> str | None:
 
     None when there is nothing to compare against: outside a git repo, before
     the first commit, or when the export has never been tracked.
+
+    Decoded as UTF-8 explicitly. The export carries em-dashes and middots, and
+    text mode otherwise decodes with the locale encoding -- which is ASCII on a
+    runner with no LANG set, turning a drift check into a UnicodeDecodeError.
     """
-    result = subprocess.run(
-        ["git", "show", f"HEAD:{EXPORT.as_posix()}"],
-        capture_output=True,
-        text=True,
-    )
+    try:
+        result = subprocess.run(
+            ["git", "show", f"HEAD:{EXPORT.as_posix()}"],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+        )
+    except OSError:
+        # No git on this machine. subprocess raises rather than returning
+        # non-zero, and an exception out of a hook is worse than the drift.
+        return None
     if result.returncode != 0:
         return None
     return result.stdout
@@ -142,14 +152,18 @@ def fresh_export() -> str | None:
     """
     with tempfile.TemporaryDirectory() as tmp:
         destination = Path(tmp) / "issues.jsonl"
-        result = subprocess.run(
-            ["bd", "export", "-o", str(destination)],
-            capture_output=True,
-            text=True,
-        )
+        try:
+            result = subprocess.run(
+                ["bd", "export", "-o", str(destination)],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+            )
+        except OSError:
+            return None
         if result.returncode != 0 or not destination.exists():
             return None
-        return destination.read_text()
+        return destination.read_text(encoding="utf-8")
 
 
 def main() -> int:
@@ -170,7 +184,9 @@ def main() -> int:
         # check's business to fail the push over.
         return 0
 
-    drift = describe_drift(committed, exported, working_tree=EXPORT.read_text())
+    drift = describe_drift(
+        committed, exported, working_tree=EXPORT.read_text(encoding="utf-8")
+    )
     if drift is None:
         return 0
 
