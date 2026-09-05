@@ -254,3 +254,104 @@ def test_the_byline_labels_every_field_it_names():
     assert '<span class="doc-label">Author</span>' in body
     assert '<span class="doc-label">Issued</span>' in body
     assert '<span class="doc-label">Due</span>' in body
+
+
+HEAD = TEMPLATES / "_page-head.html.j2"
+
+
+def theme_script() -> str:
+    """The inline theme <script>, brace-matched to its own tags.
+
+    Slicing a fixed character window around a marker was the first attempt and
+    was wrong for the usual reason: it silently measures whatever happens to
+    sit nearby rather than the thing being asserted about.
+    """
+    head = HEAD.read_text()
+    start = head.rindex("<script>", 0, head.index("__stencilTheme"))
+    end = head.index("</script>", start)
+    return head[start:end]
+
+
+def test_theme_resolution_runs_before_the_stylesheets():
+    """Order is the whole point. A stylesheet parsed before the theme is
+    resolved paints light first, which is a white flash for a dark reader on
+    every single page load."""
+    head = HEAD.read_text()
+    script = head.index("__stencilTheme")
+    first_style = head.index("<style>")
+    assert script < first_style, (
+        "the theme script runs after a stylesheet; dark readers get a flash"
+    )
+
+
+def test_every_storage_access_is_guarded():
+    """Private windows and blocked site data throw on localStorage access,
+    and html-to-pdf.js fails the build on an uncaught page error -- so an
+    unguarded read turns a browser setting into a broken PDF."""
+    block = theme_script()
+    for access in ["localStorage.getItem", "localStorage.setItem"]:
+        assert access in block, f"{access} not found"
+    # Each access sits inside a try, and each try has a catch.
+    assert block.count("try {") >= 2, "a storage access is unguarded"
+    assert block.count("try {") == block.count("catch"), "a try without a catch"
+
+
+def test_an_explicit_choice_outranks_the_operating_system():
+    """Following an OS change while the reader has explicitly chosen would
+    silently overturn their choice."""
+    head = HEAD.read_text()
+    m = re.search(r"query\.addEventListener\('change',[^}]*\}", head, re.S)
+    assert m, "no matchMedia listener"
+    assert "read() === 'system'" in m.group(0), (
+        "the OS listener does not check the stored preference first"
+    )
+
+
+TOGGLE = TEMPLATES / "_theme-toggle.html.j2"
+
+
+def test_the_control_is_a_radiogroup_with_three_named_options():
+    """Three mutually exclusive states, so a radiogroup rather than three
+    buttons -- a screen reader should say "2 of 3", not name three unrelated
+    controls."""
+    markup = TOGGLE.read_text()
+    assert "role', 'radiogroup'" in markup or 'role\', \'radiogroup\'' in markup
+    assert markup.count("'radio'") >= 1
+    for value in ["'light'", "'dark'", "'system'"]:
+        assert value in markup, f"no {value} option"
+    assert "aria-label', 'Color theme'" in markup
+
+
+def test_the_pressed_segment_tracks_the_preference_not_the_resolved_theme():
+    """With System chosen on a dark OS, data-theme is "dark" while the
+    pressed segment must still read System. Tracking the resolved value would
+    have the control report a choice the reader never made."""
+    markup = TOGGLE.read_text()
+    m = re.search(r"subscribe\(function \(theme, pref\) \{(.*?)\n      \}\);",
+                  markup, re.S)
+    assert m, "no subscription"
+    body = m.group(1)
+    assert "=== pref" in body, "the pressed segment is not compared against pref"
+    assert "=== theme" not in body, "the pressed segment follows the resolved theme"
+
+
+def test_the_glyph_is_hidden_and_the_label_carries_the_name():
+    """The glyph is decorative. If it were the accessible name, the control
+    would announce as an unpronounceable character."""
+    markup = TOGGLE.read_text()
+    assert 'aria-hidden="true"' in markup
+    assert "theme-toggle__label" in markup
+    css = strip_comments(source("_page-style.css.j2"))
+    label = re.search(r"\.theme-toggle__label\s*\{([^}]*)\}", css, re.S)
+    assert label, "no visually-hidden rule for the label"
+    assert "display: none" not in label.group(1), (
+        "display:none would remove the accessible name, not just hide it"
+    )
+
+
+def test_the_control_is_hidden_in_print():
+    css = strip_comments(source("_page-style.css.j2"))
+    print_blocks = re.findall(r"@media print[^{]*\{(.*?)\n    \}", css, re.S)
+    assert any("theme-toggle" in b and "display: none" in b for b in print_blocks), (
+        "the theme control is not hidden in print"
+    )

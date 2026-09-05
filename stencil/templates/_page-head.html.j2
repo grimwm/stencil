@@ -5,6 +5,68 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>$if(program)$$program$: $endif$$title$</title>
 
+  <!-- Theme resolution. Inline, synchronous, and ahead of every stylesheet on
+       purpose: anything deferred paints the light palette first, so a reader
+       who chose dark gets a white flash on every page load.
+
+       Resolution happens here rather than through a prefers-color-scheme
+       variant in CSS so the dark palette is written once instead of twice.
+       These pages already need JS for Mermaid, tabs and highlighting, so
+       no-JS-means-light is an acceptable floor.
+
+       data-theme carries the RESOLVED value the stylesheet reads;
+       data-theme-pref carries the preference the control shows as pressed.
+       They differ whenever the preference is "system". -->
+  <script>
+  (function () {
+    var KEY = 'stencil-theme';
+    var root = document.documentElement;
+    var query = window.matchMedia('(prefers-color-scheme: dark)');
+    var listeners = [];
+
+    /* Every storage access is wrapped. Private windows and blocked site data
+       throw on access, and html-to-pdf.js treats an uncaught page error as a
+       failed build -- so an unguarded read here would turn a reader's browser
+       setting into a broken PDF. */
+    function read() {
+      try {
+        var stored = window.localStorage.getItem(KEY);
+        return stored === 'light' || stored === 'dark' ? stored : 'system';
+      } catch (error) {
+        return 'system';
+      }
+    }
+
+    function apply(pref) {
+      var theme = pref === 'system' ? (query.matches ? 'dark' : 'light') : pref;
+      root.dataset.theme = theme;
+      root.dataset.themePref = pref;
+      /* Tells the browser to render its own widgets -- scrollbars, form
+         controls -- to match, which CSS custom properties cannot do. */
+      root.style.colorScheme = theme;
+      for (var i = 0; i < listeners.length; i++) listeners[i](theme, pref);
+    }
+
+    apply(read());
+
+    /* Only while the preference is "system": an explicit choice outranks the
+       operating system, and following it anyway would silently overturn what
+       the reader picked. */
+    query.addEventListener('change', function () {
+      if (read() === 'system') apply('system');
+    });
+
+    window.__stencilTheme = {
+      get: read,
+      set: function (pref) {
+        try { window.localStorage.setItem(KEY, pref); } catch (error) {}
+        apply(pref);
+      },
+      subscribe: function (fn) { listeners.push(fn); fn(root.dataset.theme, read()); },
+    };
+  })();
+  </script>
+
   <!-- Bootstrap 5 -->
   <style>{{ assets.bootstrap_css }}</style>
 

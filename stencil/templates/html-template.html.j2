@@ -17,10 +17,14 @@
   </style>
 </head>
 <body>
+  {# Mount point for the theme control. A div rather than nothing so the
+     script has somewhere to attach without guessing at page structure. #}
+  <div class="theme-toggle-host"></div>
   <div class="container">
 {% include '_doc-body.html.j2' %}
   </div>
 
+{% include '_theme-toggle.html.j2' %}
 {% include '_page-scripts.html.j2' %}
 </body>
 </html>

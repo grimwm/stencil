@@ -767,3 +767,72 @@
         --bs-table-striped-bg: var(--surface-sunken);
       }
     }
+
+    /* The theme control. Fixed on a document, and re-parented into the
+       toolbar on a deck -- see _slide-scripts.html.j2 -- so these rules cover
+       both and the deck stylesheet adds only what the toolbar needs. */
+    .theme-toggle {
+      display: inline-flex;
+      gap: 0.125rem;
+      padding: 0.15rem;
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      background: var(--surface);
+      font-family: var(--font-sans);
+    }
+
+    .theme-toggle-host {
+      position: fixed;
+      top: 1rem;
+      right: 1rem;
+      z-index: 10;
+    }
+
+    .theme-toggle__option {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-width: 2rem;
+      min-height: 1.9rem;
+      padding: 0 0.4rem;
+      border: 0;
+      border-radius: 999px;
+      background: transparent;
+      color: var(--text-muted);
+      font-size: 0.95rem;
+      line-height: 1;
+      cursor: pointer;
+    }
+
+    .theme-toggle__option[aria-checked="true"] {
+      background: var(--surface-accent);
+      color: var(--accent);
+    }
+
+    .theme-toggle__option:focus-visible {
+      outline: 3px solid var(--focus-ring);
+      outline-offset: 1px;
+    }
+
+    /* Visually hidden, not absent. The glyph is aria-hidden, so this is the
+       control's entire accessible name -- display: none would leave three
+       buttons announcing nothing. */
+    .theme-toggle__label {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      padding: 0;
+      margin: -1px;
+      overflow: hidden;
+      clip-path: inset(50%);
+      white-space: nowrap;
+      border: 0;
+    }
+
+    @media print {
+      /* A control that cannot be operated on paper is furniture. */
+      .theme-toggle,
+      .theme-toggle-host {
+        display: none !important;
+      }
+    }
