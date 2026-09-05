@@ -9,6 +9,19 @@ and the closed epics in `.beads/issues.jsonl` are the readable index.
 How the version gets bumped is written down in
 [AGENTS.md](AGENTS.md#cutting-a-release), not here.
 
+## 0.10.1
+
+- **The two config-brand fallbacks were emitted on one line.** The Jinja
+  environment sets `trim_blocks`, which eats the newline after a block tag, so
+  the `{% endif %}` ending the first declaration pulled the second up beside
+  it. With neither configured that produced `= nillocal CONFIG_BRAND_ALT`,
+  where `nillocal` lexes as a single identifier -- so `CONFIG_BRAND` read an
+  undefined global and `CONFIG_BRAND_ALT` became a global rather than a local.
+
+  Both still evaluated to nil and every page still rendered, which is why the
+  whole test suite passed over it. Inline conditionals now, which no block tag
+  can trim, and a test asserts the two are separate `local` statements.
+
 ## 0.10.0
 
 `brand` can be set once for a project instead of in every document.

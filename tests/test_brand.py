@@ -353,6 +353,38 @@ def test_nothing_configured_leaves_the_fallback_nil(generate_package):
     assert "local CONFIG_BRAND = nil" in lua
 
 
+@pytest.mark.parametrize(
+    "config",
+    [
+        {},
+        {"brand": "A Name"},
+        {"brand": "A Name", "brand-alt": "Unused By A Name"},
+    ],
+    ids=["neither", "brand-only", "both"],
+)
+def test_the_two_fallbacks_are_separate_local_statements(generate_package, config):
+    """They were welded onto one line, and Lua accepted it.
+
+    The environment sets trim_blocks, which eats the newline after a block tag,
+    so `{% raw %}{% endif %}{% endraw %}` at the end of the first declaration pulled the second up
+    beside it. With both unset that produced `= nillocal CONFIG_BRAND_ALT`,
+    where `nillocal` lexes as one identifier: CONFIG_BRAND read an undefined
+    global and CONFIG_BRAND_ALT became a global rather than a local. Both
+    evaluated to nil regardless, so every test still passed and the page still
+    rendered -- the failure was invisible from the outside, which is the only
+    reason it is worth a test of its own.
+    """
+    lua = (generate_package(brand_config(**config)) / "frontmatter-filter.lua").read_text()
+    # Comments stripped: the file explains this bug by name, so a plain
+    # substring search finds the explanation rather than the defect.
+    code = "\n".join(
+        line for line in lua.splitlines() if not line.lstrip().startswith("--")
+    )
+    assert "nillocal" not in code
+    assert re.search(r"(?m)^local CONFIG_BRAND = ", code), code[:200]
+    assert re.search(r"(?m)^local CONFIG_BRAND_ALT = ", code), code[:200]
+
+
 # --- the copy --------------------------------------------------------------
 
 
