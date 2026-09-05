@@ -272,7 +272,9 @@ def generate_package(
             # Shared image the pdf and check-access services build from.
             {"src": "Dockerfile.browser.j2"},
         ]
-        if context.get("has_docs"):
+        # Also for a doc package built from package_sources: Makefile-pkg runs
+        # its sources through the doc service, which names this template.
+        if context.get("has_docs") or context.get("has_package_sources"):
             doc_templates.insert(0, {"src": "html-template.html.j2"})
         if context.get("has_slides"):
             doc_templates.append({"src": "slide-template.html.j2"})
@@ -391,14 +393,18 @@ def get_generated_files(config: dict) -> list[str]:
             if dest:
                 entries.add(f"{pkg_dir}/{dest}")
 
-        # Add template outputs for packages that render markdown
-        if package.get("docs") or package.get("slides"):
+        # Add template outputs for packages that render markdown. These read
+        # the derived context rather than the raw keys, so the predicates are
+        # the same ones generate_package injects on -- spelling them twice is
+        # what left a package_sources-only doc package with five generated
+        # files that clean could not see.
+        if context["has_pages"]:
             for f in shared_page_files:
                 entries.add(f"{pkg_dir}/{f}")
-        if package.get("docs"):
+        if context["has_docs"] or context["has_package_sources"]:
             for f in doc_template_files:
                 entries.add(f"{pkg_dir}/{f}")
-        if package.get("slides"):
+        if context["has_slides"]:
             for f in slide_template_files:
                 entries.add(f"{pkg_dir}/{f}")
 
