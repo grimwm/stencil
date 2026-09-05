@@ -9,6 +9,35 @@ and the closed epics in `.beads/issues.jsonl` are the readable index.
 How the version gets bumped is written down in
 [AGENTS.md](AGENTS.md#cutting-a-release), not here.
 
+## 0.10.0
+
+`brand` can be set once for a project instead of in every document.
+
+- **`brand` and `brand-alt` in `.config.yaml`**, config-wide or per package,
+  resolved the way `lang` is: package first, then config-wide, and front matter
+  over both. The default only fills the key in when a document left it out,
+  after which it is treated exactly as though the document had written it --
+  which is what keeps a configured brand and a written one from drifting into
+  two behaviours.
+
+  A package that names its own brand does **not** inherit the config's
+  `brand-alt`. "This logo, no alt yet" is what that means, and inheriting there
+  would label one logo with another's name.
+
+- **A configured logo is copied into every package that renders markdown**,
+  without being asked to, and the copies are added to the managed `.gitignore`.
+  The folders stencil generates are routinely handed to someone as a project of
+  their own, separate from the repository that produced them -- so a logo
+  living only next to `.config.yaml` would leave the recipient with a document
+  referring to a file they were never given. A copy per package is the cost of
+  each folder standing alone, and the filter names the copy rather than the
+  source path so nothing looks outside the folder.
+
+  Paths are resolved relative to the config file's directory. A config-level
+  logo with no `brand-alt`, or one that is not a file, fails at `stencil gen`
+  rather than at render -- a config mistake should reach whoever ran the
+  generator, not whoever builds a document three packages away.
+
 ## 0.9.0
 
 A document can carry the mark of what it belongs to.

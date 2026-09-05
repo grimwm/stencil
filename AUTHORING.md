@@ -204,6 +204,10 @@ other scales with it, so the image keeps its proportions. A 900×60 wordmark ren
 50×600 crest renders 3.66×44 — each at its exact natural ratio. Supply whatever shape you have; a very
 tall logo simply ends up narrow, because the height cap is what keeps the header from growing.
 
+A whole project or one package can set a brand once, so every document need not repeat it; see
+[STENCIL.md](STENCIL.md). A configured logo is **copied into each generated package**, so the folder
+stands on its own when it is handed to someone as their own project. Front matter still wins.
+
 `brand-alt` is **required** when `brand` is a picture, and the build fails without it. That is
 deliberate rather than defaulting to `alt=""`: a logo is often the only thing naming the institution
 on the page, so an empty alt drops it entirely for anyone using a screen reader, and

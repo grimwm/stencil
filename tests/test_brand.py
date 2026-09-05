@@ -286,3 +286,179 @@ def test_a_logo_is_capped_without_being_distorted(css, selector):
         f"{selector} pins height, which distorts a logo capped by width: "
         f"{declarations!r}"
     )
+
+
+# --- the config-level default ----------------------------------------------
+#
+# .config.yaml can name a brand for every package, and a package can name its
+# own. Front matter still wins over both -- the default only fills the key in
+# when the document left it out, after which everything above treats it exactly
+# as though the document had written it.
+#
+# A picture is *copied* into each package rather than referenced where it lies.
+# The folders stencil generates are routinely handed to someone as a project of
+# their own, so a logo living only next to .config.yaml would leave the
+# recipient holding a document that refers to a file they were never given.
+
+CONFIG_LOGO = "siu-logo.svg"
+
+
+def brand_config(**overrides) -> dict:
+    config = {
+        "templates": [{"src": "html-template.html.j2"}],
+        "packages": {
+            "demo": {"name": "D", "package_type": "none", "docs": ["a.md"]}
+        },
+    }
+    config.update(overrides)
+    return config
+
+
+@pytest.fixture
+def config_logo(tmp_path):
+    """A logo sitting next to .config.yaml, the way a shared one would."""
+    (tmp_path / "img").mkdir(exist_ok=True)
+    (tmp_path / "img" / CONFIG_LOGO).write_text(LOGO_SVG)
+    return tmp_path
+
+
+def test_a_config_wide_name_reaches_the_filter(generate_package):
+    lua = (
+        generate_package(brand_config(brand="Southern Illinois University"))
+        / "frontmatter-filter.lua"
+    ).read_text()
+    assert '"Southern Illinois University"' in lua
+
+
+def test_a_package_brand_beats_the_config_wide_one(generate_package):
+    config = brand_config(brand="Config Wide")
+    config["packages"]["demo"]["brand"] = "Package Own"
+    lua = (generate_package(config) / "frontmatter-filter.lua").read_text()
+    assert '"Package Own"' in lua
+    assert "Config Wide" not in lua
+
+
+def test_a_package_brand_does_not_inherit_the_config_alt(generate_package):
+    """A package naming its own logo and no alt means "no alt yet", not "use
+    the other logo's". Inheriting there would label one logo with another's
+    name, which is worse than the build failing."""
+    config = brand_config(brand="Config Wide", **{"brand-alt": "Config Alt"})
+    config["packages"]["demo"]["brand"] = "Package Own"
+    lua = (generate_package(config) / "frontmatter-filter.lua").read_text()
+    assert "Config Alt" not in lua
+
+
+def test_nothing_configured_leaves_the_fallback_nil(generate_package):
+    lua = (generate_package(brand_config()) / "frontmatter-filter.lua").read_text()
+    assert "local CONFIG_BRAND = nil" in lua
+
+
+# --- the copy --------------------------------------------------------------
+
+
+def test_a_config_logo_is_copied_into_the_package(generate_package, config_logo):
+    package = generate_package(
+        brand_config(
+            brand=f"file://img/{CONFIG_LOGO}", **{"brand-alt": "SIU"}
+        )
+    )
+    assert (package / CONFIG_LOGO).is_file(), (
+        f"the logo was not copied in: {sorted(p.name for p in package.iterdir())}"
+    )
+
+
+def test_the_filter_names_the_copy_not_the_source_path(generate_package, config_logo):
+    """`img/siu-logo.svg` is where it came from; `siu-logo.svg` is where it
+    now is. Referring to the source path would send pandoc looking outside
+    the folder that was handed over."""
+    lua = (
+        generate_package(
+            brand_config(
+                brand=f"file://img/{CONFIG_LOGO}", **{"brand-alt": "SIU"}
+            )
+        )
+        / "frontmatter-filter.lua"
+    ).read_text()
+    assert f'"{CONFIG_LOGO}"' in lua
+    assert "img/" not in lua
+
+
+def test_the_copy_is_git_ignored(generate_package, config_logo):
+    """Generated output, like every other file stencil writes into a package."""
+    from stencil.generate import get_generated_files
+
+    config = brand_config(
+        brand=f"file://img/{CONFIG_LOGO}", **{"brand-alt": "SIU"}
+    )
+    generate_package(config)
+    assert f"demo/{CONFIG_LOGO}" in get_generated_files(config)
+
+
+def test_a_name_copies_nothing(generate_package, config_logo):
+    package = generate_package(brand_config(brand="Southern Illinois University"))
+    assert not (package / CONFIG_LOGO).exists()
+
+
+def test_a_config_logo_without_alt_fails_generation(generate_package, config_logo):
+    """At `stencil gen`, not at render. A config-level mistake should surface
+    to whoever ran the generator rather than to whoever builds a document
+    three packages away."""
+    with pytest.raises(ValueError, match="brand-alt"):
+        generate_package(brand_config(brand=f"file://img/{CONFIG_LOGO}"))
+
+
+def test_a_missing_config_logo_fails_generation(generate_package, config_logo):
+    with pytest.raises(ValueError, match="not a file"):
+        generate_package(
+            brand_config(brand="file://img/absent.svg", **{"brand-alt": "X"})
+        )
+
+
+@pytest.mark.integration
+def test_a_config_logo_renders_and_inlines_with_no_front_matter(
+    tmp_path, generate_package
+):
+    """The whole point, end to end: a document that says nothing about a brand
+    still carries the configured one, inlined, from a file the folder owns."""
+    from stencil import pipeline
+
+    (tmp_path / "img").mkdir(exist_ok=True)
+    (tmp_path / "img" / CONFIG_LOGO).write_text(LOGO_SVG)
+    package = generate_package(
+        brand_config(brand=f"file://img/{CONFIG_LOGO}", **{"brand-alt": "SIU"})
+    )
+    (package / "d.md").write_text('---\ntitle: "T"\n---\n\nBody.\n')
+
+    result = pipeline.render("doc", "d.md", "d.html", workdir=package)
+    assert result.returncode == 0, result.stderr
+
+    from bs4 import BeautifulSoup
+
+    soup = BeautifulSoup((package / "d.html").read_text(), "html.parser")
+    img = soup.select_one("header.doc-title .doc-brand img")
+    assert img is not None, "the configured logo did not reach the header"
+    assert img["src"].startswith("data:"), "the configured logo was not inlined"
+    assert img["alt"] == "SIU"
+
+
+@pytest.mark.integration
+def test_front_matter_still_beats_the_configured_brand(tmp_path, generate_package):
+    from stencil import pipeline
+    from bs4 import BeautifulSoup
+
+    (tmp_path / "img").mkdir(exist_ok=True)
+    (tmp_path / "img" / CONFIG_LOGO).write_text(LOGO_SVG)
+    package = generate_package(
+        brand_config(brand=f"file://img/{CONFIG_LOGO}", **{"brand-alt": "SIU"})
+    )
+    (package / "d.md").write_text(
+        '---\ntitle: "T"\nbrand: "A Different Name"\n---\n\nBody.\n'
+    )
+
+    result = pipeline.render("doc", "d.md", "d.html", workdir=package)
+    assert result.returncode == 0, result.stderr
+
+    soup = BeautifulSoup((package / "d.html").read_text(), "html.parser")
+    brand = soup.select_one("header.doc-title .doc-brand")
+    assert " ".join(brand.get_text().split()) == "A Different Name"
+    assert brand.select_one("img") is None, "the configured logo overrode the document"

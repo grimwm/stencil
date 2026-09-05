@@ -217,6 +217,8 @@ slide breaks, layout fences, presenter-only content, present mode and printing -
 | ----------------- | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `name`            | No       | Display name (defaults to package ID)                                                                                                                                      |
 | `lang`            | No       | Language for this package's pages, overriding the config-wide `lang` (default `en`)                                                                                        |
+| `brand`           | No       | Brand for this package's documents, overriding the config-wide `brand`: a name, or a `file://` path to a logo resolved relative to this config file                        |
+| `brand-alt`       | No       | Alt text for a `brand` logo. Required when `brand` is an image; `stencil gen` fails without it                                                                             |
 | `dir`             | No       | Output subdirectory (defaults to package ID)                                                                                                                               |
 | `package_type`    | Yes      | `doc` for HTML documents, `zip` for submissions                                                                                                                            |
 | `docs`            | No       | List of markdown files to convert to HTML docs                                                                                                                             |

@@ -39,6 +39,18 @@ local FALSE = {
 -- that, and when. Named to survive outside a university -- `program` covers a
 -- course and a training program equally -- while staying what an instructor
 -- would say out loud.
+-- Baked from .config.yaml at generation time: what a document falls back to
+-- when its own front matter names no brand. A picture is named by the file
+-- stencil copied into this package directory rather than the path it came
+-- from, so the folder stands on its own when it is handed to someone.
+--
+-- Front matter still wins. This only fills the key in when it is absent, and
+-- everything below then treats it exactly as though the document had written
+-- it -- which is what keeps a config brand and a front-matter brand from
+-- drifting into two behaviours.
+local CONFIG_BRAND = {% if config_brand %}{{ config_brand | tojson }}{% else %}nil{% endif %}
+local CONFIG_BRAND_ALT = {% if config_brand_alt %}{{ config_brand_alt | tojson }}{% else %}nil{% endif %}
+
 local CONTEXT = { "program", "section", "term" }
 
 -- Every key whose blank form must be indistinguishable from its absent form.
@@ -136,6 +148,13 @@ function Meta(meta)
     -- The Makefile passes the build host's date; os.date is the fallback for
     -- a hand-run pandoc, and inside the container that is UTC.
     meta.date = text_of(meta["build-date"]) or os.date("%Y-%m-%d")
+  end
+
+  if meta.brand == nil and CONFIG_BRAND ~= nil then
+    meta.brand = pandoc.Inlines({ pandoc.Str(CONFIG_BRAND) })
+    if meta["brand-alt"] == nil and CONFIG_BRAND_ALT ~= nil then
+      meta["brand-alt"] = pandoc.Inlines({ pandoc.Str(CONFIG_BRAND_ALT) })
+    end
   end
 
   -- `brand` is either a name or a picture, and the difference decides both
