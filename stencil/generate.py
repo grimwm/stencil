@@ -259,11 +259,10 @@ def get_template_context(package_id: str, config: dict) -> dict:
     }
 
     # Config-level template_env declares which custom keys these templates may
-    # read and supplies the value for packages that do not set one. cs234
-    # points three configs at a single templates directory, so its shared
-    # Makefile.j2 reads has_playwright, which only answers/.config.yaml sets,
-    # and deps_script, which only assignments/.config.yaml sets. Without a way
-    # to declare a key without setting it, StrictUndefined would make one
+    # read and supplies the value for packages that do not set one. A
+    # project can point several configs at one templates directory, where a
+    # shared template then reads a key only some of those configs set. Without
+    # a way to declare a key without setting it, StrictUndefined would make one
     # shared template impossible to serve from more than one config.
     config_env = config.get("template_env")
     if isinstance(config_env, dict):
@@ -273,9 +272,10 @@ def get_template_context(package_id: str, config: dict) -> dict:
     # Any remaining custom key some package sets, left *undefined* for the
     # packages that do not -- the lenient Undefined, not this environment's
     # StrictUndefined. It is falsy in a condition, renders as nothing, and
-    # still satisfies `| default(...)`, which a concrete False does not: cs234
-    # writes `{{ front_controller | default('index.html') }}`, and defaulting
-    # the key to False put the literal "False" where a filename belonged.
+    # still satisfies `| default(...)`, which a concrete False does not. A
+    # template writing `{{ front_controller | default('index.html') }}` against
+    # a key defaulted to False puts the literal "False" where a filename
+    # belonged, which is how that was found.
     # setdefault throughout, so a config cannot shadow a derived key.
     for key in declared_template_env_keys(config):
         context.setdefault(key, Undefined())
@@ -343,7 +343,7 @@ def template_reads(env: Environment, name: str, _seen=None) -> tuple[set[str], b
     """Every name a template could be reading, and whether that is the whole of
     it. Deliberately an over-approximation.
 
-    A custom key does not have to reach a template as a variable. cs234's
+    A custom key does not have to reach a template as a variable. A consumer's
     nginx.conf.j2 writes `(template_env | default({})).get('docroot_subdir')`,
     where the key is a dict lookup and no analysis of variable names will ever
     see it. So string constants count as reads too, alongside loaded names --
@@ -459,7 +459,7 @@ def build_environment(config: dict, config_dir: Path) -> Environment:
         extensions=["jinja2.ext.do"],
         # A missing variable is an error, not an empty string. A consuming
         # project may override a composition template and include stencil's
-        # partials into it (cs234 does), so a renamed context key would
+        # partials into it, so a renamed context key would
         # otherwise render a Makefile with a hole where a recipe used to be,
         # found by whoever next ran make. See tests/test_template_contract.py.
         undefined=StrictUndefined,
