@@ -65,7 +65,7 @@ local CONTEXT = { "program", "section", "term" }
 -- with nothing after it would open a byline row with nothing to put in it.
 local BLANKABLE = {
   "program", "section", "term", "author", "date", "lang", "dir",
-  "brand", "brand-alt",
+  "brand", "brand-alt", "points", "due",
 }
 
 -- What `brand` is taken to be a picture of rather than a name.
@@ -137,6 +137,113 @@ local function truthy(value)
   return text ~= nil and not FALSE[text:lower()]
 end
 
+local MONTHS = {
+  "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+  "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+}
+
+-- Joins a number to its unit, so "50 pts" never breaks across two lines while
+-- the badge is still free to wrap a long verbatim `points` string.
+local NBSP = utf8.char(0x00A0)
+
+local SHAPES = "expected yyyy-mm-dd or yyyy-mm-ddThh:mm"
+
+--- The last day of month `m` in year `y`.
+---
+--- Day zero of the following month, which mktime resolves backwards. Used only
+--- to say something useful in the error; the acceptance decision is the
+--- round-trip in parse_stamp. December works without a special case: month 13
+--- day 0 normalizes to December 31 of the same year.
+local function last_day_of(y, m)
+  return os.date("*t", os.time({ year = y, month = m + 1, day = 0, hour = 12 })).day
+end
+
+--- One ISO stamp as a table, or an error naming what was wrong with it.
+---
+--- Three gates, narrowest first, so the message describes the actual failure
+--- rather than restating the grammar every time. The range gate is not
+--- redundant with the calendar gate below -- month 13 would fail the
+--- round-trip too, but as "not a real date", which is not what went wrong.
+---
+--- The calendar gate is an os.time round-trip rather than a days-in-month
+--- table. os.time *normalizes* a day the month does not have -- 2026-02-30
+--- comes back as March 2 -- and that normalization is exactly the detector:
+--- compare the fields back, and any date the calendar does not contain fails
+--- the comparison. The Gregorian rules, leap years included, then come from
+--- the platform mktime rather than from a century rule written here, which
+--- nothing would exercise until 2100.
+---
+--- hour = 12 is load-bearing. A date pinned to midnight can cross a day
+--- boundary in a zone observing a DST transition, which would reject a date
+--- the calendar does contain. Noon clears every transition.
+local function parse_stamp(key, text)
+  local y, m, d = text:match("^(%d%d%d%d)%-(%d%d)%-(%d%d)$")
+  local hh, mm
+  if not y then
+    y, m, d, hh, mm = text:match("^(%d%d%d%d)%-(%d%d)%-(%d%d)T(%d%d):(%d%d)$")
+  end
+  if not y then
+    error(key .. ": " .. text .. " is not a date stencil can read -- " .. SHAPES .. ".")
+  end
+
+  y, m, d = tonumber(y), tonumber(m), tonumber(d)
+  hh, mm = tonumber(hh), tonumber(mm)
+
+  if m < 1 or m > 12 then
+    error(key .. ": " .. text .. " has month " .. m .. "; months run 01-12.")
+  end
+  if hh and hh > 23 then
+    error(key .. ": " .. text .. " has hour " .. hh .. "; hours run 00-23.")
+  end
+  if mm and mm > 59 then
+    error(key .. ": " .. text .. " has minute " .. mm .. "; minutes run 00-59.")
+  end
+
+  local back = os.date("*t", os.time({ year = y, month = m, day = d, hour = 12 }))
+  if back.year ~= y or back.month ~= m or back.day ~= d then
+    error(
+      key .. ": " .. text .. " is not a real date -- "
+      .. MONTHS[m] .. " " .. y .. " has " .. last_day_of(y, m) .. " days."
+    )
+  end
+
+  return { year = y, month = m, day = d, hour = hh, min = mm }
+end
+
+--- The display form: MMM DD, and the time only when one was written.
+---
+--- No year on purpose. A handout is read inside a term the reader already
+--- knows, and `term:` is usually sitting in the header saying so. The year is
+--- not lost: the <time datetime> attribute beside this carries the full ISO
+--- string, which is what a machine reads.
+local function format_stamp(stamp)
+  local text = string.format("%s %02d", MONTHS[stamp.month], stamp.day)
+  if stamp.hour then
+    text = text .. " " .. utf8.char(0x00B7) .. " "
+        .. string.format("%02d:%02d", stamp.hour, stamp.min)
+  end
+  return text
+end
+
+--- Validate `key`, and write back its rendered label and its original ISO text.
+---
+--- Returns whether the key was set at all, which is what the header rows below
+--- are asking when they decide whether to exist.
+---
+--- The ISO string is kept verbatim for the <time datetime> attribute, so the
+--- HTML stays machine-readable however short the visible form gets. A PDF
+--- keeps only the visible text, which is why that form stays lossless too.
+local function stamp_keys(meta, key)
+  local text = text_of(meta[key])
+  if text == nil then
+    return false
+  end
+  meta[key .. "-label"] =
+    pandoc.Inlines({ pandoc.Str(format_stamp(parse_stamp(key, text))) })
+  meta[key .. "-iso"] = pandoc.Inlines({ pandoc.Str(text) })
+  return true
+end
+
 function Meta(meta)
   -- A blank key is an absent key. Do this before anything reads them.
   for _, key in ipairs(BLANKABLE) do
@@ -152,9 +259,19 @@ function Meta(meta)
 
   if show and text_of(meta.date) == nil then
     -- The Makefile passes the build host's date; os.date is the fallback for
-    -- a hand-run pandoc, and inside the container that is UTC.
+    -- a hand-run pandoc, and inside the container that is UTC. Date-only on
+    -- purpose: the build stamp's clock time says when make ran, which is not
+    -- a fact about the document.
     meta.date = text_of(meta["build-date"]) or os.date("%Y-%m-%d")
   end
+
+  local has_date = stamp_keys(meta, "date")
+  local has_due = stamp_keys(meta, "due")
+  meta["has-dates"] = (has_date or has_due) or nil
+  -- Two keys OR'd together, which a pandoc template cannot do for itself --
+  -- the deck byline needs to know whether anything precedes Due before it
+  -- emits a separator in front of it.
+  meta["due-needs-separator"] = (meta.author ~= nil or has_date) or nil
 
   if meta.brand == nil and CONFIG_BRAND ~= nil then
     meta.brand = pandoc.Inlines({ pandoc.Str(CONFIG_BRAND) })
@@ -189,12 +306,37 @@ function Meta(meta)
     end
   end
 
+  -- Points is a number the reader cares about, so the badge says "1 pt" rather
+  -- than "1 pts". Computed here because a pandoc template cannot compare a
+  -- value -- the same reason `date` is filled in here rather than there.
+  --
+  -- A value that is not a number renders verbatim, so `points: "extra credit"`
+  -- is a usable escape hatch rather than a build failure. There is nothing to
+  -- validate about it: unlike a date, any string is a legible answer to "what
+  -- is this worth".
+  local points = text_of(meta.points)
+  if points then
+    local count = tonumber(points)
+    local label
+    if count == nil then
+      -- Verbatim, and it may be long. The badge is allowed to wrap for this
+      -- case; the non-breaking space below is what keeps the ordinary case
+      -- from wrapping with it.
+      label = points
+    elseif count == 1 then
+      label = points .. NBSP .. "pt"
+    else
+      label = points .. NBSP .. "pts"
+    end
+    meta["points-label"] = pandoc.Inlines({ pandoc.Str(label) })
+  end
+
   local has_context = false
   for _, key in ipairs(CONTEXT) do
     has_context = has_context or meta[key] ~= nil
   end
   meta["has-context"] = (has_context or meta.brand ~= nil) or nil
-  meta["has-byline"] = (meta.author ~= nil or meta.date ~= nil) or nil
+  meta["has-byline"] = (meta.author ~= nil or has_date or has_due) or nil
 
   return meta
 end

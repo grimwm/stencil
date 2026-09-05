@@ -9,16 +9,18 @@ $if(brand)$
 $endif$
   <p class="deck-context">$if(program)$<span class="deck-program">$program$</span>$endif$$if(section)$<span class="deck-section">$section$</span>$endif$$if(term)$<span class="deck-term">$term$</span>$endif$</p>
 $endif$
-  <h1 class="deck-title">$title$</h1>
+  <h1 class="deck-title">$title$$if(points-label)$ <span class="deck-points">$points-label$</span>$endif$</h1>
 $if(subtitle)$
   <p class="deck-subtitle">$subtitle$</p>
 $endif$
-$if(author)$
-  <p class="deck-meta">$for(author)$$author$$sep$ &middot; $endfor$$if(date)$ &middot; $date$$endif$</p>
-$else$
-$if(date)$
-  <p class="deck-meta">$date$</p>
-$endif$
+$if(has-byline)$
+  {# One line, for the reason _doc-body.html.j2 gives: a newline between these
+     collapses to a word space that lands on only one side of a separator.
+
+     `due-needs-separator` is computed in frontmatter-filter.lua because Due
+     needs a separator when *either* an author or an Issued date precedes it,
+     and a pandoc template cannot OR two keys together. #}
+  <p class="deck-meta">$if(author)$$for(author)$$author$$sep$ &middot; $endfor$$endif$$if(date-label)$$if(author)$ &middot; $endif$Issued <time datetime="$date-iso$">$date-label$</time>$endif$$if(due-label)$$if(due-needs-separator)$ &middot; $endif$Due <time datetime="$due-iso$">$due-label$</time>$endif$</p>
 $endif$
 </section>
 $endif$

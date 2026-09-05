@@ -52,7 +52,13 @@ def authors(soup) -> str | None:
 
 
 def when(soup) -> str | None:
-    return _text(soup, ".doc-date")
+    """The Issued line, which is what `date:` renders as.
+
+    Reads .doc-issued rather than .doc-date: the latter is now the wrapper
+    holding both Issued and Due, and its text would be a concatenation of the
+    two rather than either one.
+    """
+    return _text(soup, ".doc-issued")
 
 
 def test_author_and_date(render_soup):
@@ -62,7 +68,7 @@ def test_author_and_date(render_soup):
         text=document('title: "T"\nauthor: Ada Lovelace\ndate: 2026-09-02\n'),
     )
     assert authors(soup) == "Ada Lovelace"
-    assert when(soup) == "2026-09-02"
+    assert when(soup) == "Issued Sep 02"
 
 
 def test_an_author_list_is_joined_with_middots(render_soup):
@@ -75,7 +81,7 @@ def test_an_author_list_is_joined_with_middots(render_soup):
         ),
     )
     assert authors(soup) == f"Ada Lovelace {MIDDOT} Grace Hopper"
-    assert when(soup) == "2026-09-02"
+    assert when(soup) == "Issued Sep 02"
 
 
 def test_author_only_emits_no_date_element(render_soup):
@@ -95,7 +101,7 @@ def test_date_only_renders_on_its_own(render_soup):
         "doc", "byline.md", text=document('title: "T"\ndate: 2026-09-02\n')
     )
     assert authors(soup) is None
-    assert when(soup) == "2026-09-02"
+    assert when(soup) == "Issued Sep 02"
 
 
 def test_neither_renders_exactly_as_if_the_keys_were_absent(render):
@@ -136,3 +142,34 @@ def test_no_title_means_no_header_at_all(render_soup):
         "a document with no title rendered a header anyway"
     )
     assert "Ada Lovelace" not in soup.get_text()
+
+
+def test_the_author_precedes_the_context_in_source_order(render_soup):
+    """Visually the byline has always sat under the title. In source order it
+    did not -- .doc-context came between them, which is the order a screen
+    reader announces and pdftotext extracts.
+    """
+    soup = render_soup(
+        "doc",
+        "order.md",
+        text=document(
+            'title: "T"\nsubtitle: "S"\nauthor: Ada Lovelace\n'
+            'program: "CS 425"\nterm: "Fall 2026"\n'
+        ),
+    )
+    header = header_of(soup)
+    classes = [
+        el["class"][0]
+        for el in header.find_all(True, recursive=False)
+        if el.get("class")
+    ]
+    assert classes == ["doc-identity", "doc-byline", "doc-context"]
+
+
+def test_the_header_row_wrapper_is_gone(render_soup):
+    soup = render_soup(
+        "doc",
+        "order.md",
+        text=document('title: "T"\nprogram: "CS 425"\nauthor: Ada Lovelace\n'),
+    )
+    assert header_of(soup).select_one(".doc-headrow") is None

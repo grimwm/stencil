@@ -55,7 +55,12 @@ def span(scope, selector: str) -> str | None:
 
 
 def date_of(soup) -> str | None:
-    found = soup.select_one("header.doc-title .doc-date")
+    """The Issued line, which is what a stamped or written `date:` renders as.
+
+    Reads .doc-issued rather than .doc-date: the latter is the wrapper holding
+    both Issued and Due, so its text would be a concatenation of the two.
+    """
+    found = soup.select_one("header.doc-title .doc-issued")
     return " ".join(found.get_text().split()) if found else None
 
 
@@ -156,7 +161,9 @@ def test_the_ways_of_writing_yes(render_soup, written):
         text=document(f'title: "T"\nshow_date: {written}\n'),
         metadata=BUILD_DATE,
     )
-    assert date_of(soup) == "2026-03-14", f"show_date: {written} withheld the date"
+    assert date_of(soup) == "Issued Mar 14", (
+        f"show_date: {written} withheld the date"
+    )
 
 
 @pytest.mark.parametrize("written", ["false", "no", "No", "off", "0", "none"])
@@ -195,7 +202,7 @@ def test_an_explicit_date_outranks_the_build_date(render_soup):
         text=document('title: "T"\nshow_date: yes\ndate: 2020-01-01\n'),
         metadata=BUILD_DATE,
     )
-    assert date_of(soup) == "2020-01-01"
+    assert date_of(soup) == "Issued Jan 01"
 
 
 def test_without_a_build_date_the_filter_supplies_one(render_soup):
@@ -204,7 +211,7 @@ def test_without_a_build_date_the_filter_supplies_one(render_soup):
     soup = render_soup(
         "doc", "d.md", text=document('title: "T"\nshow_date: yes\n')
     )
-    assert re.fullmatch(r"\d{4}-\d{2}-\d{2}", date_of(soup) or "")
+    assert re.fullmatch(r"Issued [A-Z][a-z]{2} \d{2}", date_of(soup) or "")
 
 
 def test_a_deck_stamps_itself_the_same_way(render_soup):
@@ -214,7 +221,10 @@ def test_a_deck_stamps_itself_the_same_way(render_soup):
         text=deck('title: "T"\nshow_date: yes\n'),
         metadata=BUILD_DATE,
     )
-    assert "2026-03-14" in soup.select_one(".slide--title .deck-meta").get_text()
+    meta = " ".join(
+        soup.select_one(".slide--title .deck-meta").get_text().split()
+    )
+    assert "Issued Mar 14" in meta
 
 
 # --- stn-tum: the deck title's printed size --------------------------------

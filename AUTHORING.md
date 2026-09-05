@@ -127,8 +127,10 @@ the pipeline reads, and what each one does on each side:
 | `program`     | Top right, opposite the title                   | Above the title, and prefixes the browser tab   |
 | `section`     | Top right, after `program`                      | Above the title, after `program`                |
 | `term`        | Top right, its own line                         | Above the title, after `section`                |
+| `points`      | Badge beside the title                          | Badge beside the title on the title slide       |
 | `author`      | Second row, under the title                     | Byline on the title slide                       |
-| `date`        | Second row, opposite the author                 | Byline, after the author                        |
+| `date`        | Second row, labelled `Issued`                   | Byline, labelled `Issued`, after the author     |
+| `due`         | Second row, under `Issued`                      | Byline, after `Issued`                          |
 | `show_date`   | Stamps the build date as `date`                 | Same                                            |
 | `lang`        | `<html lang>` (default `en`)                    | Same                                            |
 | `dir`         | `<html dir>`, only when set                     | Same                                            |
@@ -230,6 +232,56 @@ term: "Spring 2026"        # or "FY2026"
 
 `program` also prefixes the browser tab: `CS 425/499: Sprint Report`.
 
+#### `points`
+
+What the document is worth, rendered as a badge beside the title:
+
+```yaml
+points: 50      # 50 pts
+points: 1       # 1 pt
+```
+
+The plural follows the number, so a one-point exercise does not read `1 pts`.
+
+A value that is not a number renders exactly as written, which is the escape hatch for anything a
+number cannot say:
+
+```yaml
+points: "extra credit"
+```
+
+Unlike a date there is nothing to validate here — any string is a legible answer to what a document
+is worth.
+
+#### `date` and `due`
+
+When the document was issued, and when it is owed. Both take an ISO date, and optionally a 24-hour
+time after a `T`:
+
+```yaml
+date: 2026-09-01          # Issued Sep 01
+date: 2026-09-01T21:45    # Issued Sep 01 · 21:45
+due: 2026-09-12           # Due Sep 12
+due: 2026-09-12T23:59     # Due Sep 12 · 23:59
+```
+
+The time appears only when you write one. `yyyy-mm-dd` and `yyyy-mm-ddThh:mm` are the only shapes
+accepted; anything else fails the build rather than rendering something approximate, and so does a
+date the calendar does not contain:
+
+```
+due: 2026-02-30 is not a real date -- Feb 2026 has 28 days.
+```
+
+Neither prints the year. A handout is read inside a term the reader already knows, and `term:` is
+usually in the header saying so. The year is unprinted rather than lost: each date is wrapped in a
+`<time datetime="2026-09-12T23:59">` carrying the full ISO string, so anything reading the page
+rather than looking at it still has it.
+
+Both render in the byline, `Issued` above `Due`. They are labelled because two bare dates in one
+column cannot be told apart; the build stamp went unlabelled before `due` existed only because it
+was the only date there.
+
 #### `show_date`
 
 Stamps the document with the day it was built, in `YYYY-MM-DD`:
@@ -247,7 +299,11 @@ template sees it — pandoc reads YAML 1.2, where `no` is the *string* `"no"` ra
 without `frontmatter-filter.lua` normalizing it first, `show_date: no` would print a date.
 
 Writing your own `date:` beats `show_date` — a date you wrote is the date you meant — so use one or
-the other, not both. The stamp is the build machine's day, not the container's UTC one.
+the other, not both. Under `make` the stamp is the build machine's day, passed in as `build-date`,
+rather than the container's UTC one. Running pandoc directly passes nothing, and the filter falls
+back to the date inside the container — UTC — which can be a day off from yours either side of
+midnight. Either way it is date-only: the clock reading when the build ran says nothing about the
+document.
 
 #### `lang` and `dir`
 

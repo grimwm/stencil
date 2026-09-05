@@ -44,24 +44,79 @@
       margin-top: 0.5rem;
     }
 
-    /* The header's two rows. Identity sits on the left of each, context on the
-       right, so a document with a course and a term costs two lines instead of
-       five. align-items: baseline so the course sits on the title's baseline
-       rather than floating at the top of a two-line identity block. */
-    .doc-headrow,
+    /* What the document is worth, beside the title. Sits inside .doc-title,
+       so like .doc-subtitle it has to opt out of that block's 2.2rem/700
+       rather than inherit it -- a badge that outranks the title is the same
+       inversion .doc-subtitle was fixed for, and the print block would carry
+       it into the PDF.
+
+       Colors are literal rather than tokens: there is no token layer to hang
+       them on yet, and the theming release converts them along with the other
+       fifty-odd in this file.
+
+       No white-space: nowrap. A non-numeric `points` renders verbatim and can
+       be long, and nowrap would push it past the page edge; the non-breaking
+       space frontmatter-filter.lua puts between the number and its unit is
+       what keeps "50 pts" together without forbidding a wrap. */
+    .doc-points {
+      display: inline-block;
+      margin-left: 0.5rem;
+      padding: 0.15em 0.55em;
+      border-radius: 999px;
+      background: #e8eef7;
+      color: #29417a;
+      font-family: var(--font-sans);
+      font-size: 0.95rem;
+      font-weight: 600;
+      line-height: 1.4;
+      overflow-wrap: anywhere;
+      vertical-align: middle;
+    }
+
+    /* The header's two rows, as a grid rather than two flex rows.
+
+       Grid because source order and visual order have to differ: the byline is
+       written second so the author follows the subtitle for a screen reader
+       and for pdftotext, and placement puts the context back up on row one.
+       align-items: baseline so the course sits on the title's baseline rather
+       than floating at the top of a two-line identity block.
+
+       The context column is minmax(0, auto), not auto. A bare `auto` track
+       refuses to shrink below its own min-content width, so a long brand or
+       program beside the identity column's 18rem floor could push the header
+       wider than the page -- the flex row this replaces would have wrapped
+       instead. A zero minimum lets the context wrap inside its column, which
+       is the behaviour worth keeping. */
+    header.doc-title {
+      display: grid;
+      grid-template-columns: minmax(18rem, 1fr) minmax(0, auto);
+      align-items: baseline;
+      column-gap: 1.5rem;
+      row-gap: 0.35rem;
+    }
+
+    /* The 18rem minimum is the wrap threshold the flex-basis used to be: once
+       the title has less than that, the context drops to its own line rather
+       than being squeezed to one word per line. */
+    .doc-identity {
+      grid-column: 1;
+      grid-row: 1;
+      min-width: 0;
+    }
+
+    .doc-context {
+      grid-column: 2;
+      grid-row: 1;
+    }
+
     .doc-byline {
+      grid-column: 1 / -1;
+      grid-row: 2;
+      margin-top: 0.6rem;
       display: flex;
       flex-wrap: wrap;
       align-items: baseline;
       gap: 0.35rem 1.5rem;
-    }
-
-    /* The flex-basis is the wrap threshold: once the title has less than 18rem
-       the context drops to its own line rather than being squeezed to one word
-       per line. */
-    .doc-identity {
-      flex: 1 1 18rem;
-      min-width: 0;
     }
 
     /* Both right-hand columns push themselves over rather than relying on
@@ -83,8 +138,21 @@
       color: #5a6270;
     }
 
-    .doc-byline {
-      margin-top: 0.6rem;
+    /* "Issued" and "Due" name which date is which. Two bare dates in one
+       column cannot be told apart, and the build stamp went unlabelled until
+       now only because it was the only one there. */
+    .doc-date-label {
+      font-weight: 600;
+      /* 4.98:1 on white. The muted grey this started at, #7a828f, was 3.88:1
+         -- under AA for text this size, and `make check-access` runs pa11y at
+         WCAG 2.1 AA. A label naming which date you are looking at is not
+         decoration, so it takes the text threshold rather than the 3:1 one. */
+      color: #687080;
+      margin-right: 0.3em;
+    }
+
+    .doc-due {
+      margin-top: 0.15rem;
     }
 
     /* Brand: what the document belongs to, above the program it is part of.
@@ -136,8 +204,22 @@
     }
 
     /* Narrow viewports: nothing is wide enough for two columns, so the header
-       becomes the plain left-aligned stack it used to be. */
+       becomes the plain left-aligned stack it used to be -- now in source
+       order, which finally puts the byline under the subtitle rather than
+       after the context block.
+
+       grid-row has to be reset alongside grid-column. Left at 1, identity and
+       context would land in the same cell and overlap. */
     @media (max-width: 40rem) {
+      header.doc-title {
+        grid-template-columns: 1fr;
+      }
+      .doc-identity,
+      .doc-context,
+      .doc-byline {
+        grid-column: 1;
+        grid-row: auto;
+      }
       .doc-context,
       .doc-date {
         margin-left: 0;

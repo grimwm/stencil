@@ -1,35 +1,53 @@
-{# Document header: two rows, each holding identity on the left and context on
-   the right, so the width earns its keep instead of stacking five short lines
-   down the page. Row one is title/subtitle against program/section/term; row
-   two is the byline against the date. Both collapse to left-aligned stacks on
-   a narrow viewport -- see _page-style.css.j2.
+{# Document header: a two-column grid. Identity sits left, context right, and
+   the byline spans both beneath them, so the width earns its keep instead of
+   stacking five short lines down the page.
 
-   `has-context` and `has-byline` come from frontmatter-filter.lua, which is
-   also what guarantees a blank key reads as an absent one here. #}
+   Source order is identity, byline, context -- deliberately not the visual
+   order. Grid placement puts context back up on row one, which lets the author
+   follow the subtitle for a screen reader and for pdftotext without moving
+   anything on screen. On a narrow viewport the columns collapse and the header
+   stacks in this source order -- see _page-style.css.j2.
+
+   `has-context`, `has-byline` and `has-dates` come from
+   frontmatter-filter.lua, which is also what guarantees a blank key reads as
+   an absent one here. #}
 $if(title)$
 <header class="doc-title">
-  <div class="doc-headrow">
     <div class="doc-identity">$title$
+$if(points-label)$
+      <span class="doc-points">$points-label$</span>
+$endif$
 $if(subtitle)$
       <div class="doc-subtitle">$subtitle$</div>
 $endif$
     </div>
-$if(has-context)$
-    {# One line on purpose. A newline between these spans collapses to a word
-       space that lands on only one side of the generated separator, which is
-       asymmetric in a way no margin can correct. #}
-    <div class="doc-context">$if(brand)$<div class="doc-brand$if(brand-is-image)$ doc-brand--image$endif$">$brand$</div>$endif$$if(program)$<span class="doc-program">$program$</span>$endif$$if(section)$<span class="doc-section">$section$</span>$endif$$if(term)$<span class="doc-term">$term$</span>$endif$</div>
-$endif$
-  </div>
 $if(has-byline)$
   <div class="doc-byline">
 $if(author)$
     <div class="doc-meta">$for(author)$$author$$sep$ &middot; $endfor$</div>
 $endif$
-$if(date)$
-    <div class="doc-date">$date$</div>
+$if(has-dates)$
+    {# .doc-date stays the wrapper it always was, so the margin-left/text-align
+       rule that pushes it right keeps applying to one element rather than two.
+       The labels are not decoration: two bare dates in one column cannot be
+       told apart, and the build stamp went unlabelled before `due` existed
+       only because it was the only date there. #}
+    <div class="doc-date">
+$if(date-label)$
+      <div class="doc-issued"><span class="doc-date-label">Issued</span> <time datetime="$date-iso$">$date-label$</time></div>
+$endif$
+$if(due-label)$
+      <div class="doc-due"><span class="doc-date-label">Due</span> <time datetime="$due-iso$">$due-label$</time></div>
+$endif$
+    </div>
 $endif$
   </div>
+$endif$
+$if(has-context)$
+  {# Written last, placed first. One line on purpose: a newline between these
+     spans collapses to a word space that lands on only one side of the
+     generated separator, which is asymmetric in a way no margin can correct. #}
+  <div class="doc-context">$if(brand)$<div class="doc-brand$if(brand-is-image)$ doc-brand--image$endif$">$brand$</div>$endif$$if(program)$<span class="doc-program">$program$</span>$endif$$if(section)$<span class="doc-section">$section$</span>$endif$$if(term)$<span class="doc-term">$term$</span>$endif$</div>
 $endif$
 </header>
 $endif$
