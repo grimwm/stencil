@@ -17,7 +17,7 @@ import sys
 from pathlib import Path
 
 import yaml
-from jinja2 import Environment, FileSystemLoader, StrictUndefined, Undefined, meta
+from jinja2 import Environment, FileSystemLoader, StrictUndefined, Undefined, meta, nodes
 from jinja2.exceptions import TemplateNotFound
 
 from . import assets, pipeline
@@ -244,29 +244,85 @@ def declared_template_env_keys(config: dict) -> set[str]:
     return keys
 
 
-def referenced_variables(env: Environment, name: str, _seen=None) -> set[str]:
-    """Context keys a template reads, following {% include %} transitively.
+def scan_template(env: Environment, name: str, _seen=None) -> tuple[set[str], bool]:
+    """Context keys a template reads, and whether that answer is complete.
 
-    Transitively because a consuming project overrides a composition template
-    and includes stencil's partials into it, so a key is often read a level
-    below the template the config names. A template that does not resolve
-    contributes nothing rather than raising -- render_templates reports that,
-    with the path, and this should not pre-empt it with a worse message.
+    Transitive because a consuming project overrides a composition template and
+    includes stencil's partials into it, so a key is often read a level below
+    the template the config names.
+
+    The flag is false when something in the tree could not be read statically.
+    Jinja reports `{% include some_variable %}` as a reference of None, since
+    the name is only known at render time, and a template that does not resolve
+    contributes nothing rather than raising -- render_templates reports that
+    with the path, and this should not pre-empt it with a worse message. Either
+    way the set is a lower bound, and a caller that would reject something for
+    being absent from it has to stop.
     """
     seen = set() if _seen is None else _seen
     if name in seen:
-        return set()
+        return set(), True
     seen.add(name)
     try:
         source = env.loader.get_source(env, name)[0]
     except TemplateNotFound:
-        return set()
+        return set(), False
     ast = env.parse(source, filename=name)
     found = set(meta.find_undeclared_variables(ast))
+    complete = True
     for referenced in meta.find_referenced_templates(ast):
-        if referenced:
-            found |= referenced_variables(env, referenced, seen)
-    return found
+        if referenced is None:
+            complete = False
+            continue
+        nested, nested_complete = scan_template(env, referenced, seen)
+        found |= nested
+        complete = complete and nested_complete
+    return found, complete
+
+
+def template_reads(env: Environment, name: str, _seen=None) -> tuple[set[str], bool]:
+    """Every name a template could be reading, and whether that is the whole of
+    it. Deliberately an over-approximation.
+
+    A custom key does not have to reach a template as a variable. cs234's
+    nginx.conf.j2 writes `(template_env | default({})).get('docroot_subdir')`,
+    where the key is a dict lookup and no analysis of variable names will ever
+    see it. So string constants count as reads too, alongside loaded names --
+    which also covers `{% set x = x | default(...) %}`, where Jinja calls x
+    declared because the same statement assigns it.
+
+    The only caller rejects a key for being ABSENT from this set, so every
+    imprecision here makes it more permissive. What survives is the one thing
+    that can be said soundly: this name appears nowhere in any template, in any
+    form, which is what a typo looks like.
+    """
+    seen = set() if _seen is None else _seen
+    if name in seen:
+        return set(), True
+    seen.add(name)
+    try:
+        source = env.loader.get_source(env, name)[0]
+    except TemplateNotFound:
+        return set(), False
+    ast = env.parse(source, filename=name)
+    found = {n.name for n in ast.find_all(nodes.Name) if n.ctx == "load"}
+    found |= {
+        n.value for n in ast.find_all(nodes.Const) if isinstance(n.value, str)
+    }
+    complete = True
+    for referenced in meta.find_referenced_templates(ast):
+        if referenced is None:
+            complete = False
+            continue
+        nested, nested_complete = template_reads(env, referenced, seen)
+        found |= nested
+        complete = complete and nested_complete
+    return found, complete
+
+
+def referenced_variables(env: Environment, name: str) -> set[str]:
+    """Context keys a template reads. See scan_template for the caveats."""
+    return scan_template(env, name)[0]
 
 
 def validate_config(config: dict, env: Environment) -> None:
@@ -303,12 +359,18 @@ def validate_config(config: dict, env: Environment) -> None:
         )
 
     read = set(when_keys)
+    complete = True
     for tdef in config.get("templates", []):
         src = tdef.get("src")
         if src:
-            read |= referenced_variables(env, src)
+            found, found_complete = template_reads(env, src)
+            read |= found
+            complete = complete and found_complete
 
-    unread = sorted(declared_template_env_keys(config) - read)
+    # Only an exhaustive reading of the templates can prove a key is unused. If
+    # any of them hid part of itself, a missed typo is the better failure --
+    # the alternative refuses a config that is perfectly correct.
+    unread = sorted(declared_template_env_keys(config) - read) if complete else []
     if unread:
         raise ValueError(
             f"template_env sets {', '.join(unread)}, which no `when:` names and "

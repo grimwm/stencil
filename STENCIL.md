@@ -285,7 +285,11 @@ Stencil refuses a key that cannot do anything, in either direction:
 
 - a `when:` naming a key that is neither derived nor declared anywhere, which would skip the
   template it guards for every package;
-- a `template_env` key that no `when:` names and no template reads.
+- a `template_env` key whose name appears in no `when:` and nowhere in any template.
+  Appearing is all that is asked, because a key does not have to reach a template as a
+  variable — `(template_env | default({})).get('docroot_subdir')` is a dict lookup — so the
+  only sound complaint is that the name occurs nowhere at all, which is what a typo looks
+  like.
 
 Both used to be silent. An undefined name rendered as the empty string, so a mistyped
 `has_vscde` produced no output and no error.

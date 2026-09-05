@@ -170,3 +170,40 @@ def test_a_config_level_key_nothing_reads_is_still_an_error(check):
                 "packages": {"demo": package()},
             }
         )
+
+
+def test_a_dynamic_include_suspends_the_unread_key_check(check):
+    """`{% include which %}` is opaque to static analysis -- Jinja reports the
+    reference as None because the name is only known at render time. What that
+    template reads cannot be known, so a key must not be rejected on the
+    evidence that we did not see it. A missed typo is the better failure here;
+    the alternative refuses a config that is perfectly correct."""
+    check(
+        {
+            "templates": BUNDLED + [{"src": "dyn.j2"}],
+            "packages": {
+                "demo": package(template_env={"which": "chosen.j2", "unseen": True})
+            },
+        },
+        local={
+            "dyn.j2": "{% include which %}\n",
+            "chosen.j2": "{% if unseen %}x{% endif %}\n",
+        },
+    )
+
+
+def test_a_key_read_through_the_nested_template_env_dict_counts_as_read(check):
+    """cs234's nginx.conf.j2 writes
+    `(template_env | default({})).get('docroot_subdir')`. The key is a dict
+    lookup, not a variable, so no analysis of variable names can see it. What
+    this check can soundly reject is a name that appears nowhere in any
+    template in any form, which is what a typo looks like."""
+    check(
+        {
+            "templates": BUNDLED + [{"src": "nginx.j2"}],
+            "packages": {"demo": package(template_env={"docroot_subdir": "htdocs"})},
+        },
+        local={
+            "nginx.j2": "{% if (template_env | default({})).get('docroot_subdir') %}x{% endif %}\n"
+        },
+    )
