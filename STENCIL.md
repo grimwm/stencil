@@ -261,10 +261,50 @@ To add a new conditional feature (e.g., `draft`):
 The `WITH=` variable automatically passes `--metadata include-<feature>=true` to pandoc for any
 feature name.
 
+### Custom context keys
+
+A package's `template_env` puts arbitrary keys into the context, and `when:` conditions test
+them:
+
+```yaml
+template_env: # config level: declares a key, and gives every package its value
+  has_playwright: false
+
+packages:
+  graded:
+    template_env: # package level: overrides the config-level value
+      has_playwright: true
+```
+
+Declare a key at config level whenever your templates read it but no package in *this* config
+sets it — which happens as soon as one `templates_dir` serves more than one `.config.yaml`.
+A key set by at least one package needs no declaration; the packages that do not set it see it
+as undefined, so `{% if key %}` is false and `{{ key | default('x') }}` still gives `x`.
+
+Stencil refuses a key that cannot do anything, in either direction:
+
+- a `when:` naming a key that is neither derived nor declared anywhere, which would skip the
+  template it guards for every package;
+- a `template_env` key whose name appears in no `when:` and nowhere in any template.
+  Appearing is all that is asked, because a key does not have to reach a template as a
+  variable — `(template_env | default({})).get('docroot_subdir')` is a dict lookup — so the
+  only sound complaint is that the name occurs nowhere at all, which is what a typo looks
+  like.
+
+Both used to be silent. An undefined name rendered as the empty string, so a mistyped
+`has_vscde` produced no output and no error.
+
 ### Template Includes
 
 Templates can include other templates using Jinja2's `{% include %}`. Stencil searches your
 `templates_dir` first, then falls back to bundled templates, allowing selective overrides.
+
+Overriding a *composition* template — `Makefile.j2`, `docker-compose.yml.j2` — while including
+stencil's partials is the intended way to extend a build. Be aware that those partials read
+context keys, and that set is an interface: `tests/test_template_contract.py` records it, and
+stencil's own suite fails if it changes. Since an undefined name is now an error rather than
+the empty string, a composition that has fallen out of step fails your `stencil gen` instead
+of quietly emitting a Makefile with a recipe missing.
 
 ## Accessibility
 

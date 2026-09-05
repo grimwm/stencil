@@ -265,6 +265,29 @@ to keep current rather than two that drift.
 into `CLAUDE.md` again. That is expected and fine — leave it. Do not restore, expand,
 or re-collapse `CLAUDE.md` to protect the import.
 
+### A consumer's composition template is an interface, so partials have a contract
+
+A consuming project may override `Makefile.j2` or `docker-compose.yml.j2` and `{% include %}`
+stencil's partials into its own version — cs234 does, across three configs pointed at one
+`_generator/templates`. That is the search path working as designed, and it means the context
+keys those partials read are an interface with someone on the other side of it.
+
+Two things hold it, and both are needed:
+
+- `tests/test_template_contract.py` records what each shared partial reads, and fails when a
+  partial starts requiring a key or stops requiring one. Update the table deliberately; every
+  entry is something a consumer's composition must keep providing.
+- The Jinja environment uses `StrictUndefined`, so an unknown name raises at `stencil gen`
+  instead of rendering the empty string. Without it, renaming a context key left the consumer
+  emitting a Makefile with a recipe missing, found by whoever next ran `make`.
+
+`StrictUndefined` is why custom keys have to be declared. A key set by at least one package is
+undefined — not `False` — for the packages that do not set it, so `{% if key %}` and
+`{{ key | default('x') }}` both still behave. A key no package in the config sets must be
+declared in the config-level `template_env`; see STENCIL.md. Do not "fix" an undefined-key
+error by defaulting the key to `False`: a concrete `False` satisfies `| default(...)`, which
+is how the literal string "False" once reached generated TypeScript where a filename belonged.
+
 ### Cutting a release
 
 The version in `pyproject.toml` is bumped **by hand**, in the commit that also
