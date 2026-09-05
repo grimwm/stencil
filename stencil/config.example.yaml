@@ -82,7 +82,7 @@ templates:
 # Required:
 #   package_type:   "doc", "zip", or "none"
 #                     doc:  documents only; no submission archive
-#                     zip:  adds a pkg target that archives package_folder
+#                     zip:  pkg archives package_sources into package_name
 #                     none: neither
 #   package_name:   Submission filename, required for zip type (e.g., hs3.zip)
 #
@@ -106,8 +106,16 @@ templates:
 #                     - mysql: MySQL database, SQL linting with sqlfluff
 #                   These set has_web / has_mysql / has_services; the templates
 #                   that act on them are project-supplied, not bundled.
-#   package_folder: Which folder to include in the submission archive
-#                   (default: htdocs). Examples: htdocs, db, md
+#   package_sources: What `pkg` puts into package_name (zip default: [htdocs]).
+#                   A list, resolved by one rule for every package type:
+#                     md/*.md   a glob -- expands in sorted order
+#                     md        a directory -- everything in it
+#                     intro.md  anything else -- as written, in the listed order
+#                   Nothing is filtered by extension and nothing is inferred
+#                   from a name: for just the markdown in a folder, say md/*.md.
+#                   A zip archives these paths; a doc concatenates them through
+#                   one pandoc run into <stem>.html, then prints that to
+#                   <stem>.pdf. Examples: [htdocs], [htdocs, db], [md/*.md]
 #   sql_import:     Generates make targets to import SQL files into MySQL. One
 #                   dict or a list of dicts:
 #                     target:   make target name (e.g., import-world)

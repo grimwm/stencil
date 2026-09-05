@@ -90,16 +90,16 @@ Each key under `packages` is a package ID passed to the CLI.
 
 **Optional:**
 
-| Field            | Default    | Description                                                   |
-| ---------------- | ---------- | ------------------------------------------------------------- |
-| `name`           | package ID | Display name shown by `list`.                                 |
-| `dir`            | package ID | Output subdirectory under `output_dir`.                       |
-| `docs`           | `[]`       | Markdown files to convert to HTML documents.                  |
-| `slides`         | `[]`       | Markdown files to convert to HTML slide decks.                |
-| `services`       | `[]`       | Docker Compose services (`web`, `mysql`).                     |
-| `package_folder` | `htdocs`   | Folder to include in the submission archive.                  |
-| `sql_import`     |            | SQL import config(s): `{target, database, file}` dict or list |
-| `template_env`   | `{}`       | Custom variables merged into template context.                |
+| Field             | Default            | Description                                                                                                                       |
+| ----------------- | ------------------ | --------------------------------------------------------------------------------------------------------------------------------- |
+| `name`            | package ID         | Display name shown by `list`.                                                                                                     |
+| `dir`             | package ID         | Output subdirectory under `output_dir`.                                                                                           |
+| `docs`            | `[]`               | Markdown files to convert to HTML documents.                                                                                      |
+| `slides`          | `[]`               | Markdown files to convert to HTML slide decks.                                                                                    |
+| `services`        | `[]`               | Docker Compose services (`web`, `mysql`).                                                                                         |
+| `package_sources` | `[htdocs]` for zip | What `pkg` puts into `package_name`: a glob expands sorted, a directory means everything in it, anything else is used as written. |
+| `sql_import`      |                    | SQL import config(s): `{target, database, file}` dict or list                                                                     |
+| `template_env`    | `{}`               | Custom variables merged into template context.                                                                                    |
 
 ### Package types
 
@@ -113,25 +113,27 @@ Each key under `packages` is a package ID passed to the CLI.
 
 Templates receive these variables, derived from the package config:
 
-| Variable         | Description                                         |
-| ---------------- | --------------------------------------------------- |
-| `package_id`     | The package key                                     |
-| `package_name`   | `package_name` field (may be `None`)                |
-| `package_dir`    | `dir` field or package ID                           |
-| `package_type`   | `package_type` field                                |
-| `package_folder` | `package_folder` field                              |
-| `docs`           | `docs` list                                         |
-| `has_docs`       | `true` if `docs` is non-empty                       |
-| `slides`         | `slides` list                                       |
-| `has_slides`     | `true` if `slides` is non-empty                     |
-| `has_pages`      | `true` if either `docs` or `slides` is non-empty    |
-| `services`       | `services` list                                     |
-| `has_web`        | `true` if `"web"` in services                       |
-| `has_mysql`      | `true` if `"mysql"` in services                     |
-| `has_services`   | `true` if any services defined                      |
-| `sql_imports`    | Normalized list of `sql_import` dicts               |
-| `template_env`   | Custom variables dict (also merged to top level)    |
-| _(custom)_       | All keys from `template_env` are available directly |
+| Variable              | Description                                         |
+| --------------------- | --------------------------------------------------- |
+| `package_id`          | The package key                                     |
+| `package_name`        | `package_name` field (may be `None`)                |
+| `package_dir`         | `dir` field or package ID                           |
+| `package_type`        | `package_type` field                                |
+| `package_sources`     | `package_sources` list                              |
+| `has_package_sources` | `true` for a `doc` package with `package_sources`   |
+| `package_stem`        | `package_name` without `.pdf`, for `doc` packages   |
+| `docs`                | `docs` list                                         |
+| `has_docs`            | `true` if `docs` is non-empty                       |
+| `slides`              | `slides` list                                       |
+| `has_slides`          | `true` if `slides` is non-empty                     |
+| `has_pages`           | `true` if either `docs` or `slides` is non-empty    |
+| `services`            | `services` list                                     |
+| `has_web`             | `true` if `"web"` in services                       |
+| `has_mysql`           | `true` if `"mysql"` in services                     |
+| `has_services`        | `true` if any services defined                      |
+| `sql_imports`         | Normalized list of `sql_import` dicts               |
+| `template_env`        | Custom variables dict (also merged to top level)    |
+| _(custom)_            | All keys from `template_env` are available directly |
 
 ## Bundled templates
 
