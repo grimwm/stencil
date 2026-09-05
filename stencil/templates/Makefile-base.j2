@@ -2,6 +2,16 @@
 # Override to use another Compose implementation, e.g. DC="podman compose"
 DC ?= docker compose
 
+# Pull an image only when it is not already present. Four targets want this and
+# the two shells share no spelling of it, so it lives here rather than as four
+# copies of the same ifeq: cmd, which is what make runs recipes through on
+# Windows, has no grep.
+ifeq ($(OS),Windows_NT)
+ensure_image = @powershell -NoProfile -Command "if (-not (docker images -q $(1))) { $(DC) pull $(2) }"
+else
+ensure_image = @docker images -q $(1) | grep -q . || $(DC) pull $(2)
+endif
+
 # Default target
 ifeq ($(OS),Windows_NT)
 help: ## Show this help message

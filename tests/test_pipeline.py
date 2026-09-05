@@ -154,10 +154,20 @@ def test_the_makefile_checks_for_the_image_compose_actually_runs(doc_package):
     never succeed, so every build pulls again -- or, worse, passes because some
     other tag is present while compose goes and fetches this one.
     """
+    makefile = (doc_package / "Makefile").read_text()
+
+    # The probe itself lives in one shared ensure_image, so the tag is passed to
+    # it rather than sitting on the same line. Assert both halves: that the
+    # helper still asks docker whether the image is there, and that every call
+    # site naming pandoc names the tag compose runs.
+    assert "docker images -q $(1)" in makefile, (
+        "ensure_image no longer probes for the image, so every build pulls"
+    )
+
     guards = [
         line
-        for line in (doc_package / "Makefile").read_text().splitlines()
-        if "docker images -q" in line and "pandoc" in line
+        for line in makefile.splitlines()
+        if "ensure_image" in line and "pandoc" in line
     ]
     assert guards, "the pandoc pull guard is gone"
 
