@@ -184,20 +184,32 @@ def test_the_title_prints_larger_than_the_subtitle(to_pdf):
 LEVELS = ("h1", "h2", "h3", "h4", "h5", "h6")
 
 
+def assert_strictly_descending(labels, sizes) -> None:
+    """Each step must be smaller than the one above, not merely no larger.
+
+    Two adjacent levels at the same size is a flattened hierarchy, which is a
+    real defect in its own right -- see stn-tum, where a deck's title prints at
+    exactly slide-heading size. A sorted() check would call that fine.
+    """
+    scale = dict(zip(labels, sizes))
+    for above, below in zip(labels, labels[1:]):
+        assert scale[above] > scale[below], f"{above} is not above {below}: {scale}"
+
+
 def test_a_section_heading_does_not_outrank_the_title(css):
     """Needs stencil to state a size for h1 at all, rather than inherit one."""
     assert size_rem(rule(css, "h1")) < size_rem(rule(css, ".doc-title"))
 
 
 def test_every_screen_heading_level_steps_down(css):
-    sizes = [size_rem(rule(css, tag)) for tag in LEVELS]
-    assert sizes == sorted(sizes, reverse=True), dict(zip(LEVELS, sizes))
+    assert_strictly_descending(LEVELS, [size_rem(rule(css, t)) for t in LEVELS])
 
 
 def test_every_printed_heading_level_steps_down(print_block):
     """h4 was the break: unset in print, so it kept a rem that outgrew h1."""
-    sizes = [size_pt(rule(print_block, tag)) for tag in LEVELS]
-    assert sizes == sorted(sizes, reverse=True), dict(zip(LEVELS, sizes))
+    assert_strictly_descending(
+        LEVELS, [size_pt(rule(print_block, t)) for t in LEVELS]
+    )
 
 
 def test_the_printed_title_outranks_every_heading(print_block):
@@ -247,4 +259,4 @@ def test_the_printed_heading_scale_never_inverts(to_pdf):
              "HeadingFive", "HeadingSix"]
     sizes = [drawn.get(w) for w in words]
     assert all(s is not None for s in sizes), dict(zip(words, sizes))
-    assert sizes == sorted(sizes, reverse=True), dict(zip(words, sizes))
+    assert_strictly_descending(words, sizes)
