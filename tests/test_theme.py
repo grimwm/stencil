@@ -33,11 +33,22 @@ def strip_comments(css: str) -> str:
     return re.sub(r"/\*.*?\*/", "", css, flags=re.S)
 
 
-def token_blocks(css: str) -> str:
-    """Every `:root {...}` block -- the only place a colour may be written."""
-    return "\n".join(
-        m.group(0) for m in re.finditer(r":root[^{]*\{[^}]*\}", css, re.S)
-    )
+def token_blocks(css: str) -> list[str]:
+    """Every `:root ... {...}` block -- light, and the dark one under @media
+    screen. The only places a colour may be written."""
+    return [m.group(0) for m in re.finditer(r":root[^{]*\{[^}]*\}", css, re.S)]
+
+
+def without_token_blocks(css: str) -> str:
+    """The stylesheet with every token block removed.
+
+    Removed one at a time. Joining them and doing a single replace worked
+    while there was one block and silently stopped matching the moment the
+    dark one arrived -- the joined string is not a substring of anything.
+    """
+    for block in token_blocks(css):
+        css = css.replace(block, "")
+    return css
 
 
 @pytest.mark.parametrize("template", STYLESHEETS)
@@ -49,8 +60,7 @@ def test_no_raw_colour_outside_the_token_blocks(template):
     in dark, and nothing else in the suite would notice.
     """
     css = strip_comments(source(template))
-    outside = css.replace(token_blocks(css), "")
-    stray = sorted(set(COLOUR.findall(outside)))
+    stray = sorted(set(COLOUR.findall(without_token_blocks(css))))
     assert not stray, f"{template}: colours declared outside :root: {stray}"
 
 
@@ -59,7 +69,7 @@ def tokens(css: str, selector: str = ":root") -> dict[str, str]:
 
     Values are returned raw; resolve() below chases `var()` indirection.
     """
-    m = re.search(re.escape(selector) + r"[^{]*\{([^}]*)\}", css, re.S)
+    m = re.search(re.escape(selector) + r"\s*\{([^}]*)\}", css, re.S)
     assert m, f"no {selector} block"
     return dict(re.findall(r"(--[a-z0-9-]+)\s*:\s*([^;]+);", m.group(1)))
 
@@ -130,3 +140,72 @@ def test_every_token_used_is_a_token_defined():
     used = set(re.findall(r"var\((--[a-z0-9-]+)\)", page + deck))
     missing = sorted(used - defined)
     assert not missing, f"used but never defined: {missing}"
+
+
+def screen_blocks(css: str) -> list[str]:
+    """Every `@media screen` block, brace-matched.
+
+    Slicing to the first `}` would stop inside the first rule and hide
+    everything after it, which makes the containment test below pass for no
+    reason at all.
+    """
+    blocks = []
+    for m in re.finditer(r"@media screen[^{]*\{", css):
+        depth, i = 1, m.end()
+        while depth and i < len(css):
+            depth += (css[i] == "{") - (css[i] == "}")
+            i += 1
+        blocks.append(css[m.start() : i])
+    return blocks
+
+
+def dark_block(css: str) -> str:
+    m = re.search(r':root\[data-theme="dark"\][^{]*\{([^}]*)\}', css, re.S)
+    assert m, "no dark token block"
+    return m.group(1)
+
+
+def test_every_dark_declaration_is_sealed_inside_media_screen():
+    """The print guarantee, asserted directly rather than inferred.
+
+    Print never matches @media screen, so a dark block living there is
+    invisible to the print formatter and the light :root values apply. This is
+    why no light value is re-declared for print anywhere: there is nothing to
+    undo. A dark rule written outside that wrapper would reach the PDF, and
+    every handout would print dark.
+    """
+    css = strip_comments(source("_page-style.css.j2"))
+    outside = css
+    for block in screen_blocks(css):
+        outside = outside.replace(block, "")
+    assert "data-theme" not in outside, (
+        "a theme-conditional rule sits outside @media screen; print sees it"
+    )
+
+
+def test_the_dark_block_defines_exactly_the_light_token_names():
+    """Parity. A token defined light but not dark keeps its light value in
+    dark mode -- which is how a single unreadable element ships."""
+    css = strip_comments(source("_page-style.css.j2"))
+    light = {t for t in tokens(css) if not t.startswith("--font-")}
+    dark = set(re.findall(r"(--[a-z0-9-]+)\s*:", dark_block(css)))
+    dark = {t for t in dark if not t.startswith("--bs-")}
+    # Print tokens are deliberately light-only: print never sees the dark
+    # block, so overriding them there would be dead code.
+    light = {t for t in light if not t.startswith("--print-")}
+    assert dark == light, (
+        f"light only: {sorted(light - dark)}; dark only: {sorted(dark - light)}"
+    )
+
+
+@pytest.mark.parametrize("token", TEXT_TOKENS)
+def test_dark_palette_text_meets_aa(token):
+    css = strip_comments(source("_page-style.css.j2"))
+    table = dict(tokens(css))
+    table.update(
+        dict(re.findall(r"(--[a-z0-9-]+)\s*:\s*([^;]+);", dark_block(css)))
+    )
+    fg = resolve(table[token], table)
+    bg = resolve(table["--surface"], table)
+    ratio = contrast(fg, bg)
+    assert ratio >= 4.5, f"{token} ({fg}) on {bg} is {ratio:.2f}:1, under 4.5:1"

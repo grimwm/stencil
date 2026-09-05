@@ -671,3 +671,99 @@
         margin-top: 1.5rem;
       }
     }
+
+    /* Dark, and the only place in either stylesheet that may be.
+
+       @media screen is the entire print guarantee. Print does not match it,
+       so none of this reaches the print formatter and the light :root values
+       above apply to every printed page. That is why no light value is
+       re-declared for print anywhere: there is nothing to undo. Move one
+       declaration out of this wrapper and every handout prints dark.
+
+       System resolution happens in JS -- _page-head.html.j2 writes a resolved
+       light/dark to data-theme -- rather than through a prefers-color-scheme
+       variant here, so this palette is written once instead of twice.
+
+       tests/test_theme.py holds three things about this block: that nothing
+       theme-conditional escapes the wrapper, that it defines exactly the
+       token names :root does, and that every text colour clears 4.5:1
+       against --surface. */
+    @media screen {
+      :root[data-theme="dark"] {
+        --surface: #1b1f27;
+        --surface-sunken: #22262f;
+        --surface-muted: #202631;
+        --surface-accent: #24304a;
+        --surface-accent-on: #2f4680;
+
+        --text: #e3e6ea;
+        --text-subtle: #c2c8d2;
+        --text-muted: #a8b0bd;
+        --text-label: #aab2bf;
+        --text-strong: #f0f2f5;
+        --text-faint: #8b94a3;
+
+        --border: #333a46;
+        --border-muted: #3d4552;
+
+        --accent: #8fa9e0;
+        --on-accent: #fff;
+        --on-accent-muted: rgba(255, 255, 255, 0.85);
+        --on-accent-bright: rgba(255, 255, 255, 0.9);
+        --on-accent-faint: rgba(255, 255, 255, 0.55);
+        --on-accent-fill: rgba(255, 255, 255, 0.18);
+
+        /* The callout keeps its warmth rather than going flat grey; it is a
+           cream card in light, so a warm dark reads as the same element. */
+        --card-bg: #232016;
+        --card-border: #5c5031;
+
+        --code-inline: #ff9ab0;
+        --hl-builtin: #ffa657;
+        --hl-string: #a5d6ff;
+
+        --shadow-card: rgba(0, 0, 0, 0.5);
+        --focus-ring: #ffbf47;
+
+        --deck-surface: #1b1f27;
+        --deck-border: #333a46;
+        --deck-shadow: rgba(0, 0, 0, 0.45);
+        --deck-shadow-md: rgba(0, 0, 0, 0.55);
+        --deck-shadow-lg: rgba(0, 0, 0, 0.65);
+        --deck-counter: #8b94a3;
+        --deck-accent-from: #223258;
+        --deck-accent-to: #2f4680;
+        --deck-accent-edge: #16203a;
+        --deck-body-text: #e3e6ea;
+        --deck-quote-bg: #22293a;
+        --deck-quote-border: #39445c;
+        --deck-toolbar-bg: rgba(27, 31, 39, 0.94);
+        --deck-toolbar-border: #3d4552;
+        --deck-toolbar-fg: #a8b0bd;
+        --deck-toolbar-hover: #3f5da8;
+        --deck-presenting-bg: #14171c;
+        --badge-plate: rgba(255, 255, 255, 0.16);
+
+        /* Bootstrap, mapped from our own tokens rather than through
+           data-bs-theme. Bootstrap's dark block lives inside the vendored
+           bootstrap.min.css and is NOT wrapped in @media screen, so setting
+           that attribute would put a second dark mechanism in the page that
+           print cannot switch off -- and we would be back to re-asserting
+           values and hoping specificity holds. These are the variables these
+           pages actually surface: the container, tables and the tab strip. */
+        --bs-body-bg: var(--surface);
+        --bs-body-color: var(--text);
+        --bs-emphasis-color: var(--text-strong);
+        --bs-border-color: var(--border);
+        --bs-secondary-bg: var(--surface-sunken);
+        --bs-tertiary-bg: var(--surface-muted);
+        --bs-link-color: var(--accent);
+        --bs-link-hover-color: var(--accent);
+        --bs-code-color: var(--code-inline);
+        --bs-table-color: var(--text);
+        --bs-table-bg: transparent;
+        --bs-table-border-color: var(--border);
+        --bs-table-striped-color: var(--text);
+        --bs-table-striped-bg: var(--surface-sunken);
+      }
+    }
