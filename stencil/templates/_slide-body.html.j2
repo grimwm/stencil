@@ -20,7 +20,7 @@ $if(has-byline)$
      `due-needs-separator` is computed in frontmatter-filter.lua because Due
      needs a separator when *either* an author or an Issued date precedes it,
      and a pandoc template cannot OR two keys together. #}
-  <p class="deck-meta">$if(author)$$for(author)$$author$$sep$ &middot; $endfor$$endif$$if(date-label)$$if(author)$ &middot; $endif$Issued <time datetime="$date-iso$">$date-label$</time>$endif$$if(due-label)$$if(due-needs-separator)$ &middot; $endif$Due <time datetime="$due-iso$">$due-label$</time>$endif$</p>
+  <p class="deck-meta">$if(author)$Author $for(author)$$author$$sep$ &middot; $endfor$$endif$$if(date-label)$$if(author)$ &middot; $endif$Issued <time datetime="$date-iso$">$date-label$</time>$endif$$if(due-label)$$if(due-needs-separator)$ &middot; $endif$Due <time datetime="$due-iso$">$due-label$</time>$endif$</p>
 $endif$
 </section>
 $endif$

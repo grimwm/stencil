@@ -24,7 +24,7 @@ $endif$
 $if(has-byline)$
   <div class="doc-byline">
 $if(author)$
-    <div class="doc-meta">$for(author)$$author$$sep$ &middot; $endfor$</div>
+    <div class="doc-meta"><span class="doc-label">Author</span> $for(author)$$author$$sep$ &middot; $endfor$</div>
 $endif$
 $if(has-dates)$
     {# .doc-date stays the wrapper it always was, so the margin-left/text-align
@@ -34,10 +34,10 @@ $if(has-dates)$
        only because it was the only date there. #}
     <div class="doc-date">
 $if(date-label)$
-      <div class="doc-issued"><span class="doc-date-label">Issued</span> <time datetime="$date-iso$">$date-label$</time></div>
+      <div class="doc-issued"><span class="doc-label">Issued</span> <time datetime="$date-iso$">$date-label$</time></div>
 $endif$
 $if(due-label)$
-      <div class="doc-due"><span class="doc-date-label">Due</span> <time datetime="$due-iso$">$due-label$</time></div>
+      <div class="doc-due"><span class="doc-label">Due</span> <time datetime="$due-iso$">$due-label$</time></div>
 $endif$
     </div>
 $endif$

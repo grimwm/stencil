@@ -212,10 +212,10 @@
       color: var(--text-muted);
     }
 
-    /* "Issued" and "Due" name which date is which. Two bare dates in one
-       column cannot be told apart, and the build stamp went unlabelled until
-       now only because it was the only one there. */
-    .doc-date-label {
+    /* "Author", "Issued" and "Due" name which byline field is which. Two
+       bare dates in one column cannot be told apart, and once they are
+       labelled an unlabelled author is the odd one out. */
+    .doc-label {
       font-weight: 600;
       /* 4.98:1 on white. The muted grey this started at, #7a828f, was 3.88:1
          -- under AA for text this size, and `make check-access` runs pa11y at
@@ -267,14 +267,14 @@
       color: var(--text-faint);
     }
 
-    .doc-term {
-      display: block;
-    }
-
-    /* Two classes, so it outranks the sibling rule above without !important:
-       the term starts a line, and a line does not open with a separator. */
-    .doc-context .doc-term::before {
-      content: none;
+    /* A section belongs to its program, so it joins with a full stop and no
+       gap -- "CS 425.001" reads as one identifier -- while the term stays a
+       separate fact behind the middot. Two classes, so this outranks the
+       sibling rule above without !important. */
+    .doc-context .doc-section::before {
+      content: ".";
+      margin: 0;
+      color: inherit;
     }
 
     /* Narrow viewports: nothing is wide enough for two columns, so the header

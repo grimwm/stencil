@@ -223,5 +223,5 @@ def test_the_deck_byline_joins_all_three(render_soup):
     )
     meta = line(soup, ".deck-meta")
     assert meta == (
-        "Ada Lovelace · Issued Sep 01 · Due Sep 12 · 23:59"
+        "Author Ada Lovelace · Issued Sep 01 · Due Sep 12 · 23:59"
     )

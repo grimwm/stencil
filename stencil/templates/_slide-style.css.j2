@@ -114,6 +114,14 @@
       color: var(--on-accent-faint);
     }
 
+    /* As in the document header: the section joins its program with a full
+       stop and no gap, so "CS 425.001" reads as one identifier. */
+    .slide--title .deck-context .deck-section::before {
+      content: ".";
+      margin: 0;
+      color: inherit;
+    }
+
     .slide--title .deck-title {
       font-family: var(--font-sans);
       font-size: 2.9rem;

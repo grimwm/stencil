@@ -209,3 +209,48 @@ def test_dark_palette_text_meets_aa(token):
     bg = resolve(table["--surface"], table)
     ratio = contrast(fg, bg)
     assert ratio >= 4.5, f"{token} ({fg}) on {bg} is {ratio:.2f}:1, under 4.5:1"
+
+
+def test_the_context_line_keeps_program_section_and_term_together():
+    """program, section and term share one line, joined the way a reader
+    parses them: the section belongs to its program, so it attaches with a
+    full stop and no gap -- "CS 425.001" -- while the term is a separate fact
+    behind a middot.
+
+    Asserted against the stylesheet because the separators are ::before
+    generated content. They are not in the DOM, so BeautifulSoup cannot see
+    them and every structural test in this suite reads straight past them.
+    Confirmed once in a real browser: computed content "." at margin 0 for the
+    section, "\\00b7" at 6.4px either side for the term, and .doc-term
+    computing to `inline`.
+    """
+    css = strip_comments(source("_page-style.css.j2"))
+
+    assert not re.search(r"\.doc-term\s*\{[^}]*display:\s*block", css), (
+        ".doc-term is display:block again; the term has left the program's line"
+    )
+
+    section = re.search(
+        r"\.doc-context\s+\.doc-section::before\s*\{([^}]*)\}", css, re.S
+    )
+    assert section, "no section separator rule"
+    assert 'content: "."' in section.group(1)
+    assert re.search(r"margin:\s*0\b", section.group(1)), (
+        "the section separator has a gap; CS 425 . 001 is not one identifier"
+    )
+
+    sibling = re.search(
+        r"\.doc-context\s+span\s*\+\s*span::before\s*\{([^}]*)\}", css, re.S
+    )
+    assert sibling and "\\00b7" in sibling.group(1), (
+        "the general context separator is no longer a middot"
+    )
+
+
+def test_the_byline_labels_every_field_it_names():
+    """Author sits beside Issued and Due, so it is labelled like them. An
+    unlabelled author next to two labelled dates reads as an oversight."""
+    body = (TEMPLATES / "_doc-body.html.j2").read_text()
+    assert '<span class="doc-label">Author</span>' in body
+    assert '<span class="doc-label">Issued</span>' in body
+    assert '<span class="doc-label">Due</span>' in body
