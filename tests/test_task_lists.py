@@ -105,24 +105,38 @@ def test_the_ordinal_survives(render_soup):
 # --- what the stylesheet does about it -------------------------------------
 
 
+def margin_sides(declarations: str) -> list[str]:
+    """The shorthand margin's four sides, in CSS order: top right bottom left.
+
+    Read positionally rather than by pattern. `margin(-right)?:\s*[\d.]`
+    looks like it asserts a right-hand gap and does not: against
+    `margin: 0 0.45em 0 0.35em` it matches the *top* value, so it passes just
+    as happily on `margin: 0 0 0 0.35em` -- no gap beside the text, which is
+    the whole reported bug. Caught in review on this PR.
+    """
+    match = re.search(r"(?<!-)margin:\s*([^;]+)", declarations or "")
+    assert match, f"no shorthand margin: {declarations!r}"
+    parts = match.group(1).split()
+    assert len(parts) == 4, f"expected all four sides, got {match.group(1)!r}"
+    return parts
+
+
 def test_an_ordered_checkbox_is_given_room(css):
     """The reported symptom: no gap between the box and the first letter."""
     declarations = rule_for(css, 'ol > li > label > input[type="checkbox"]')
     assert declarations, "no rule reaches an ordered task list's checkbox"
-    assert re.search(r"margin(-right)?:\s*[\d.]", declarations), (
-        f"the box is given no room: {declarations!r}"
+    assert margin_sides(declarations)[1] != "0", (
+        f"no gap between the box and the text: {declarations!r}"
     )
 
 
 def test_an_ordered_checkbox_is_given_room_on_the_ordinal_side_too(css):
-    """Fixing only the right side moves the collision rather than removing it:
+    """Fixing only the text side moves the collision rather than removing it:
     the box then sits hard against the number, reading "1.[ ] text"."""
     declarations = rule_for(css, 'ol > li > label > input[type="checkbox"]')
-    margin = re.search(r"(?<!-)margin:\s*([^;]+)", declarations or "")
-    assert margin, f"no shorthand margin to carry a left gap: {declarations!r}"
-    parts = margin.group(1).split()
-    assert len(parts) == 4, f"expected all four sides, got {margin.group(1)!r}"
-    assert parts[3] != "0", "no gap between the ordinal and the box"
+    assert margin_sides(declarations)[3] != "0", (
+        f"no gap between the ordinal and the box: {declarations!r}"
+    )
 
 
 def test_an_ordered_checkbox_is_tinted_like_a_bullet_one(css):
