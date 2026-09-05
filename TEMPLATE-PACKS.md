@@ -100,8 +100,8 @@ does not decide what a package is or how markdown is rendered.
 
 ### Does the existing `templates:` list collapse into this?
 
-Yes, and it is the main thing a pack buys. cs234's config carries 35 lines of
-`src`/`dest`/`when` wiring for ten template entries — and that list, not the
+Yes, and it is the main thing a pack buys. cs234's config carries 22 lines of
+`src`/`dest`/`when` wiring for nine template entries — and that list, not the
 templates, is what a second course repo would have to copy verbatim to get the
 same scaffolding.
 
@@ -156,7 +156,7 @@ with a new distribution to maintain, an entry-point mechanism, and a `packs:` ke
 in the config schema.
 
 **The trigger to build it is a second repository needing those templates.** At
-that moment the alternative is copying a directory and 35 lines of wiring, the
+that moment the alternative is copying a directory and 22 lines of wiring, the
 duplication stops being hypothetical, and every argument in this document starts
 paying for itself. Until then the design is the deliverable.
 
