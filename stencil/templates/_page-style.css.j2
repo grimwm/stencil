@@ -87,6 +87,33 @@
       margin-top: 0.6rem;
     }
 
+    /* Brand: what the document belongs to, above the program it is part of.
+       A name sits larger and darker than the context lines under it, so the
+       institution reads as the parent of the course rather than another
+       field beside it. */
+    .doc-brand {
+      font-size: 1.15rem;
+      font-weight: 600;
+      color: #3a424f;
+      margin-bottom: 0.2rem;
+    }
+
+    /* A logo is capped on both axes, so a tall mark and a wide wordmark both
+       fit without the header reflowing around whichever one was supplied.
+       font-size: 0 on the box kills the line-box descender gap an inline
+       image otherwise leaves beneath itself. */
+    .doc-brand--image {
+      font-size: 0;
+      line-height: 0;
+    }
+
+    .doc-brand img {
+      max-height: 2.75rem;
+      max-width: 14rem;
+      height: auto;
+      width: auto;
+    }
+
     /* Course and section share a line; the term takes its own. Separators are
        generated between siblings so no combination leaves a stray middot with
        nothing on one side of it. */
@@ -448,6 +475,13 @@
       blockquote {
         background: #fffef8 !important;
         box-shadow: none;
+        -webkit-print-color-adjust: exact;
+        print-color-adjust: exact;
+      }
+
+      /* A logo is the one image in the header, and a header that prints
+         without it is a handout that looks unbranded on paper only. */
+      .doc-brand img {
         -webkit-print-color-adjust: exact;
         print-color-adjust: exact;
       }

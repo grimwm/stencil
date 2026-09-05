@@ -45,7 +45,43 @@ local CONTEXT = { "program", "section", "term" }
 -- `author` and `date` are here for the header rows below: an empty author is
 -- falsy to `$if(author)$` but not to `~= nil`, so without this an `author:`
 -- with nothing after it would open a byline row with nothing to put in it.
-local BLANKABLE = { "program", "section", "term", "author", "date", "lang", "dir" }
+local BLANKABLE = {
+  "program", "section", "term", "author", "date", "lang", "dir",
+  "brand", "brand-alt",
+}
+
+-- What `brand` is taken to be a picture of rather than a name.
+local IMAGE_EXT = {
+  png = true, jpg = true, jpeg = true, gif = true,
+  svg = true, webp = true, avif = true,
+}
+
+--- The image `brand` points at, or nil when it is a name rather than a file.
+---
+--- `file://x` is rewritten to plain `x` on purpose. embed-images.lua treats
+--- anything matching `^%a[%w+.-]*://` as remote and leaves it alone, so a
+--- file:// URI would be the one spelling that never gets inlined -- the page
+--- would carry a path instead of the picture, and html-to-pdf.js fails the
+--- build on an asset it cannot fetch. Stripping the scheme hands it to that
+--- filter as an ordinary relative path, which is what it knows how to bundle.
+---
+--- A genuinely remote URL is returned unchanged and stays a reference. That is
+--- embed-images.lua's documented position on remote images, and this is not
+--- the place to overturn it.
+local function image_target(text)
+  local relative = text:match("^file://(.+)$")
+  if relative then
+    return relative
+  end
+  if text:match("^data:") or text:match("^%a[%w+.-]*://") then
+    return text
+  end
+  local ext = text:match("%.([%w]+)$")
+  if ext and IMAGE_EXT[ext:lower()] then
+    return text
+  end
+  return nil
+end
 
 local function trim(text)
   -- match, not a chained gsub: gsub returns the replacement count as a second
@@ -102,11 +138,37 @@ function Meta(meta)
     meta.date = text_of(meta["build-date"]) or os.date("%Y-%m-%d")
   end
 
+  -- `brand` is either a name or a picture, and the difference decides both
+  -- what the template emits and whether alt text is required.
+  local brand = text_of(meta.brand)
+  if brand then
+    local target = image_target(brand)
+    if target then
+      local alt = text_of(meta["brand-alt"])
+      if not alt then
+        -- Refused rather than defaulted. A logo is frequently the only thing
+        -- naming the institution on the page, so a silent alt="" would drop
+        -- that for anyone using a screen reader, and `make check-access`
+        -- runs pa11y at WCAG2AA. Failing here says so while the author is
+        -- still looking at the document.
+        error(
+          "brand is an image (" .. brand .. ") but brand-alt is not set. "
+          .. "Add brand-alt: with the text a reader should hear in place of "
+          .. "the logo, or use a plain string for brand to render it as text."
+        )
+      end
+      meta.brand = pandoc.Inlines({
+        pandoc.Image(pandoc.Inlines({ pandoc.Str(alt) }), target),
+      })
+      meta["brand-is-image"] = true
+    end
+  end
+
   local has_context = false
   for _, key in ipairs(CONTEXT) do
     has_context = has_context or meta[key] ~= nil
   end
-  meta["has-context"] = has_context or nil
+  meta["has-context"] = (has_context or meta.brand ~= nil) or nil
   meta["has-byline"] = (meta.author ~= nil or meta.date ~= nil) or nil
 
   return meta

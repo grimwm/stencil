@@ -4,6 +4,9 @@ $if(title)$
 <section class="slide slide--title">
 $if(has-context)$
   {# One line, for the reason _doc-body.html.j2 gives. #}
+$if(brand)$
+  <div class="deck-brand$if(brand-is-image)$ deck-brand--image$endif$">$brand$</div>
+$endif$
   <p class="deck-context">$if(program)$<span class="deck-program">$program$</span>$endif$$if(section)$<span class="deck-section">$section$</span>$endif$$if(term)$<span class="deck-term">$term$</span>$endif$</p>
 $endif$
   <h1 class="deck-title">$title$</h1>

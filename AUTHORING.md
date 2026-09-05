@@ -118,19 +118,21 @@ date: 2026-09-02
 A document renders these as a page header; a deck renders them as a generated title slide. Every key
 the pipeline reads, and what each one does on each side:
 
-| Key           | In a document                    | In a deck                                       |
-| ------------- | -------------------------------- | ----------------------------------------------- |
-| `title`       | Page header, and the browser tab | Title slide, and the browser tab                |
-| `subtitle`    | Under the title                  | Under the title on the title slide              |
-| `program`     | Top right, opposite the title    | Above the title, and prefixes the browser tab   |
-| `section`     | Top right, after `program`       | Above the title, after `program`                |
-| `term`        | Top right, its own line          | Above the title, after `section`                |
-| `author`      | Second row, under the title      | Byline on the title slide                       |
-| `date`        | Second row, opposite the author  | Byline, after the author                        |
-| `show_date`   | Stamps the build date as `date`  | Same                                            |
-| `lang`        | `<html lang>` (default `en`)     | Same                                            |
-| `dir`         | `<html dir>`, only when set      | Same                                            |
-| `slide-level` | Ignored                          | Heading level that starts a slide (default `2`) |
+| Key           | In a document                                   | In a deck                                       |
+| ------------- | ----------------------------------------------- | ----------------------------------------------- |
+| `title`       | Page header, and the browser tab                | Title slide, and the browser tab                |
+| `subtitle`    | Under the title                                 | Under the title on the title slide              |
+| `brand`       | Top right, above `program`                      | Above the title on the title slide              |
+| `brand-alt`   | Alt text; **required** when `brand` is an image | Same                                            |
+| `program`     | Top right, opposite the title                   | Above the title, and prefixes the browser tab   |
+| `section`     | Top right, after `program`                      | Above the title, after `program`                |
+| `term`        | Top right, its own line                         | Above the title, after `section`                |
+| `author`      | Second row, under the title                     | Byline on the title slide                       |
+| `date`        | Second row, opposite the author                 | Byline, after the author                        |
+| `show_date`   | Stamps the build date as `date`                 | Same                                            |
+| `lang`        | `<html lang>` (default `en`)                    | Same                                            |
+| `dir`         | `<html dir>`, only when set                     | Same                                            |
+| `slide-level` | Ignored                                         | Heading level that starts a slide (default `2`) |
 
 `author` takes one name or a list of them:
 
@@ -162,6 +164,50 @@ Ada Lovelace · Grace Hopper                 2026-09-05
 
 Below roughly 640px the two columns collapse into one left-aligned stack. A deck has the width to
 keep `program · section · term` on a single line above the title.
+
+#### `brand`
+
+What the document belongs to, above the program it is part of. Either a name or a picture — the value
+decides which, not a second key:
+
+```markdown
+---
+title: "Sprint Report"
+brand: "Southern Illinois University"   # a name, rendered as text
+program: "CS 425"
+---
+```
+
+```markdown
+---
+title: "Sprint Report"
+brand: "file://img/logo.svg"            # a picture
+brand-alt: "Southern Illinois University"
+program: "CS 425"
+---
+```
+
+A value is a picture when it starts with `file://` or ends in an image extension (`.png`, `.jpg`,
+`.jpeg`, `.gif`, `.svg`, `.webp`, `.avif`). Anything else is a name, so `St. Louis U.` stays text.
+
+The picture is **inlined** as a `data:` URI like any other image, so the page stays one
+self-contained file. `file://img/logo.svg` and `img/logo.svg` behave identically — the scheme is
+stripped before the image is resolved, because `embed-images.lua` treats any `scheme://` as remote
+and skips it, which would leave the page carrying a path instead of the logo and fail `make pdf`.
+
+A genuinely remote `https://` logo stays a reference and is **not** downloaded, which is the same
+position `embed-images.lua` takes on remote figures — it will fail `make pdf`, which does not reach
+the network.
+
+A logo is capped on both axes and **never distorted**: whichever dimension hits its cap first, the
+other scales with it, so the image keeps its proportions. A 900×60 wordmark renders 224×14.93 and a
+50×600 crest renders 3.66×44 — each at its exact natural ratio. Supply whatever shape you have; a very
+tall logo simply ends up narrow, because the height cap is what keeps the header from growing.
+
+`brand-alt` is **required** when `brand` is a picture, and the build fails without it. That is
+deliberate rather than defaulting to `alt=""`: a logo is often the only thing naming the institution
+on the page, so an empty alt drops it entirely for anyone using a screen reader, and
+`make check-access` runs pa11y at WCAG 2.1 AA. A name needs no `brand-alt` — it is already text.
 
 #### `program`, `section`, `term`
 

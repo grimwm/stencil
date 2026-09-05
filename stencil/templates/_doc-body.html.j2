@@ -18,7 +18,7 @@ $if(has-context)$
     {# One line on purpose. A newline between these spans collapses to a word
        space that lands on only one side of the generated separator, which is
        asymmetric in a way no margin can correct. #}
-    <div class="doc-context">$if(program)$<span class="doc-program">$program$</span>$endif$$if(section)$<span class="doc-section">$section$</span>$endif$$if(term)$<span class="doc-term">$term$</span>$endif$</div>
+    <div class="doc-context">$if(brand)$<div class="doc-brand$if(brand-is-image)$ doc-brand--image$endif$">$brand$</div>$endif$$if(program)$<span class="doc-program">$program$</span>$endif$$if(section)$<span class="doc-section">$section$</span>$endif$$if(term)$<span class="doc-term">$term$</span>$endif$</div>
 $endif$
   </div>
 $if(has-byline)$
