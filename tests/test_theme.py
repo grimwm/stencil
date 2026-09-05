@@ -112,3 +112,21 @@ def test_light_palette_text_meets_aa(token):
     bg = resolve(table["--surface"], table)
     ratio = contrast(fg, bg)
     assert ratio >= 4.5, f"{token} ({fg}) on {bg} is {ratio:.2f}:1, under 4.5:1"
+
+
+def test_every_token_used_is_a_token_defined():
+    """A `var(--typo)` renders as nothing at all, silently.
+
+    The two stylesheets share one :root -- a deck includes the document
+    stylesheet -- so this checks them together. CSS has no error for an
+    undefined custom property: the declaration is simply dropped, which looks
+    identical to a rule that was never written.
+    """
+    page = strip_comments(source("_page-style.css.j2"))
+    deck = strip_comments(source("_slide-style.css.j2"))
+    defined = set(tokens(page)) | {
+        t for t in re.findall(r"(--bs-[a-z0-9-]+)\s*:", page)
+    }
+    used = set(re.findall(r"var\((--[a-z0-9-]+)\)", page + deck))
+    missing = sorted(used - defined)
+    assert not missing, f"used but never defined: {missing}"
