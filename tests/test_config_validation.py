@@ -6,7 +6,7 @@ halves used to be silent: an unknown key in `template_env` was accepted and
 read by nothing, and a `when:` naming a key nobody set read as None, so the
 template it guarded was skipped with no output and no error.
 
-cs234 drives has_vscode, has_install_scripts and deps_script through this path,
+A consumer drives keys like has_vscode and deps_script through this path,
 so the shapes exercised here are the ones in real use -- in particular a key
 set on one package and tested by a `when:` that every package is checked
 against, which must stay legal.
@@ -80,7 +80,7 @@ def test_a_derived_key_is_a_valid_when_condition(check):
 
 
 def test_a_key_set_on_one_package_still_guards_every_package(check):
-    """The cs234 shape: one package sets has_vscode, the rest do not, and the
+    """The shape that motivates it: one package sets a key, the rest do not, and the
     when: is checked against all of them. Legal, and must stay legal."""
     check(
         {
@@ -107,7 +107,7 @@ def test_a_template_env_key_nothing_reads_is_an_error(check):
 
 
 def test_a_key_read_only_by_a_template_body_counts_as_read(check):
-    """deps_script is never a when: condition -- cs234's Makefile.j2 tests it
+    """deps_script is never a when: condition -- a consumer's Makefile.j2 tests it
     directly. Requiring a when: for every key would break that."""
     check(
         {
@@ -119,7 +119,7 @@ def test_a_key_read_only_by_a_template_body_counts_as_read(check):
 
 
 def test_a_key_read_only_through_an_include_counts_as_read(check):
-    """cs234 overrides Makefile.j2 and composes stencil's partials into it, so
+    """A consumer can override Makefile.j2 and compose stencil's partials into it, so
     a key can be referenced a level below the template the config names."""
     check(
         {
@@ -135,7 +135,7 @@ def test_a_key_read_only_through_an_include_counts_as_read(check):
 
 # --- config-level template_env: declaring a key without setting it ---------
 #
-# cs234 points three configs at one _generator/templates, and its shared
+# A project can point several configs at one templates directory, and a shared
 # Makefile.j2 reads has_playwright (set only by answers/.config.yaml) and
 # deps_script (set only by assignments/.config.yaml). Each config therefore
 # needs to say "my templates may read this key" without any package setting it.
@@ -195,7 +195,7 @@ def test_a_dynamic_include_suspends_the_unread_key_check(check):
 
 
 def test_a_key_read_through_the_nested_template_env_dict_counts_as_read(check):
-    """cs234's nginx.conf.j2 writes
+    """A consumer's nginx.conf.j2 writing
     `(template_env | default({})).get('docroot_subdir')`. The key is a dict
     lookup, not a variable, so no analysis of variable names can see it. What
     this check can soundly reject is a name that appears nowhere in any

@@ -9,6 +9,26 @@ and the closed epics in `.beads/issues.jsonl` are the readable index.
 How the version gets bumped is written down in
 [AGENTS.md](AGENTS.md#cutting-a-release), not here.
 
+## 0.10.3
+
+- **Stopped naming a private consumer.** AGENTS.md, four comments in
+  `generate.py` and three test files described what one course repository asks
+  of stencil, by name: which of its configs set which custom keys, that its
+  shared `Makefile.j2` composes stencil's partials, what its
+  `front_controller` defaults to.
+
+  A tool has no business carrying knowledge of a private consumer, and the
+  copy it carried had already drifted -- it said three configs pointing at one
+  templates directory, and there are four. That is what documentation in the
+  wrong repository does: nobody working in either place is looking at it when
+  the fact changes.
+
+  Every reason survives, stated generally: a project *may* point several
+  configs at one templates directory, a consumer's composition *may* include
+  stencil's partials, a key defaulted to `False` *does* put the literal
+  "False" where a filename belonged. The consuming repository now records its
+  own arrangement in its own AGENTS.md.
+
 ## 0.10.2
 
 - **Removed `copy_files` from STENCIL.md.** It described a per-package field

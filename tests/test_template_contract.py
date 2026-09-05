@@ -1,7 +1,7 @@
 """What the shared partials require of whoever includes them.
 
 A consuming project may override stencil's composition templates while keeping
-its partials: cs234's Makefile.j2 is its own file that `{% include %}`s
+its partials: a consumer's Makefile.j2 can be its own file that `{% include %}`s
 Makefile-base, Makefile-doc and Makefile-pkg. That is the search path working
 as intended, and it means the partials have an interface -- the context keys
 they read -- that stencil can change without anything failing on either side.
@@ -127,7 +127,7 @@ def test_an_unknown_variable_fails_the_build(generate_package, tmp_path):
 def test_a_template_env_key_left_unset_is_falsy_rather_than_undefined(
     generate_package, tmp_path
 ):
-    """cs234 sets deps_script on one package and tests it on all of them, so an
+    """A consumer can set deps_script on one package and test it on all, so an
     unset custom key has to stay usable in a condition."""
     directory = tmp_path / "templates"
     directory.mkdir()
@@ -176,7 +176,7 @@ def test_a_config_level_default_is_overridden_per_package(generate_package, tmp_
 
 def test_an_unset_key_still_triggers_the_default_filter(generate_package, tmp_path):
     """A key some package sets must stay *undefined* for the packages that do
-    not, rather than becoming False. cs234 writes
+    not, rather than becoming False. A template writing
     `{{ front_controller | default('index.html') }}`, and a concrete False
     satisfies the filter -- which put the literal "False" into generated
     TypeScript where a filename belonged."""

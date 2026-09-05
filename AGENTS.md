@@ -268,8 +268,8 @@ or re-collapse `CLAUDE.md` to protect the import.
 ### A consumer's composition template is an interface, so partials have a contract
 
 A consuming project may override `Makefile.j2` or `docker-compose.yml.j2` and `{% include %}`
-stencil's partials into its own version — cs234 does, across three configs pointed at one
-`_generator/templates`. That is the search path working as designed, and it means the context
+stencil's partials into its own version — one consumer does exactly that, across several
+configs pointed at a single templates directory. That is the search path working as designed, and it means the context
 keys those partials read are an interface with someone on the other side of it.
 
 Two things hold it, and both are needed:
