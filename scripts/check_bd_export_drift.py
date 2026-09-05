@@ -144,8 +144,20 @@ def committed_export() -> str | None:
     return result.stdout
 
 
-def fresh_export() -> str | None:
+# What bd prints when the workspace has no database at all. That state is
+# genuinely empty rather than broken -- a contributor who has bd on PATH but has
+# never run `bd init` has nothing to compare -- so it is the one export failure
+# the check steps out of the way for. Every other failure is a database it
+# could not read, which is not something to push past.
+NO_DATABASE = "no beads database"
+
+
+def fresh_export() -> tuple[str | None, str]:
     """Export the database to a temp file and read it back.
+
+    Returns the export and, when it could not be produced, whatever bd said
+    about why -- the caller has to tell an empty workspace apart from a broken
+    one, and bd is the only thing that knows which it is.
 
     A temp file rather than stdout because `bd export -o -` writes a file
     literally named "-".
@@ -159,17 +171,15 @@ def fresh_export() -> str | None:
                 text=True,
                 encoding="utf-8",
             )
-        except OSError:
-            return None
+        except OSError as error:
+            return None, str(error)
         if result.returncode != 0 or not destination.exists():
-            return None
-        return destination.read_text(encoding="utf-8")
+            return None, (result.stderr or result.stdout or "").strip()
+        return destination.read_text(encoding="utf-8"), ""
 
 
 def main() -> int:
     if shutil.which("bd") is None:
-        return 0
-    if not EXPORT.exists():
         return 0
 
     committed = committed_export()
@@ -178,15 +188,26 @@ def main() -> int:
         # There is no pushed state to hold the database against.
         return 0
 
-    exported = fresh_export()
+    exported, why = fresh_export()
     if exported is None:
-        # No database on this machine, or bd could not read it. Not this
-        # check's business to fail the push over.
-        return 0
+        if NO_DATABASE in why.lower():
+            return 0
+        # bd is installed and HEAD carries an export, but the database will not
+        # read. Returning 0 here would look exactly like agreement.
+        print(
+            f"cannot check {EXPORT} against the beads database:\n\n{why}",
+            file=sys.stderr,
+        )
+        return 1
 
-    drift = describe_drift(
-        committed, exported, working_tree=EXPORT.read_text(encoding="utf-8")
+    # Deliberately not gated on the file existing: deleting it must not be a
+    # way to push a stale commit. Absent, there is simply no working copy for
+    # the advice to take into account.
+    working_tree = (
+        EXPORT.read_text(encoding="utf-8") if EXPORT.exists() else None
     )
+
+    drift = describe_drift(committed, exported, working_tree=working_tree)
     if drift is None:
         return 0
 

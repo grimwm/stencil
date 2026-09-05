@@ -142,7 +142,7 @@ def test_an_uncommitted_export_cannot_hide_a_stale_head(
     monkeypatch.chdir(repo)
     # Exactly the masking state: working tree matches the database, HEAD does not.
     (repo / ".beads" / "issues.jsonl").write_text(jsonl(CLOSED))
-    monkeypatch.setattr(drift_check, "fresh_export", lambda: jsonl(CLOSED))
+    monkeypatch.setattr(drift_check, "fresh_export", lambda: (jsonl(CLOSED), ""))
 
     assert drift_check.main() == 1
 
@@ -151,7 +151,7 @@ def test_a_committed_export_matching_the_database_passes(
     drift_check, repo, monkeypatch
 ):
     monkeypatch.chdir(repo)
-    monkeypatch.setattr(drift_check, "fresh_export", lambda: jsonl(OPEN))
+    monkeypatch.setattr(drift_check, "fresh_export", lambda: (jsonl(OPEN), ""))
 
     assert drift_check.main() == 0
 
@@ -161,7 +161,7 @@ def test_an_export_never_committed_is_left_alone(drift_check, tmp_path, monkeypa
     monkeypatch.chdir(tmp_path)
     (tmp_path / ".beads").mkdir()
     (tmp_path / ".beads" / "issues.jsonl").write_text(jsonl(OPEN))
-    monkeypatch.setattr(drift_check, "fresh_export", lambda: jsonl(CLOSED))
+    monkeypatch.setattr(drift_check, "fresh_export", lambda: (jsonl(CLOSED), ""))
 
     assert drift_check.committed_export() is None
     assert drift_check.main() == 0
@@ -231,3 +231,49 @@ def test_a_non_ascii_export_is_read_as_utf8(drift_check, repo, monkeypatch):
     )
 
     assert "Résumé — dash" in drift_check.committed_export()
+
+
+# Failing open ---------------------------------------------------------------
+#
+# The states where the check cannot answer the question. A guard that returns
+# success because it could not look is indistinguishable, at the terminal, from
+# one that looked and found nothing.
+
+
+def test_a_deleted_export_still_compares_head(drift_check, repo, monkeypatch):
+    """Removing the file must not be a way to get a stale commit pushed."""
+    monkeypatch.chdir(repo)
+    (repo / ".beads" / "issues.jsonl").unlink()
+    monkeypatch.setattr(drift_check, "fresh_export", lambda: (jsonl(CLOSED), ""))
+
+    assert drift_check.main() == 1
+
+
+def test_a_broken_database_blocks_the_push(drift_check, repo, monkeypatch):
+    """bd is installed and HEAD carries an export, but the database will not read.
+
+    Nothing about that is benign, and it is the one case where returning 0
+    means "did not check" while looking exactly like "checked and agreed".
+    """
+    monkeypatch.chdir(repo)
+    monkeypatch.setattr(
+        drift_check, "fresh_export", lambda: (None, "panic: dolt: corrupt chunk")
+    )
+
+    assert drift_check.main() == 1
+
+
+def test_no_database_on_this_machine_is_left_alone(drift_check, repo, monkeypatch):
+    """A contributor who has bd but has never run `bd init` can still push.
+
+    Distinguished from a broken database by what bd itself reports, so the
+    check stays out of the way in the one state that is genuinely empty.
+    """
+    monkeypatch.chdir(repo)
+    monkeypatch.setattr(
+        drift_check,
+        "fresh_export",
+        lambda: (None, "Error: no beads database found\nHint: run 'bd init'"),
+    )
+
+    assert drift_check.main() == 0
