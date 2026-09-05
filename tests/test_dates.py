@@ -42,9 +42,9 @@ def build(render, key: str, value: str):
 def line(soup, selector: str) -> str:
     """One header line, whitespace-normalized.
 
-    Pandoc hard-wraps its output, so `Sep 12, 2026` arrives as `Sep\\n12,
-    2026`. That is formatting, not content -- the same reason test_byline.py
-    normalizes before comparing.
+    Pandoc hard-wraps its output, so `Issued Sep 12` can arrive as
+    `Issued Sep\\n12`. That is formatting, not content -- the same reason
+    test_byline.py normalizes before comparing.
     """
     return " ".join(soup.select_one(selector).get_text().split())
 
@@ -133,8 +133,8 @@ def test_issued_and_due_render_labelled(render_soup):
         "d.md",
         text=document('title: "T"\ndate: 2026-09-01\ndue: 2026-09-12T23:59\n'),
     )
-    assert line(soup, ".doc-issued") == "Issued Sep 01, 2026"
-    assert line(soup, ".doc-due") == "Due Sep 12, 2026 · 23:59"
+    assert line(soup, ".doc-issued") == "Issued Sep 01"
+    assert line(soup, ".doc-due") == "Due Sep 12 · 23:59"
 
 
 def test_a_written_time_renders_and_a_missing_one_does_not(render_soup):
@@ -169,7 +169,7 @@ def test_a_written_date_still_beats_show_date(render_soup):
         "d.md",
         text=document('title: "T"\ndate: 2026-09-01\nshow_date: true\n'),
     )
-    assert "Sep 01, 2026" in line(soup, ".doc-issued")
+    assert "Sep 01" in line(soup, ".doc-issued")
 
 
 def test_due_alone_opens_the_byline(render_soup):
@@ -178,7 +178,7 @@ def test_due_alone_opens_the_byline(render_soup):
     )
     assert soup.select_one(".doc-byline") is not None
     assert soup.select_one(".doc-issued") is None
-    assert "Due Sep 12, 2026" in line(soup, ".doc-due")
+    assert "Due Sep 12" in line(soup, ".doc-due")
 
 
 def test_the_deck_byline_never_strands_a_separator(render_soup):
@@ -186,7 +186,7 @@ def test_the_deck_byline_never_strands_a_separator(render_soup):
         "slide", "deck.md", text=document('title: "T"\ndue: 2026-09-12\n')
     )
     meta = line(soup, ".deck-meta")
-    assert meta == "Due Sep 12, 2026"
+    assert meta == "Due Sep 12"
 
 
 def test_the_deck_byline_joins_all_three(render_soup):
@@ -200,6 +200,5 @@ def test_the_deck_byline_joins_all_three(render_soup):
     )
     meta = line(soup, ".deck-meta")
     assert meta == (
-        "Ada Lovelace · Issued Sep 01, 2026 "
-        "· Due Sep 12, 2026 · 23:59"
+        "Ada Lovelace · Issued Sep 01 · Due Sep 12 · 23:59"
     )

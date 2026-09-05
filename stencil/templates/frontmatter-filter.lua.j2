@@ -206,9 +206,14 @@ local function parse_stamp(key, text)
   return { year = y, month = m, day = d, hour = hh, min = mm }
 end
 
---- The display form: MMM DD, YYYY, and the time only when one was written.
+--- The display form: MMM DD, and the time only when one was written.
+---
+--- No year on purpose. A handout is read inside a term the reader already
+--- knows, and `term:` is usually sitting in the header saying so. The year is
+--- not lost: the <time datetime> attribute beside this carries the full ISO
+--- string, which is what a machine reads.
 local function format_stamp(stamp)
-  local text = string.format("%s %02d, %04d", MONTHS[stamp.month], stamp.day, stamp.year)
+  local text = string.format("%s %02d", MONTHS[stamp.month], stamp.day)
   if stamp.hour then
     text = text .. " " .. utf8.char(0x00B7) .. " "
         .. string.format("%02d:%02d", stamp.hour, stamp.min)

@@ -68,24 +68,43 @@
       vertical-align: middle;
     }
 
-    /* The header's two rows. Identity sits on the left of each, context on the
-       right, so a document with a course and a term costs two lines instead of
-       five. align-items: baseline so the course sits on the title's baseline
-       rather than floating at the top of a two-line identity block. */
-    .doc-headrow,
+    /* The header's two rows, as a grid rather than two flex rows.
+
+       Grid because source order and visual order have to differ: the byline is
+       written second so the author follows the subtitle for a screen reader
+       and for pdftotext, and placement puts the context back up on row one.
+       align-items: baseline so the course sits on the title's baseline rather
+       than floating at the top of a two-line identity block. */
+    header.doc-title {
+      display: grid;
+      grid-template-columns: minmax(18rem, 1fr) auto;
+      align-items: baseline;
+      column-gap: 1.5rem;
+      row-gap: 0.35rem;
+    }
+
+    /* The 18rem minimum is the wrap threshold the flex-basis used to be: once
+       the title has less than that, the context drops to its own line rather
+       than being squeezed to one word per line. */
+    .doc-identity {
+      grid-column: 1;
+      grid-row: 1;
+      min-width: 0;
+    }
+
+    .doc-context {
+      grid-column: 2;
+      grid-row: 1;
+    }
+
     .doc-byline {
+      grid-column: 1 / -1;
+      grid-row: 2;
+      margin-top: 0.6rem;
       display: flex;
       flex-wrap: wrap;
       align-items: baseline;
       gap: 0.35rem 1.5rem;
-    }
-
-    /* The flex-basis is the wrap threshold: once the title has less than 18rem
-       the context drops to its own line rather than being squeezed to one word
-       per line. */
-    .doc-identity {
-      flex: 1 1 18rem;
-      min-width: 0;
     }
 
     /* Both right-hand columns push themselves over rather than relying on
@@ -105,10 +124,6 @@
       font-size: 1rem;
       font-weight: 400;
       color: #5a6270;
-    }
-
-    .doc-byline {
-      margin-top: 0.6rem;
     }
 
     /* "Issued" and "Due" name which date is which. Two bare dates in one
@@ -173,8 +188,22 @@
     }
 
     /* Narrow viewports: nothing is wide enough for two columns, so the header
-       becomes the plain left-aligned stack it used to be. */
+       becomes the plain left-aligned stack it used to be -- now in source
+       order, which finally puts the byline under the subtitle rather than
+       after the context block.
+
+       grid-row has to be reset alongside grid-column. Left at 1, identity and
+       context would land in the same cell and overlap. */
     @media (max-width: 40rem) {
+      header.doc-title {
+        grid-template-columns: 1fr;
+      }
+      .doc-identity,
+      .doc-context,
+      .doc-byline {
+        grid-column: 1;
+        grid-row: auto;
+      }
       .doc-context,
       .doc-date {
         margin-left: 0;
