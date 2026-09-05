@@ -41,9 +41,10 @@
       var theme = pref === 'system' ? (query.matches ? 'dark' : 'light') : pref;
       root.dataset.theme = theme;
       root.dataset.themePref = pref;
-      /* Tells the browser to render its own widgets -- scrollbars, form
-         controls -- to match, which CSS custom properties cannot do. */
-      root.style.colorScheme = theme;
+      /* color-scheme is set in CSS, not here. An inline style is not scoped
+         by any media query, so assigning it would put "dark" somewhere
+         @media screen cannot reach and hand the print formatter a dark
+         canvas -- the one hole in the containment. */
       for (var i = 0; i < listeners.length; i++) listeners[i](theme, pref);
     }
 

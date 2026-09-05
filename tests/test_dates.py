@@ -301,5 +301,5 @@ def test_the_header_extracts_as_words_not_a_run_on(render_soup):
     assert "Author Ada Lovelace · Grace Hopper" in header
     assert "Issued Sep 01 · Due Sep 12 · 23:59 · Points 50 pts" in header
     # Nothing anywhere in the header is jammed against a separator or a label.
-    assert "·D" not in header and "·P" not in header and "·I" not in header
-    assert "AuthorA" not in header
+    for jammed in ["·D", "·P", "·I", "AuthorA"]:
+        assert jammed not in header, f"{jammed!r} is jammed in: {header}"

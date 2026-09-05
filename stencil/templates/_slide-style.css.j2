@@ -143,11 +143,11 @@
     }
 
 
-    /* Authors above the facts, matching the document header. flex-wrap so a
-       team's list wraps between names and stays centred rather than running
-       off the slide. */
+    /* Authors above the facts, matching the document header. Left-aligned
+       like every other line on this slide -- .slide--title sets
+       align-items: flex-start, so a centred box would only centre text
+       inside its own width and sit left of everything else anyway. */
     .slide--title .deck-authors {
-      text-align: center;
       font-family: var(--font-sans);
       font-size: 1.05rem;
       color: var(--on-accent-bright);

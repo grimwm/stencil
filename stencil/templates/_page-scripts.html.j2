@@ -140,11 +140,16 @@
     // and the PDF driver each see exactly one signal.
     if (window.__stencilTheme) {
       let firstCall = true;
+      // Redraws are chained, not fired in parallel. renderMermaid() restores
+      // each element's source and re-initializes mermaid globally, so two in
+      // flight at once mutate the same nodes and the same config -- easy to
+      // reach by clicking twice.
+      let pending = Promise.resolve();
       window.__stencilTheme.subscribe(function () {
         // subscribe() calls back immediately with the current theme; the
         // diagram it would redraw has just been drawn.
         if (firstCall) { firstCall = false; return; }
-        renderMermaid();
+        pending = pending.then(renderMermaid).catch(function () {});
       });
     }
   })();

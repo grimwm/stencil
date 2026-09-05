@@ -84,7 +84,8 @@ def test_scope_css_drops_comments_and_keeps_every_rule():
 
     css = "/*! banner */.a{color:red}/* mid */.b{color:blue}"
     out = scope_css(css, "#s")
-    assert "banner" not in out and "mid" not in out
+    assert "banner" not in out, "a leading comment survived"
+    assert "mid" not in out, "an interior comment survived"
     assert out.count("{") == 2, "a rule was lost"
 
 

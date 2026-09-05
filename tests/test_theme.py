@@ -300,9 +300,17 @@ def test_every_storage_access_is_guarded():
     block = theme_script()
     for access in ["localStorage.getItem", "localStorage.setItem"]:
         assert access in block, f"{access} not found"
-    # Each access sits inside a try, and each try has a catch.
-    assert block.count("try {") >= 2, "a storage access is unguarded"
-    assert block.count("try {") == block.count("catch"), "a try without a catch"
+        # Each access, individually, sits between a try and its catch --
+        # counting try and catch in aggregate would pass on a file where one
+        # guarded something else entirely.
+        for m in re.finditer(re.escape(access), block):
+            opened = block.rfind("try {", 0, m.start())
+            assert opened != -1, f"{access} has no try before it"
+            closed = block.find("catch", m.end())
+            assert closed != -1, f"{access} has no catch after it"
+            assert "}" not in block[opened + 5 : m.start()].replace("})", ""), (
+                f"{access} sits outside the try that precedes it"
+            )
 
 
 def test_an_explicit_choice_outranks_the_operating_system():
@@ -324,8 +332,13 @@ def test_the_control_is_a_radiogroup_with_three_named_options():
     buttons -- a screen reader should say "2 of 3", not name three unrelated
     controls."""
     markup = TOGGLE.read_text()
-    assert "role', 'radiogroup'" in markup or 'role\', \'radiogroup\'' in markup
-    assert markup.count("'radio'") >= 1
+    assert "role', 'radiogroup'" in markup
+    assert "setAttribute('role', 'radio')" in markup
+    # Count the options, not the literal: the three buttons are built in a
+    # loop, so 'radio' appears once however many there are.
+    options = re.search(r"var OPTIONS = \[(.*?)\];", markup, re.S)
+    assert options, "no option list"
+    assert len(re.findall(r"value:", options.group(1))) == 3
     for value in ["'light'", "'dark'", "'system'"]:
         assert value in markup, f"no {value} option"
     assert "aria-label', 'Color theme'" in markup
@@ -465,6 +478,30 @@ def test_nothing_fills_with_the_ink_token():
     """A background painted with --accent is the bug above, reintroduced."""
     for template in STYLESHEETS:
         css = strip_comments(source(template))
-        assert "background: var(--accent);" not in css, (
+        stray = re.search(
+            r"background(-color)?\s*:\s*var\(--accent\)\s*;", css
+        )
+        assert not stray, (
             f"{template}: a fill uses the ink token instead of --accent-fill"
         )
+
+
+def test_colour_scheme_is_declared_in_css_not_inline():
+    """An inline style is not scoped by any media query.
+
+    Assigning root.style.colorScheme = "dark" would put a dark declaration
+    somewhere @media screen cannot reach, handing the print formatter a dark
+    canvas -- the one hole in the containment. It is declared light on :root
+    and flipped only inside the sealed block.
+    """
+    assert "style.colorScheme" not in theme_script(), (
+        "color-scheme is set inline, where print can see it"
+    )
+    css = strip_comments(source("_page-style.css.j2"))
+    light = tokens(css)  # noqa: F841 - presence of the :root block
+    assert re.search(r":root\s*\{[^}]*color-scheme:\s*light", css, re.S), (
+        "no unconditional light color-scheme"
+    )
+    assert "color-scheme: dark" in dark_block(css), (
+        "color-scheme is not flipped inside the sealed dark block"
+    )
