@@ -148,10 +148,16 @@ stencil clean <pkg>         # remove what stencil generated  (--all)
 stencil install             # refresh the managed .gitignore section
 ```
 
-**There is no test suite yet** — tracked as `stn-rxn`. Until there is one, verify a
-template change by generating a package into a scratch directory and running pandoc
-through the entrypoint the generated `docker-compose.yml` declares, rather than by
-reading the template and reasoning about it.
+```bash
+pytest -m 'not integration'   # unit assertions on the rendered scaffolding
+pytest                        # adds the container-backed builds
+```
+
+The `integration` tests drive a real pandoc container and headless Chromium. They
+skip rather than fail when no runtime is found, so a contributor without docker
+still gets a useful run — but a template change is not verified until they have
+run, because reading a template and reasoning about it is how the citeproc
+ordering bugs got in.
 
 ## Architecture Overview
 
@@ -214,6 +220,41 @@ order `.beads/hooks/pre-commit` uses. It previously skipped silently when
 `pre-commit` was not on `PATH`, which meant the drift guard never ran at all on
 a machine without an activated virtualenv.
 
+### The drift guard's test weight is accepted, and here is why
+
+`tests/test_export_drift.py` is the largest test file in the repository, and every
+line of it is about beads bookkeeping rather than about anything stencil generates.
+That is a fair thing to object to, it was objected to, and the answer is: keep it.
+Recorded here so the question does not get re-litigated from scratch (`stn-dqb`).
+
+The guard has caught three things, none of which anything else would have caught:
+
+- a database that had regressed to an earlier snapshot,
+- a history rewrite that changed a committed blob without touching the database,
+- and the hook not running **at all** on the maintainer's machine, because the
+  wrapper was gated on `command -v pre-commit` and failed open.
+
+The third is the one that settles it. A guard that silently does not run is worse
+than no guard, because it is also a belief that you are covered. Nothing but a test
+finds that.
+
+Two alternatives were considered and rejected:
+
+- **Trim to the cases that have actually fired.** Rejected because the cases that
+  fired were not the ones anyone would have predicted — `git push --all` checking
+  one branch and letting the rest through was defensive until it wasn't. Having
+  been wrong about which cases matter is poor grounds for a second guess. The
+  defensive cases are also cheap: variations on one harness, not new machinery.
+- **Move the guard and its tests out of stencil.** Right in principle — nothing
+  about this is stencil-specific, and it belongs in beads or a shared hook
+  package. Rejected for now because it would make stencil depend on something
+  that does not exist, to fix a problem that is aesthetic. Revisit when a second
+  repository needs the same guard; that is the trigger, and until then the
+  duplication cost is zero.
+
+The cost being accepted is a reader's surprise at the file sizes, and the fix for
+that is this paragraph rather than less coverage.
+
 ### This file is the one to edit; CLAUDE.md is only a pointer
 
 `CLAUDE.md` contains a single line, `@AGENTS.md`, and should stay that way. Agent
@@ -223,6 +264,35 @@ to keep current rather than two that drift.
 `bd` manages its own blocks in both files between `BEGIN`/`END` markers and may write
 into `CLAUDE.md` again. That is expected and fine — leave it. Do not restore, expand,
 or re-collapse `CLAUDE.md` to protect the import.
+
+### Cutting a release
+
+The version in `pyproject.toml` is bumped **by hand**, in the commit that also
+updates `CHANGELOG.md`, and the tag is cut from that commit:
+
+```bash
+# on a branch, in the PR that ships the release
+$EDITOR pyproject.toml CHANGELOG.md    # bump version, add the entry
+# after the PR merges:
+git switch main && git pull
+git tag -a v0.3.0 -m "stencil 0.3.0"
+git push origin v0.3.0
+```
+
+Deriving the version from the tag instead (setuptools-scm and friends) was
+considered and rejected: it adds a build-time dependency, makes the version
+unreadable in the file where a person looks for it, and buys reproducibility
+that nothing here needs — no consumer pins stencil, deliberately, so the
+version is a reference point rather than a contract.
+
+What a tag is for, given nobody pins: `git diff v0.3.0..HEAD -- stencil/templates/`
+is a real question with a real answer when a handout starts rendering wrong.
+Against an untagged history it is archaeology.
+
+Bump the minor for anything that changes what a generated package contains or
+how it builds; the patch for fixes that leave the output the same. There is
+deliberately no written policy on what breaks a consumer, because no consumer
+pins.
 
 ### The pandoc filter order is load-bearing — do not reorder it
 

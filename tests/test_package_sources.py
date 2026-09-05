@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import pytest
 
-from stencil.generate import get_template_context
+from stencil.generate import get_generated_files, get_template_context
 
 from test_makefile import recipe
 
@@ -198,3 +198,72 @@ def test_clean_removes_both_outputs_and_their_variants(doc_pkg_makefile):
 def test_a_doc_without_sources_gets_no_pkg_target(makefile):
     """The existing doc packages are untouched by this."""
     assert "\npkg:" not in makefile(package_type="doc", docs=["README.md"])
+
+
+# --- package_sources with no docs and no slides ----------------------------
+#
+# generate_package injects the shared page files whenever a package renders
+# markdown -- has_pages, which counts package_sources. get_generated_files and
+# the doc-template injection keyed off docs/slides instead, so a doc package
+# that builds only from package_sources fell through both: five files nothing
+# could clean, and a pkg target naming a pandoc template that was never
+# written.
+
+SHARED_PAGE_FILES = [
+    "hidden-filter.lua",
+    "mermaid-figure-filter.lua",
+    "embed-images.lua",
+    "html-to-pdf.js",
+    "Dockerfile.browser",
+]
+
+
+def sources_only_config():
+    """A doc package whose only markdown comes in through package_sources."""
+    return {
+        "templates": MAKEFILE_TEMPLATES,
+        "packages": {
+            "demo": {
+                "name": "Demo",
+                "package_type": "doc",
+                "package_name": "hs2.pdf",
+                "package_sources": ["md/*.md"],
+            }
+        },
+    }
+
+
+@pytest.mark.parametrize("filename", SHARED_PAGE_FILES)
+def test_sources_only_shared_page_files_are_cleanable(filename):
+    """generate writes them off has_pages, so clean and .gitignore must agree.
+    Left out, they sit untracked in a course repo and nothing removes them."""
+    assert f"demo/{filename}" in get_generated_files(sources_only_config())
+
+
+def test_sources_only_doc_template_is_cleanable():
+    assert "demo/html-template.html" in get_generated_files(sources_only_config())
+
+
+def test_sources_only_pkg_gets_the_template_its_pandoc_run_names(generate_package):
+    """Makefile-pkg builds PKG_HTML through the doc service, and pipeline.py
+    makes that service pass --template=html-template.html. Without the file the
+    generated target exists and fails."""
+    assert (generate_package(sources_only_config()) / "html-template.html").exists()
+
+
+def test_sources_only_gets_no_slide_template(generate_package):
+    """Nothing here renders a deck, so the deck templates stay out."""
+    package = generate_package(sources_only_config())
+    listed = get_generated_files(sources_only_config())
+    for unwanted in ("slide-template.html", "slide-sections.lua"):
+        assert not (package / unwanted).exists()
+        assert f"demo/{unwanted}" not in listed
+
+
+def test_a_docs_package_still_lists_every_page_file():
+    """The other half of the fix: packages that do declare docs are unchanged."""
+    config = sources_only_config()
+    config["packages"]["demo"]["docs"] = ["README.md"]
+    listed = get_generated_files(config)
+    for filename in SHARED_PAGE_FILES + ["html-template.html"]:
+        assert f"demo/{filename}" in listed
