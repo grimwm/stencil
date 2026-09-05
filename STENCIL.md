@@ -216,6 +216,7 @@ slide breaks, layout fences, presenter-only content, present mode and printing -
 | Field             | Required | Description                                                                                                                                                                |
 | ----------------- | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `name`            | No       | Display name (defaults to package ID)                                                                                                                                      |
+| `lang`            | No       | Language for this package's pages, overriding the config-wide `lang` (default `en`)                                                                                        |
 | `dir`             | No       | Output subdirectory (defaults to package ID)                                                                                                                               |
 | `package_type`    | Yes      | `doc` for HTML documents, `zip` for submissions                                                                                                                            |
 | `docs`            | No       | List of markdown files to convert to HTML docs                                                                                                                             |

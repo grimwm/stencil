@@ -1,14 +1,35 @@
+{# Document header: two rows, each holding identity on the left and context on
+   the right, so the width earns its keep instead of stacking five short lines
+   down the page. Row one is title/subtitle against program/section/term; row
+   two is the byline against the date. Both collapse to left-aligned stacks on
+   a narrow viewport -- see _page-style.css.j2.
+
+   `has-context` and `has-byline` come from frontmatter-filter.lua, which is
+   also what guarantees a blank key reads as an absent one here. #}
 $if(title)$
-<header class="doc-title">$title$
+<header class="doc-title">
+  <div class="doc-headrow">
+    <div class="doc-identity">$title$
 $if(subtitle)$
-  <div class="doc-subtitle">$subtitle$</div>
+      <div class="doc-subtitle">$subtitle$</div>
 $endif$
+    </div>
+$if(has-context)$
+    {# One line on purpose. A newline between these spans collapses to a word
+       space that lands on only one side of the generated separator, which is
+       asymmetric in a way no margin can correct. #}
+    <div class="doc-context">$if(program)$<span class="doc-program">$program$</span>$endif$$if(section)$<span class="doc-section">$section$</span>$endif$$if(term)$<span class="doc-term">$term$</span>$endif$</div>
+$endif$
+  </div>
+$if(has-byline)$
+  <div class="doc-byline">
 $if(author)$
-  <div class="doc-meta">$for(author)$$author$$sep$ &middot; $endfor$$if(date)$ &middot; $date$$endif$</div>
-$else$
-$if(date)$
-  <div class="doc-meta">$date$</div>
+    <div class="doc-meta">$for(author)$$author$$sep$ &middot; $endfor$</div>
 $endif$
+$if(date)$
+    <div class="doc-date">$date$</div>
+$endif$
+  </div>
 $endif$
 </header>
 $endif$

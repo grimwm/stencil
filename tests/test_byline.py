@@ -4,6 +4,12 @@ stn-rxn.6. _doc-body.html.j2 branches on title, subtitle, author and date, and
 joins author names with a middot. The interesting cases are the empty ones: a
 separator with nothing on one side of it, or a header rendered for a document
 that never asked for one.
+
+The byline is two columns now, not one line: authors sit left in .doc-meta and
+the date is pushed right in .doc-date, so the middot that used to join them is
+gone and the two are read separately below. What did not change is the rule
+those assertions exist for -- an absent half leaves no trace of itself, and no
+combination produces a separator with nothing on one side.
 """
 
 from __future__ import annotations
@@ -23,16 +29,30 @@ def header_of(soup):
     return soup.select_one("header.doc-title")
 
 
-def meta_text(soup) -> str:
-    """The byline as one whitespace-normalized line.
+def _text(soup, selector: str) -> str | None:
+    """The whitespace-normalized text of one header element, or None if absent.
 
     Pandoc hard-wraps its output, so a long author list arrives with a newline
     in the middle of it. That is formatting, not content.
+
+    None rather than "" on purpose: these tests are mostly about the difference
+    between an element that is empty and an element that was never emitted, and
+    a helper that flattens the two hides exactly what is being asked.
     """
     header = header_of(soup)
     assert header is not None, "expected a document header"
-    metas = header.select(".doc-meta")
-    return " ".join(" ".join(m.get_text().split()) for m in metas)
+    found = header.select(selector)
+    if not found:
+        return None
+    return " ".join(" ".join(f.get_text().split()) for f in found)
+
+
+def authors(soup) -> str | None:
+    return _text(soup, ".doc-meta")
+
+
+def when(soup) -> str | None:
+    return _text(soup, ".doc-date")
 
 
 def test_author_and_date(render_soup):
@@ -41,7 +61,8 @@ def test_author_and_date(render_soup):
         "byline.md",
         text=document('title: "T"\nauthor: Ada Lovelace\ndate: 2026-09-02\n'),
     )
-    assert meta_text(soup) == f"Ada Lovelace {MIDDOT} 2026-09-02"
+    assert authors(soup) == "Ada Lovelace"
+    assert when(soup) == "2026-09-02"
 
 
 def test_an_author_list_is_joined_with_middots(render_soup):
@@ -53,26 +74,28 @@ def test_an_author_list_is_joined_with_middots(render_soup):
             "date: 2026-09-02\n"
         ),
     )
-    assert meta_text(soup) == (
-        f"Ada Lovelace {MIDDOT} Grace Hopper {MIDDOT} 2026-09-02"
-    )
+    assert authors(soup) == f"Ada Lovelace {MIDDOT} Grace Hopper"
+    assert when(soup) == "2026-09-02"
 
 
-def test_author_only_has_no_trailing_separator(render_soup):
-    """The date's middot is inside the date branch, so it must not appear."""
+def test_author_only_emits_no_date_element(render_soup):
+    """A missing date leaves no empty right-hand column behind."""
     soup = render_soup(
         "doc", "byline.md", text=document('title: "T"\nauthor: Ada Lovelace\n')
     )
-    assert meta_text(soup) == "Ada Lovelace"
-    assert MIDDOT not in meta_text(soup)
+    assert authors(soup) == "Ada Lovelace"
+    assert MIDDOT not in authors(soup)
+    assert when(soup) is None
 
 
 def test_date_only_renders_on_its_own(render_soup):
+    """And still right-aligned: .doc-date carries its own margin-left, so it
+    does not slide left just because nothing shares the row with it."""
     soup = render_soup(
         "doc", "byline.md", text=document('title: "T"\ndate: 2026-09-02\n')
     )
-    assert meta_text(soup) == "2026-09-02"
-    assert MIDDOT not in meta_text(soup)
+    assert authors(soup) is None
+    assert when(soup) == "2026-09-02"
 
 
 def test_neither_renders_exactly_as_if_the_keys_were_absent(render):

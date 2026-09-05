@@ -33,12 +33,14 @@ from stencil.generate import (
 # composition template must keep providing.
 CONTRACT = {
     "Makefile-base.j2": set(),
+    # `name` left this set when the course metadata flag did: the package name
+    # was being injected as a document's course, which it never was -- see
+    # AUTHORING.md. It is a --list label again, and no template reads it.
     "Makefile-doc.j2": {
         "docs",
         "has_docs",
         "has_pages",
         "has_slides",
-        "name",
         "pandoc_image",
         "slides",
     },

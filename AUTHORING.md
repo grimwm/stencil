@@ -95,6 +95,7 @@ contents (`--toc`) and section numbering (`--number-sections`).
 | `::: lead-in`, `::: takeaway`, `::: center`                | no — plain unstyled div | yes                                                       |
 | `slide-level:` front matter                                | ignored                 | sets the breaking level                                   |
 | `author:` / `date:` front matter                           | byline in the header    | byline on the title slide                                 |
+| `program:` / `section:` / `term:` front matter             | top right of the header | above the title on the title slide                        |
 | Present mode, one-slide-per-page printing                  | no                      | yes                                                       |
 
 The "no — plain unstyled div" rows are the trap worth remembering: the fences still *parse* in a
@@ -121,8 +122,14 @@ the pipeline reads, and what each one does on each side:
 | ------------- | -------------------------------- | ----------------------------------------------- |
 | `title`       | Page header, and the browser tab | Title slide, and the browser tab                |
 | `subtitle`    | Under the title                  | Under the title on the title slide              |
-| `author`      | Byline under the subtitle        | Byline on the title slide                       |
-| `date`        | Byline, after the author         | Byline, after the author                        |
+| `program`     | Top right, opposite the title    | Above the title, and prefixes the browser tab   |
+| `section`     | Top right, after `program`       | Above the title, after `program`                |
+| `term`        | Top right, its own line          | Above the title, after `section`                |
+| `author`      | Second row, under the title      | Byline on the title slide                       |
+| `date`        | Second row, opposite the author  | Byline, after the author                        |
+| `show_date`   | Stamps the build date as `date`  | Same                                            |
+| `lang`        | `<html lang>` (default `en`)     | Same                                            |
+| `dir`         | `<html dir>`, only when set      | Same                                            |
 | `slide-level` | Ignored                          | Heading level that starts a slide (default `2`) |
 
 `author` takes one name or a list of them:
@@ -137,17 +144,114 @@ date: 2026-09-02
 ---
 ```
 
-Names are joined with `·`, and the date follows after another `·`. A date with no author renders on
-its own. The byline is part of the title header, so a file with an `author` but no `title` gets no
-header at all — same rule a deck follows for its title slide.
+Names are joined with `·`. The byline is part of the title header, so a file with an `author` but no
+`title` gets no header at all — same rule a deck follows for its title slide. Leaving a key blank is
+the same as leaving it out: `program:` with nothing after it renders nothing, not an empty line.
 
-Citations add four more keys — `bibliography`, `csl`, `nocite` and `link-citations` — which behave
-the same in a document as in a deck; see [Citations](#citations).
+#### Where a document puts them
 
-Two more keys arrive from the build rather than from you: `course`, which the Makefile sets from the
-package's `name` (it prefixes the browser tab on both, and prints above the title on a deck's title
-slide), and `include-<feature>`, which `WITH=` sets — see [Optional content](#optional-content).
-Anything else you put in the front matter is carried along by pandoc but nothing reads it.
+A document's header is two rows, each with identity on the left and context on the right, so a file
+that sets everything costs two lines rather than five:
+
+```text
+Sprint Report                          CS 425/499 · 001
+Points: 50                                 Spring 2026
+Ada Lovelace · Grace Hopper                 2026-09-05
+────────────────────────────────────────────────────
+```
+
+Below roughly 640px the two columns collapse into one left-aligned stack. A deck has the width to
+keep `program · section · term` on a single line above the title.
+
+#### `program`, `section`, `term`
+
+The document's institutional context: what it belongs to, which instance of that, and when. The names
+are deliberately not `course`/`semester` — they read the same way to an instructor and to anyone
+running a training program, and nothing in stencil assumes a university:
+
+```markdown
+---
+title: "Sprint Report"
+program: "CS 425/499"      # or "Engineering Onboarding"
+section: "001"             # or "Q3 New Hires"
+term: "Spring 2026"        # or "FY2026"
+---
+```
+
+`program` also prefixes the browser tab: `CS 425/499: Sprint Report`.
+
+#### `show_date`
+
+Stamps the document with the day it was built, in `YYYY-MM-DD`:
+
+```markdown
+---
+title: "Sprint Report"
+show_date: yes
+---
+```
+
+`yes`, `true`, `on` and `1` all mean yes; `no`, `false`, `off`, `0`, `none` and a blank value all mean
+no, as does leaving the key out. Spelling matters less than the fact that it is settled before the
+template sees it — pandoc reads YAML 1.2, where `no` is the *string* `"no"` rather than a boolean, so
+without `frontmatter-filter.lua` normalizing it first, `show_date: no` would print a date.
+
+Writing your own `date:` beats `show_date` — a date you wrote is the date you meant — so use one or
+the other, not both. The stamp is the build machine's day, not the container's UTC one.
+
+#### `lang` and `dir`
+
+The language a page claims to be written in, and its text direction:
+
+```markdown
+---
+title: "Informe de Sprint"
+lang: es
+---
+```
+
+`lang` defaults to `en` and is never omitted — a page with no language is a WCAG 2.1 failure (3.1.1),
+and `make check-access` will say so. A whole project or one package can change that default without
+every file repeating it; see [STENCIL.md](STENCIL.md). Front matter wins over both.
+
+`dir` is only emitted when you set it. Browsers infer `ltr`, so an attribute saying so adds nothing,
+and one saying so wrongly reverses the page. Set it alongside a right-to-left `lang`:
+
+```markdown
+---
+title: "تقرير"
+lang: ar
+dir: rtl
+---
+```
+
+There is no config-level `dir`. A package's `dir:` is already its output subdirectory, and giving one
+key two meanings is how the package name ended up being a document's course.
+
+#### Keys that come from the build
+
+`include-<feature>`, which `WITH=` sets — see [Optional content](#optional-content) — and
+`build-date`, which the Makefile passes so `show_date` has the build host's day to use.
+
+Citations add four more — `bibliography`, `csl`, `nocite` and `link-citations` — which behave the
+same in a document as in a deck; see [Citations](#citations).
+
+#### Keys stencil does not render
+
+Pandoc parses these, and stencil's templates ignore them, so setting one is a silent no-op rather
+than an error. Listed because "it parsed" reads a lot like "it worked":
+
+| Key                                                  | What pandoc would normally do with it           |
+| ---------------------------------------------------- | ----------------------------------------------- |
+| `abstract`, `abstract-title`                         | An abstract block above the body                |
+| `keywords`, `description`                            | `<meta>` tags in the head                       |
+| `title-prefix`                                       | A prefix on the browser tab                     |
+| `toc`, `toc-title`                                   | A table of contents (stencil passes no `--toc`) |
+| `institute`, `thanks`                                | Title-block extras on pandoc's own templates    |
+| `header-includes`, `include-before`, `include-after` | Raw HTML injected around the body               |
+| `css`                                                | Extra stylesheet links                          |
+
+Anything else you put in the front matter is carried along by pandoc and read by nothing.
 
 ### Optional content
 

@@ -56,6 +56,14 @@ _FAIL_IF_WARNINGS = (
     "goes straight to stderr rather than through pandoc's warning system."
 )
 
+_FRONTMATTER_FIRST = (
+    "Metadata only, and first: it decides what the header rows are and\n"
+    "resolves show_date into the date the byline asks for, so every later\n"
+    "filter and the template itself read one settled set of keys. It touches\n"
+    "no blocks, so it is outside the hidden/citeproc/slide-sections ordering\n"
+    "constraints below rather than another link in that chain."
+)
+
 KINDS = ("doc", "slide")
 
 _TEMPLATE = {"doc": "html-template.html", "slide": "slide-template.html"}
@@ -74,6 +82,7 @@ def annotated_argv(kind: str) -> list[tuple[str, str | None]]:
         ("--standalone", None),
         (f"--template={_TEMPLATE[kind]}", None),
         ("--fail-if-warnings", _FAIL_IF_WARNINGS),
+        ("--lua-filter=frontmatter-filter.lua", _FRONTMATTER_FIRST),
         ("--lua-filter=hidden-filter.lua", None),
         (
             "--citeproc",

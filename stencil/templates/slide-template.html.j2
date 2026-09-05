@@ -2,7 +2,17 @@
    behavior with html-template.html.j2; adds slide layout and present mode.
    Pair it with slide-sections.lua, which groups the body into .slide sections. #}
 <!DOCTYPE html>
-<html lang="en">
+{# Three levels, narrowest first: a document's own `lang:`, then the package
+   or config-wide `lang:` baked in here at generation time, then `en`. The
+   attribute is never omitted -- an unset language is a WCAG 2.1 failure
+   (3.1.1), and both templates hardcoded `en` before this, so a project that
+   sets nothing renders exactly as it did.
+
+   `dir` is front matter only and emitted only when asked. A package's `dir:`
+   is already its output subdirectory, so there is no config-level spelling to
+   give it, and browsers infer `ltr` anyway -- a wrong direction is worse than
+   an absent one. #}
+<html lang="$if(lang)$$lang$$else${{ lang }}$endif$"$if(dir)$ dir="$dir$"$endif$>
 <head>
 {% include '_page-head.html.j2' %}
   <style>

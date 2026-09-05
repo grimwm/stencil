@@ -12,6 +12,13 @@ comma := ,
 # Build metadata flags from WITH variable
 METADATA_FLAGS := $(foreach feat,$(subst $(comma), ,$(WITH)),--metadata include-$(feat)=true)
 
+# The date a document carrying `show_date:` stamps itself with. Passed from
+# here rather than read inside the container so the stamp is the build host's
+# day, not the image's UTC one -- a handout generated at 7pm Central otherwise
+# prints tomorrow's date. frontmatter-filter.lua falls back to its own
+# os.date() when this is absent, so a hand-run pandoc still works.
+BUILD_DATE ?= $(shell date +%F)
+
 # Build output suffix from WITH variable (e.g., -hidden or -hidden-draft)
 OUTPUT_SUFFIX := $(if $(WITH),$(addprefix -,$(subst $(comma),-,$(WITH))),)
 
@@ -19,7 +26,7 @@ doc: format-md{% if has_slides %} slide{% endif %} ## Generate HTML{% if has_doc
 {% if has_docs %}
 	$(call ensure_image,{{ pandoc_image }},doc)
 {% for md in docs %}
-	$(DC) run --rm doc --metadata course="{{ name }}" $(METADATA_FLAGS) {{ md }} -o {{ md | replace('.md', '') }}$(OUTPUT_SUFFIX).html
+	$(DC) run --rm doc --metadata build-date="$(BUILD_DATE)" $(METADATA_FLAGS) {{ md }} -o {{ md | replace('.md', '') }}$(OUTPUT_SUFFIX).html
 {% endfor %}
 	@echo "Generated docs$(if $(WITH), with features: $(WITH),)"
 {% endif %}
@@ -28,7 +35,7 @@ doc: format-md{% if has_slides %} slide{% endif %} ## Generate HTML{% if has_doc
 slide: format-md ## Generate HTML slide decks (use with=hidden to include presenter-only sections)
 	$(call ensure_image,{{ pandoc_image }},slide)
 {% for md in slides %}
-	$(DC) run --rm slide --metadata course="{{ name }}" $(METADATA_FLAGS) {{ md }} -o {{ md | replace('.md', '') }}$(OUTPUT_SUFFIX).html
+	$(DC) run --rm slide --metadata build-date="$(BUILD_DATE)" $(METADATA_FLAGS) {{ md }} -o {{ md | replace('.md', '') }}$(OUTPUT_SUFFIX).html
 {% endfor %}
 	@echo "Generated slides$(if $(WITH), with features: $(WITH),)"
 
