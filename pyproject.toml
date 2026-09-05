@@ -4,7 +4,9 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "stencil"
-version = "0.5.0"
+# Read from stencil/__init__.py so there is one place to bump. See
+# AGENTS.md#cutting-a-release.
+dynamic = ["version"]
 description = "Generate project scaffolding from Jinja2 templates and YAML config"
 requires-python = ">=3.10"
 license = "MIT"
@@ -32,6 +34,9 @@ testpaths = ["tests"]
 markers = [
     "integration: needs a container runtime; deselect with -m 'not integration'",
 ]
+
+[tool.setuptools.dynamic]
+version = {attr = "stencil.__version__"}
 
 [tool.setuptools.package-data]
 stencil = [

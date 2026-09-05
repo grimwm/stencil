@@ -8,6 +8,7 @@ Usage:
     stencil [--config <path>] install
     stencil [--config <path>] list
     stencil help [COMMAND]                        # Same as -h / --help; optional COMMAND for subcommand help
+    stencil version                               # Print the installed version
 """
 
 import argparse
@@ -20,7 +21,7 @@ import yaml
 from jinja2 import Environment, FileSystemLoader, StrictUndefined, Undefined, meta, nodes
 from jinja2.exceptions import TemplateNotFound
 
-from . import assets, pipeline
+from . import __version__, assets, pipeline
 
 # Script directory
 SCRIPT_DIR = Path(__file__).parent
@@ -790,10 +791,18 @@ def main():
     list_p = sub.add_parser("list", help="List available packages")
     _add_global_opts(list_p)
 
+    sub.add_parser("version", help="Print the installed stencil version")
+
     help_p = sub.add_parser("help", help="Show help (optionally for a subcommand)")
     help_p.add_argument("topic", nargs="?", help="Subcommand to show help for")
 
     args = parser.parse_args()
+
+    # Answered before the config is touched: the question is usually asked
+    # because an install is suspect, and that is no time to demand a project.
+    if args.command == "version":
+        print(f"stencil {__version__}")
+        return
 
     if args.command == "help":
         topic = getattr(args, "topic", None)
