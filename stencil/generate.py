@@ -13,6 +13,7 @@ Usage:
 
 import argparse
 import re
+import shutil
 import stat
 import sys
 from pathlib import Path
@@ -63,6 +64,43 @@ def load_config(config_path: Path) -> dict:
         )
 
     return config
+
+
+# What a `brand` value has to end in to be a picture rather than a name.
+# Deliberately the same set frontmatter-filter.lua's image_target uses: a
+# config default that classified differently from front matter would mean
+# .config.yaml and a document disagreeing about what the same string means.
+BRAND_IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp", ".avif"}
+
+
+def brand_of(package: dict, config: dict) -> tuple[str | None, str | None]:
+    """The brand and its alt text for a package: its own, else config-wide.
+
+    Taken as a pair rather than resolved key by key. A package that sets its
+    own brand and no alt means "this logo, no alt yet" -- inheriting the
+    config's alt there would silently label one logo with another's name.
+    """
+    if package.get("brand"):
+        return package.get("brand"), package.get("brand-alt")
+    return config.get("brand"), config.get("brand-alt")
+
+
+def brand_image_path(value: str | None) -> str | None:
+    """The local file a brand points at, or None when it is a name or remote.
+
+    `file://` is stripped for the reason frontmatter-filter.lua strips it:
+    embed-images.lua treats any scheme:// as remote and would leave it alone.
+    A genuinely remote URL returns None -- there is nothing local to copy, and
+    a generated folder that depends on the network is the thing this copying
+    exists to avoid.
+    """
+    if not value:
+        return None
+    if value.startswith("file://"):
+        return value[len("file://") :]
+    if value.startswith("data:") or re.match(r"^[a-zA-Z][\w+.-]*://", value):
+        return None
+    return value if Path(value).suffix.lower() in BRAND_IMAGE_SUFFIXES else None
 
 
 def get_template_context(package_id: str, config: dict) -> dict:
@@ -172,6 +210,17 @@ def get_template_context(package_id: str, config: dict) -> dict:
         # already its output subdirectory, so text direction has no config-level
         # spelling and stays front matter only.
         "lang": package.get("lang") or config.get("lang") or "en",
+        # The brand a document falls back to when its front matter names none.
+        # A picture is named by the basename it is copied to rather than the
+        # path it came from: the generated folder is frequently handed to
+        # someone as their own project, so it has to carry the file itself
+        # rather than reach back into the repository that produced it.
+        "config_brand": (
+            Path(brand_image_path(brand_of(package, config)[0])).name
+            if brand_image_path(brand_of(package, config)[0])
+            else brand_of(package, config)[0]
+        ),
+        "config_brand_alt": brand_of(package, config)[1],
         "package_name": package_name,
         "package_dir": package.get("dir", f"{package_id}"),
         "package_type": package_type,
@@ -421,12 +470,57 @@ def build_environment(config: dict, config_dir: Path) -> Environment:
     )
 
 
+def copy_brand_image(
+    config: dict,
+    package: dict,
+    config_dir: Path,
+    output_dir: Path,
+    dry_run: bool = False,
+) -> None:
+    """Copy a config-level brand image into the package it brands.
+
+    Copied rather than referenced, and copied without being asked for. The
+    folders stencil generates are routinely handed to someone as a project of
+    their own, separate from the repository that produced them -- so a logo
+    that lived only next to .config.yaml would leave the recipient with a
+    document referring to a file they were never given. A copy per package is
+    the cost of each folder standing on its own, and the copies are ignored by
+    git for the same reason every other generated file is.
+    """
+    value, alt = brand_of(package, config)
+    relative = brand_image_path(value)
+    if not relative:
+        return
+
+    if not alt:
+        raise ValueError(
+            f"brand is an image ({value}) but brand-alt is not set. Add "
+            "brand-alt: with the text a reader should hear in place of the "
+            "logo, or use a plain string for brand to render it as a name."
+        )
+
+    source = (config_dir / relative).resolve()
+    if not source.is_file():
+        raise ValueError(
+            f"brand points at {value}, which is not a file. Paths are resolved "
+            f"relative to the config file's directory ({config_dir})."
+        )
+
+    destination = output_dir / source.name
+    if dry_run:
+        print(f"Would copy: {source} -> {destination}")
+        return
+    shutil.copyfile(source, destination)
+    print(f"Copied: {destination}")
+
+
 def generate_package(
     env: Environment,
     config: dict,
     output_base: Path,
     package_id: str,
     dry_run: bool = False,
+    config_dir: Path | None = None,
 ) -> Path | None:
     """Generate scaffolding for a single package. Returns output_dir on success, None on skip."""
     try:
@@ -472,6 +566,17 @@ def generate_package(
         return None
 
     render_templates(env, template_defs, context, output_dir, dry_run)
+
+    # After the templates, so a package that fails to render does not leave a
+    # logo behind in a directory with nothing to use it.
+    if context.get("has_pages"):
+        copy_brand_image(
+            config,
+            config["packages"][package_id],
+            config_dir or output_base.parent,
+            output_dir,
+            dry_run,
+        )
 
     return output_dir
 
@@ -556,6 +661,8 @@ def get_generated_files(config: dict) -> list[str]:
         "Dockerfile.browser",
     ]
     doc_template_files = ["html-template.html"]
+    # A copied brand image is generated output like anything else here, so it
+    # belongs in the managed .gitignore section rather than in the repository.
     slide_template_files = ["slide-template.html", "slide-sections.lua"]
 
     # Process each package
@@ -589,6 +696,12 @@ def get_generated_files(config: dict) -> list[str]:
         if context["has_pages"]:
             for f in shared_page_files:
                 entries.add(f"{pkg_dir}/{f}")
+            # The copied brand image, which `clean` should be able to see and
+            # git should not. Named by its basename, which is what it is
+            # copied to.
+            brand_image = brand_image_path(brand_of(package, config)[0])
+            if brand_image:
+                entries.add(f"{pkg_dir}/{Path(brand_image).name}")
         if context["has_docs"] or context["has_package_sources"]:
             for f in doc_template_files:
                 entries.add(f"{pkg_dir}/{f}")
@@ -876,11 +989,15 @@ def main():
 
     if args.all:
         for package_id in config["packages"]:
-            generate_package(env, config, output_base, package_id, args.dry_run)
+            generate_package(
+                env, config, output_base, package_id, args.dry_run, config_dir
+            )
         return
 
     package_id = args.pkg
-    out = generate_package(env, config, output_base, package_id, args.dry_run)
+    out = generate_package(
+        env, config, output_base, package_id, args.dry_run, config_dir
+    )
     if out is None:
         list_packages(config)
         sys.exit(1)
