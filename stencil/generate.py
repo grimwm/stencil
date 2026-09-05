@@ -93,6 +93,47 @@ def get_template_context(package_id: str, config: dict) -> dict:
             f"Package {package_id} is missing required 'package_name' (required for zip type)"
         )
 
+    # package_folder was the zip-only spelling of package_sources. One key now
+    # names what goes into the submission for every package type, so the old
+    # one is a hard error rather than a silently ignored setting.
+    if "package_folder" in package:
+        raise ValueError(
+            f"Package {package_id} uses 'package_folder', which was renamed to "
+            f"'package_sources' and takes a list: "
+            f"package_sources: [{package['package_folder']}]"
+        )
+
+    # package_sources: what `pkg` puts into package_name. A zip archives these
+    # paths; a doc concatenates the markdown they name into one document. Zip
+    # packages default to htdocs, which is what package_folder defaulted to.
+    raw_sources = package.get("package_sources")
+    if raw_sources is None:
+        package_sources = ["htdocs"] if package_type == "zip" else []
+    elif isinstance(raw_sources, str):
+        package_sources = [raw_sources]
+    else:
+        package_sources = list(raw_sources)
+
+    if package_sources and package_type == "none":
+        raise ValueError(
+            f"Package {package_id} sets 'package_sources' but has no pkg "
+            "target to consume them (package_type: none)"
+        )
+
+    # A doc package's pkg target prints to package_name, so it needs one and it
+    # has to be the PDF -- the intermediate HTML is named after the same stem.
+    if package_sources and package_type == "doc":
+        if not package_name:
+            raise ValueError(
+                f"Package {package_id} sets 'package_sources' but is missing "
+                "required 'package_name' (the PDF that pkg builds)"
+            )
+        if not package_name.endswith(".pdf"):
+            raise ValueError(
+                f"Package {package_id} builds {package_name} from "
+                "'package_sources'; the name must end in .pdf"
+            )
+
     # docs list for doc-type packages (markdown files to convert to HTML)
     docs = package.get("docs", [])
 
@@ -123,13 +164,21 @@ def get_template_context(package_id: str, config: dict) -> dict:
         "package_name": package_name,
         "package_dir": package.get("dir", f"{package_id}"),
         "package_type": package_type,
-        "package_folder": package.get("package_folder", "htdocs"),
+        "package_sources": package_sources,
+        "has_package_sources": bool(package_sources) and package_type == "doc",
+        # Basename the doc pkg target builds from, without the .pdf: `hs2`
+        # builds hs2.html and hs2.pdf (hs2-hidden.* when WITH is set).
+        "package_stem": (
+            package_name.removesuffix(".pdf")
+            if package_sources and package_type == "doc"
+            else ""
+        ),
         "docs": docs,
         "has_docs": bool(docs),
         "slides": slides,
         "has_slides": bool(slides),
         # True when the package renders any markdown through the pandoc pipeline
-        "has_pages": bool(docs) or bool(slides),
+        "has_pages": bool(docs) or bool(slides) or bool(package_sources),
         "services": services,
         # Derived from services
         "has_web": has_web,
@@ -362,8 +411,15 @@ def get_generated_files(config: dict) -> list[str]:
 
         # package_name is the zip file created by pkg target
         package_name = package.get("package_name")
-        if package_name:
+        if package_name and package.get("package_type") == "zip":
             entries.add(f"{pkg_dir}/{package_name}")
+
+        # A doc package's pkg target concatenates package_sources into
+        # <stem>.html and prints that to <stem>.pdf (glob for feature variants)
+        if package.get("package_type") == "doc" and package_name:
+            stem = package_name.removesuffix(".pdf")
+            entries.add(f"{pkg_dir}/{stem}*.html")
+            entries.add(f"{pkg_dir}/{stem}*.pdf")
 
     return sorted(entries)
 
