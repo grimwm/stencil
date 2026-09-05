@@ -193,6 +193,27 @@ A pre-push hook now refuses the push when they do, naming the issues that differ
 It is installed by `pre-commit install` along with the commit-stage hooks. When it
 fires, run `bd export -o .beads/issues.jsonl` and commit that before pushing again.
 
+It compares the database against the export **in the revision being pushed**,
+never the copy in the working tree. beads rewrites `.beads/issues.jsonl` outside
+of any commit, so a working copy that agrees with the database proves nothing
+about the commit being pushed — exporting without committing leaves the push
+failing, and the hook says so rather than repeating the export advice.
+
+Every pushed revision is checked, against one `bd export` snapshot. Git names
+the refs on stdin, one line per ref, but `pre-commit hook-impl` consumes that
+stream and reduces it to a single from/to pair. `.beads/hooks/pre-push` captures
+the local shas first and passes them as `BD_PUSHED_REVISIONS`, then replays
+stdin so pre-commit still sees what git sent; the check falls back to
+`PRE_COMMIT_TO_REF` and then `HEAD`. Without this, `git push origin other-branch` from `main` checked `main`'s export, and `git push --all` checked
+one branch and let the rest through — branches can carry different historical
+exports, so one of them agreeing proves nothing about the others.
+
+`.beads/hooks/pre-push` resolves `pre-commit` from the repo's venv before
+falling back to `PATH`, and exits non-zero when it finds neither — the same
+order `.beads/hooks/pre-commit` uses. It previously skipped silently when
+`pre-commit` was not on `PATH`, which meant the drift guard never ran at all on
+a machine without an activated virtualenv.
+
 ### This file is the one to edit; CLAUDE.md is only a pointer
 
 `CLAUDE.md` contains a single line, `@AGENTS.md`, and should stay that way. Agent

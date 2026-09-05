@@ -75,3 +75,38 @@ def test_the_commit_hook_still_fails_when_pre_commit_is_missing():
     text = (HOOKS / "pre-commit").read_text()
 
     assert "exit 1" in text.rsplit("else", 1)[-1]
+
+
+def test_the_push_hook_finds_the_repo_venv_from_its_own_location():
+    """Same lookup as the commit hook, for the same reason.
+
+    Without it the hook did nothing at all on a machine that had not activated
+    the virtualenv: `command -v pre-commit` failed, the chain was skipped, and
+    the export drift guard it exists to run was never reached.
+    """
+    text = (HOOKS / "pre-push").read_text()
+
+    assert 'REPO="$(cd "$_here/../.." && pwd)"' in text
+    assert 'INSTALL_PYTHON="${PRE_COMMIT_PYTHON:-$REPO/.venv/bin/python3}"' in text
+
+
+def test_the_push_hook_still_fails_when_pre_commit_is_missing():
+    """A push hook that skips silently is worse than no push hook."""
+    text = (HOOKS / "pre-push").read_text()
+
+    assert "exit 1" in text.rsplit("else", 1)[-1]
+
+
+def test_the_push_hook_replays_stdin_to_pre_commit():
+    """The ref updates are consumed to capture the shas, so they must be put back.
+
+    pre-commit derives PRE_COMMIT_FROM_REF/TO_REF from that stream; swallowing
+    it would leave pre-commit with nothing to work from.
+    """
+    text = (HOOKS / "pre-push").read_text()
+
+    assert '_bd_updates="$(cat)"' in text
+    assert text.count('printf \'%s\\n\' "$_bd_updates" |') == 2, (
+        "both the venv and the PATH branch must replay the update stream"
+    )
+    assert "export BD_PUSHED_REVISIONS" in text
