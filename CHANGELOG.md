@@ -9,6 +9,22 @@ and the closed epics in `.beads/issues.jsonl` are the readable index.
 How the version gets bumped is written down in
 [AGENTS.md](AGENTS.md#cutting-a-release), not here.
 
+## 0.10.2
+
+- **Removed `copy_files` from STENCIL.md.** It described a per-package field
+  for copying static files into a package, and no code has ever implemented
+  it -- `grep -rn copy stencil/*.py` returns nothing. Setting it produced no
+  files and no error, which is the exact failure the config validation exists
+  to prevent for `template_env` keys and `when:` names: a key that reads and
+  writes nothing, silently.
+
+  Deleted rather than implemented. Nothing asked for it, and the one thing
+  that wanted to copy a file -- a config-level `brand` logo, in 0.10.0 --
+  needed to copy implicitly and register the copy in `.gitignore`, which a
+  general opt-in list would not have given it. If a second caller ever turns
+  up, that is the point to build the general thing, with two real uses to
+  shape it (stn-4iv).
+
 ## 0.10.1
 
 - **The two config-brand fallbacks were emitted on one line.** The Jinja

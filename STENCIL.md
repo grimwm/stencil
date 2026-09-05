@@ -226,7 +226,6 @@ slide breaks, layout fences, presenter-only content, present mode and printing -
 | `package_name`    | zip only | Submission filename (a `doc` using `package_sources` needs one too, ending in `.pdf`)                                                                                      |
 | `package_sources` | No       | What `pkg` puts into `package_name` (zip default: `[htdocs]`); a glob expands sorted, a directory means every file under it, recursively, anything else is used as written |
 | `services`        | No       | Docker services: `web`, `mysql`                                                                                                                                            |
-| `copy_files`      | No       | Static files/dirs to copy from a files directory                                                                                                                           |
 | `deps_script`     | No       | Install scripts keyed by OS                                                                                                                                                |
 
 All package fields are available as template context variables. Custom fields can be added and
