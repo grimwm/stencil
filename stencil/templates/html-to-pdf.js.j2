@@ -16,6 +16,7 @@ const {
   PDFDict,
   PDFArray,
   PDFRawStream,
+  decodePDFRawStream,
 } = require("pdf-lib");
 
 const [input, output] = process.argv.slice(2);
@@ -193,6 +194,142 @@ function xmpFor(title) {
 <?xpacket end="w"?>`;
 }
 
+// PDF/UA 7.1: "Content shall be marked as Artifact or tagged as real content".
+//
+// Chromium wraps its text and its structural boxes in marked-content sequences
+// -- /P <</MCID 3>>BDC ... EMC -- but paints some decoration outside all of
+// them. Measured on a document with one table, there were exactly eight such
+// operators in three groups:
+//
+//   1 1 1 rg  0 0 624 864 re f        the white page background
+//   300 300 1950 2700 re W* n         a clip path, which paints nothing
+//   1 115 311 34 re f  (x2)           the table header cells' shading
+//
+// All three are decoration by definition: a background, a clip, and cell
+// shading. /Artifact is precisely the marker for "this paints, and it carries
+// no meaning a reader needs", so the repair is to say so rather than to stop
+// drawing them. Turning printBackground off would remove them and take the
+// table shading, blockquote cards and slide title bars with it.
+//
+// Only DEPTH-0 runs are wrapped. Anything already inside a BDC belongs to a
+// structure element and must not be re-marked; the depth counter is what keeps
+// this from touching content that is already correct.
+
+const PAINTING_OPERATORS = /\b(?:re|f\*?|F|S|s|B\*?|b\*?|n|W\*?|Do|sh|Tj|TJ|'|")\s*$/;
+
+function markArtifacts(source) {
+  const lines = source.split("\n");
+  const out = [];
+  let depth = 0;
+  let run = [];
+  let runPaints = false;
+
+  const flush = () => {
+    if (!run.length) return;
+    // A run with no painting operator is graphics state -- colour, matrix, gs
+    // -- and marking it would claim there is content where there is none.
+    if (runPaints) {
+      out.push("/Artifact BMC");
+      out.push(...run);
+      out.push("EMC");
+    } else {
+      out.push(...run);
+    }
+    run = [];
+    runPaints = false;
+  };
+
+  for (const line of lines) {
+    const t = line.trim();
+    const opens = /\bBDC$|\bBMC$/.test(t);
+    const closes = t === "EMC" || /\sEMC$/.test(t);
+
+    if (opens) {
+      flush();
+      depth += 1;
+      out.push(line);
+      continue;
+    }
+    if (closes) {
+      flush();
+      depth = Math.max(0, depth - 1);
+      out.push(line);
+      continue;
+    }
+    if (depth > 0) {
+      out.push(line);
+      continue;
+    }
+    // q and Q bracket graphics state, not content. Breaking a run on them
+    // keeps each /Artifact wholly inside one save/restore pair, so the
+    // wrapper can never straddle a state change it does not own.
+    if (t === "q" || t === "Q") {
+      flush();
+      out.push(line);
+      continue;
+    }
+    run.push(line);
+    if (PAINTING_OPERATORS.test(t)) runPaints = true;
+  }
+  flush();
+  return out.join("\n");
+}
+
+async function markPageArtifacts(pdf) {
+  const context = pdf.context;
+  let wrapped = 0;
+
+  for (const page of pdf.getPages()) {
+    const contents = page.node.Contents();
+    if (!contents) continue;
+
+    // Contents is one stream or an array of them; both are legal and Chromium
+    // emits one. Resolved through the context because either can be a
+    // reference.
+    const resolved = context.lookup(contents);
+    const streams =
+      resolved instanceof PDFArray
+        ? resolved.asArray().map((ref) => context.lookup(ref))
+        : [resolved];
+
+    const rewritten = [];
+    for (const stream of streams) {
+      if (!(stream instanceof PDFRawStream)) {
+        rewritten.push(stream);
+        continue;
+      }
+      // decodePDFRawStream, not getContentsString. The latter exists and
+      // returns the stream's RAW bytes -- still Flate-compressed -- so a
+      // transform reading it finds no operators, changes nothing, and reports
+      // success. That is exactly how the first attempt at this silently did
+      // nothing while every test still passed.
+      const before = Buffer.from(decodePDFRawStream(stream).decode()).toString(
+        "latin1"
+      );
+      const after = markArtifacts(before);
+      if (after === before) {
+        rewritten.push(stream);
+        continue;
+      }
+      // A fresh uncompressed stream rather than an edit in place: a
+      // PDFRawStream owns its Length and Filter, and rewriting its bytes
+      // without those would leave a stream that no reader can parse.
+      rewritten.push(context.register(context.stream(after)));
+      wrapped += 1;
+    }
+
+    if (wrapped) {
+      page.node.set(
+        PDFName.of("Contents"),
+        rewritten.length === 1
+          ? rewritten[0]
+          : context.register(context.obj(rewritten))
+      );
+    }
+  }
+  return wrapped;
+}
+
 async function addPdfUaStructure(path) {
   const pdf = await PDFDocument.load(fs.readFileSync(path));
   const context = pdf.context;
@@ -228,6 +365,7 @@ async function addPdfUaStructure(path) {
   structTreeRoot.set(PDFName.of("RoleMap"), roleMap);
 
   const wrapped = wrapListBodies(structTreeRoot, context);
+  const artifacts = await markPageArtifacts(pdf);
 
   const xmp = context.stream(xmpFor(pdf.getTitle()), {
     Type: "Metadata",
@@ -236,7 +374,7 @@ async function addPdfUaStructure(path) {
   catalog.set(PDFName.of("Metadata"), context.register(xmp));
 
   fs.writeFileSync(path, await pdf.save({ useObjectStreams: false }));
-  return { mapped: Array.from(nonStandard).sort(), wrapped };
+  return { mapped: Array.from(nonStandard).sort(), wrapped, artifacts };
 }
 
 async function main() {
@@ -328,10 +466,11 @@ async function main() {
 
 main()
   .then(() => addPdfUaStructure(output))
-  .then(({ mapped, wrapped }) => {
+  .then(({ mapped, wrapped, artifacts }) => {
     const notes = [];
     if (mapped.length) notes.push(`role map: ${mapped.join(", ")} -> Span`);
     if (wrapped) notes.push(`${wrapped} list items wrapped in LBody`);
+    if (artifacts) notes.push(`${artifacts} content stream(s) artifact-marked`);
     console.log(`Wrote ${output}` + (notes.length ? ` (${notes.join("; ")})` : ""));
   })
   .catch((error) => {
