@@ -56,6 +56,24 @@
       }
 
       group.addEventListener('keydown', function (event) {
+        /* While a deck is presenting, the arrows belong to the deck.
+
+           Selection follows focus in a radiogroup, so focusAt() above does not
+           merely move the highlight -- it calls set(). Leave this handler live
+           during a presentation and a single ArrowRight both advances the
+           slide (the deck listens on document, and this preventDefault does
+           not stop the event bubbling there) and cycles the theme one step:
+           light, dark, system. That is the reported behaviour exactly. Touch
+           the control once mid-talk and every subsequent slide change also
+           changes the palette.
+
+           `html.presenting` is the deck's own state class -- _slide-style.css
+           already keys on it -- so this reads a published signal rather than
+           reaching into the deck's internals. A document never sets it, so
+           the arrows keep working there, which is the only place this control
+           is the thing an arrow key should be aimed at. */
+        if (document.documentElement.classList.contains('presenting')) return;
+
         var index = buttons.indexOf(document.activeElement);
         if (index < 0) return;
         if (event.key === 'ArrowRight' || event.key === 'ArrowDown') {
