@@ -14,8 +14,17 @@
   <script>{{ assets.highlight_bash }}</script>
   <script>hljs.highlightAll();</script>
 
+  {# The bundle is 3.5 MB and most documents draw nothing, so it is inlined only
+     when mermaid-figure-filter.lua found a diagram. The driver below stays
+     unconditional: it costs a few kilobytes, it no-ops on a page with no
+     .mermaid element, and it is what sets __mermaidReady -- the flag both
+     html-to-pdf.js and the tab code block on. Making the driver conditional
+     too would hang every bundle-free PDF build on a handshake that never
+     comes. #}
   <!-- Mermaid.js: run first; nav-tabs waits for mermaid-ready. Post-process SVG ids so multiple diagrams do not duplicate ids (WCAG 4.1.1). -->
+$if(has-mermaid)$
   <script>{{ assets.mermaid_js }}</script>
+$endif$
   <script>
   (async function() {
     const mermaid = globalThis.mermaid;
@@ -85,6 +94,17 @@
         ready.push(div);
       });
       if (!ready.length) return;
+      // Reached only if a .mermaid element got past the filter's detection --
+      // raw HTML shaped in some way the substring test misses. Bail out with a
+      // message instead of throwing: an uncaught throw here escapes the async
+      // IIFE, __mermaidReady below is never set, and make pdf waits out its
+      // full timeout. A missing diagram is a bug; a hung build is worse.
+      if (!mermaid) {
+        console.error('stencil: this page has a mermaid diagram but no mermaid '
+                      + 'bundle. mermaid-figure-filter.lua did not set '
+                      + 'has-mermaid for it.');
+        return;
+      }
       mermaid.initialize({
         startOnLoad: false,
         theme: 'base',
