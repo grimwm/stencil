@@ -9,6 +9,56 @@ and the closed epics in `.beads/issues.jsonl` are the readable index.
 How the version gets bumped is written down in
 [AGENTS.md](AGENTS.md#cutting-a-release), not here.
 
+## 0.21.0
+
+- **Generated PDFs are PDF/UA-1 conformant.** veraPDF 1.30.2 `--flavour ua1`,
+  on a handout with headings, a list, a table and a figure:
+
+  |               | at the start of this run | 0.19.0 | now   |
+  | ------------- | ------------------------ | ------ | ----- |
+  | rules failed  | 5                        | 1      | **0** |
+  | checks failed | 47                       | 3      | **0** |
+
+  106 rules and 1523 checks pass. Reaching zero was described in 0.19.0 as
+  "not in this release"; this is that release.
+
+- **Decoration Chromium paints untagged is now marked as an artifact.** What
+  `7.1 t3` was reporting, measured on the content stream rather than reasoned
+  about, was exactly three things: the white page background, a clip path, and
+  the table header cells' shading. All three are decoration, which is what
+  `/Artifact` exists to mark.
+
+  **Marked, not removed.** Deleting them means turning `printBackground` off,
+  which takes the table shading, the blockquote cards and the slide title bars
+  with it.
+
+  Only depth-0 runs are wrapped, and only runs that actually paint — a run of
+  pure graphics state (colour, matrix, `gs`) is left alone, because marking it
+  would claim content where there is none. Runs break on `q` and `Q`, so a
+  wrapper can never straddle a save/restore pair it does not own.
+
+- **Two things nearly shipped as successes**, and both are worth recording
+  because each one passed every test it had.
+
+  The first version read the stream with `getContentsString()`. That method
+  exists and returns the stream's **compressed** bytes, so the transform found
+  no operators, changed nothing, reported success, and the suite went green.
+  The only thing that revealed it was the veraPDF failure count not moving.
+  The working path is `decodePDFRawStream(...).decode()`, and the result must
+  be written back as a **new** stream: a `PDFRawStream` owns its `/Length` and
+  `/Filter`, so rewriting its bytes in place leaves a stream no reader can
+  parse.
+
+  A test asserted `count("re") > 5` and failed on a document with no table —
+  it was measuring the fixture, not the code. It now checks that every
+  `/Artifact` region contains a painting operator, which is the property that
+  actually matters: the operators were bracketed rather than dropped.
+
+  Three breaches were applied and measured, each failing only its own tests:
+  no marking at all (2 tests), dropping the operators instead of bracketing
+  them (1), and reverting to `getContentsString()` (2). That last row is the
+  point — the silent no-op now fails loudly.
+
 ## 0.20.0
 
 - **A columns block is as wide as its contents.** `.columns` was

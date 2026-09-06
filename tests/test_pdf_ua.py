@@ -13,6 +13,8 @@ inside each wrapper), 13 without -- exactly the 13 <figure> elements.
 
 from __future__ import annotations
 
+import re
+
 import pytest
 from pypdf import PdfReader
 from pypdf.generic import IndirectObject
@@ -430,3 +432,94 @@ def test_the_document_title_is_an_h1(ua_pdf):
     assert headings[0] == "/H1", (
         f"the first heading in reading order is {headings[0]}, not /H1: {headings[:5]}"
     )
+
+
+# --- Content that paints but means nothing -------------------------------
+#
+# PDF/UA-1 7.1: "Content shall be marked as Artifact or tagged as real
+# content". Chromium wraps its text and boxes in marked-content sequences but
+# paints some decoration outside all of them. Measured on a document with one
+# table, exactly eight operators in three groups: the white page background, a
+# clip path, and the table header cells' shading.
+
+# Operators that put marks on the page. A run containing none of these is
+# graphics state -- colour, matrix, gs -- and marking it would claim content
+# where there is none.
+PAINTING = re.compile(r"\b(?:re|f\*?|F|S|s|B\*?|b\*?|Do|sh|Tj|TJ|'|\")\s*$")
+
+
+def unmarked_painting(path) -> list[str]:
+    """Painting operators sitting outside every marked-content sequence.
+
+    Walks the decoded content stream tracking BDC/BMC depth. This is the same
+    thing veraPDF's 7.1 t3 reports, computed here so the suite does not need a
+    500 MB validator to notice a regression.
+    """
+    stray = []
+    for page in PdfReader(path).pages:
+        depth = 0
+        for line in page.get_contents().get_data().decode("latin-1").splitlines():
+            text = line.strip()
+            if text.endswith("BDC") or text.endswith("BMC"):
+                depth += 1
+            elif text == "EMC" or text.endswith(" EMC"):
+                depth = max(0, depth - 1)
+            elif depth == 0 and PAINTING.search(text):
+                stray.append(text)
+    return stray
+
+
+def test_nothing_paints_outside_a_marked_content_sequence(ua_pdf):
+    """The last PDF/UA failure this project had, asserted directly.
+
+    The repair marks these as /Artifact rather than removing them: they are a
+    page background, a clip and cell shading, which is exactly what /Artifact
+    is for. Removing them instead would mean turning printBackground off and
+    losing table shading, blockquote cards and slide title bars with it.
+    """
+    stray = unmarked_painting(ua_pdf)
+    assert not stray, (
+        f"{len(stray)} painting operators are outside any marked-content "
+        f"sequence, so PDF/UA cannot tell whether they mean anything: {stray[:6]}"
+    )
+
+
+def test_the_page_still_paints_what_it_did(ua_pdf):
+    """The other half, and the one a careless fix breaks.
+
+    Wrapping content in /Artifact must not delete it. A version of this that
+    dropped the operators instead of bracketing them would pass the test above
+    and produce a blank white page.
+    """
+    stream = b"".join(
+        page.get_contents().get_data() for page in PdfReader(ua_pdf).pages
+    ).decode("latin-1")
+    assert "/Artifact BMC" in stream, "nothing was marked as an artifact"
+
+    # Every artifact region must still contain something that paints. A count
+    # of rectangles across the whole page would depend on what the document
+    # happens to contain -- the first version of this asserted more than five
+    # and failed on a document with no table, which measured the fixture
+    # rather than the code.
+    regions = re.findall(r"/Artifact BMC\n(.*?)\nEMC", stream, re.S)
+    assert regions, "an /Artifact was opened and never closed"
+    for body in regions:
+        lines = [ln.strip() for ln in body.splitlines() if ln.strip()]
+        # ANY line, not the last one. A run is wrapped because it contains a
+        # painting operator, but it can legitimately end with a state operator
+        # after it -- a cm or a gs. Checking only the final line asserted the
+        # shape of one example rather than the property.
+        assert any(PAINTING.search(ln) for ln in lines), (
+            f"an artifact region paints nothing, so the operators it was "
+            f"meant to bracket were dropped: {lines[:6]}"
+        )
+
+
+def test_the_text_layer_survived_the_rewrite(ua_pdf):
+    """A content stream is replaced wholesale here -- decoded, transformed and
+    written back as a new object. That is the operation most likely to produce
+    a file that opens and is quietly empty, so the words are checked rather
+    than assumed."""
+    text = "\n".join(page.extract_text() or "" for page in PdfReader(ua_pdf).pages)
+    assert "Heading" in text
+    assert "bold" in text
