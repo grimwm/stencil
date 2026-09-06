@@ -12,6 +12,19 @@
 -- Remote images are left alone. Fetching them at build time would make the
 -- build depend on the network and silently bake in whatever the URL served
 -- that day, which is a different decision than "bundle my own figures".
+--
+-- THEME VARIANTS. If images/foo-dark.svg sits beside images/foo.svg, both are
+-- embedded -- one classed doc-img--light, one doc-img--dark -- and CSS shows
+-- one. The author writes ![alt](images/foo.svg) either way; there is no new
+-- syntax and no front matter, and a figure with no dark sibling is emitted
+-- exactly as it was before.
+--
+-- <picture> with media="(prefers-color-scheme: dark)" is the standard HTML
+-- answer and it is the wrong one here. This page resolves its theme in JS to
+-- data-theme so that the dark palette stays one CSS block; prefers-color-scheme
+-- follows the operating system instead, so a <picture> would desync from the
+-- rest of the page the moment a reader picks a theme explicitly -- which is the
+-- case the theme control exists for.
 
 local function is_remote(src)
   return src:match('^data:')
@@ -19,15 +32,43 @@ local function is_remote(src)
       or src:match('^//')
 end
 
+-- `fetch` resolves relative to the working directory and --resource-path,
+-- which is how `images/figure.svg` next to the markdown is found. Returns nil
+-- rather than reporting anything: the caller decides whether a miss is an
+-- author error worth a message or an absent variant that is none of our
+-- business.
+local function data_uri_for(src)
+  local ok, mime, contents = pcall(pandoc.mediabag.fetch, src)
+  if not ok or not mime or not contents then
+    return nil
+  end
+  return pandoc.mediabag.make_data_uri(mime, contents)
+end
+
+-- images/foo.svg -> images/foo-dark.svg. Nil when the path has no extension to
+-- split on, and nil for a path that already ends in -dark, so a document that
+-- points straight at a dark figure does not send us looking for foo-dark-dark.
+local function dark_sibling_of(src)
+  local stem, ext = src:match('^(.*)(%.[^./\\]+)$')
+  if not stem or stem:sub(-5) == '-dark' then
+    return nil
+  end
+  return stem .. '-dark' .. ext
+end
+
+local function classed(img, class)
+  local copy = img:clone()
+  copy.classes:insert(class)
+  return copy
+end
+
 function Image(img)
   if is_remote(img.src) then
     return nil
   end
 
-  -- `fetch` resolves relative to the working directory and --resource-path,
-  -- which is how `images/figure.svg` next to the markdown is found.
-  local ok, mime, contents = pcall(pandoc.mediabag.fetch, img.src)
-  if not ok or not mime or not contents then
+  local light = data_uri_for(img.src)
+  if not light then
     -- A missing figure is the author's problem to see and fix, not this
     -- filter's to hide. Leave the reference untouched so the broken image is
     -- visible in the page, and say which one it was.
@@ -36,6 +77,19 @@ function Image(img)
     return nil
   end
 
-  img.src = pandoc.mediabag.make_data_uri(mime, contents)
-  return img
+  -- Looked up before img.src is overwritten, while it is still a path.
+  local sibling = dark_sibling_of(img.src)
+  local dark = sibling and data_uri_for(sibling) or nil
+
+  img.src = light
+  if not dark then
+    return img
+  end
+
+  local dark_img = classed(img, 'doc-img--dark')
+  dark_img.src = dark
+  -- Both carry the same alt text on purpose. Only one is ever displayed --
+  -- the other is display:none, which takes it out of the accessibility tree
+  -- entirely -- so a reader meets one image with one description, not two.
+  return { classed(img, 'doc-img--light'), dark_img }
 end

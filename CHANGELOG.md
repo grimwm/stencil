@@ -9,6 +9,40 @@ and the closed epics in `.beads/issues.jsonl` are the readable index.
 How the version gets bumped is written down in
 [AGENTS.md](AGENTS.md#cutting-a-release), not here.
 
+## 0.16.0
+
+- **A figure can have a dark variant, and the PDF still prints the light one.**
+  Since 0.12.0 mermaid diagrams redraw to follow the theme while static figures
+  did not, so a deck carrying both went half-themed in dark mode: recoloured
+  diagrams beside white-plate SVGs. That was true of a deck in active use.
+
+  Put `images/foo-dark.svg` beside `images/foo.svg` and both are embedded, one
+  classed `doc-img--light` and one `doc-img--dark`, with CSS showing one. The
+  author writes `![alt](images/foo.svg)` exactly as before: no new syntax, no
+  front matter, and a figure with no dark sibling is emitted unchanged.
+
+  `<picture>` with `media="(prefers-color-scheme: dark)"` is the standard HTML
+  answer and it is the wrong one here. This page resolves its theme in JS to
+  `data-theme` so the dark palette stays one CSS block; `prefers-color-scheme`
+  follows the operating system instead, so a `<picture>` would desync from the
+  rest of the page the moment a reader picks a theme explicitly -- which is the
+  case the theme control exists for.
+
+  The containment has a new half. Every dark rule so far had to stay *inside*
+  `@media screen`; the rule that **hides** the dark variant has to stay
+  *outside* it, because print is what must match it. Tidying that rule in with
+  the others would print both figures stacked on every handout. Both directions
+  are now asserted.
+
+  Verified against the artifact rather than the stylesheet: the fixtures are
+  pure red and pure green, and the test reads the fill operator out of the
+  built PDF's content stream. Chromium draws an SVG from an `<img>` as vector
+  operators, so there is no image XObject to inspect -- measured, the PDF has
+  none at all.
+
+  Both variants embed, so a page using dark figures roughly doubles that part
+  of its weight; a document with no dark siblings pays nothing.
+
 ## 0.15.0
 
 - **Every figure in a generated PDF now carries an accessible name.** A PDF/UA
