@@ -507,6 +507,21 @@
       margin: 1.5rem auto;
       text-align: center;
     }
+
+    /* Theme variants for embedded images, paired by embed-images.lua when a
+       -dark sibling exists beside a figure. Declared here, outside any media
+       query, so the dark variant is hidden EVERYWHERE by default -- print
+       included. The rule that shows it lives in the @media screen block at the
+       foot of this file, which print cannot match, so a PDF gets the light
+       figure with nothing to configure and nothing to undo.
+
+       Writing it the other way round -- :root:not([data-theme="dark"]) here --
+       would read as equivalent and is not: a reader who has chosen dark and
+       then prints has data-theme="dark" on the page, and the dark figure would
+       print on a white sheet. */
+    .doc-img--dark {
+      display: none;
+    }
     figure figcaption {
       text-align: center;
       margin-top: 0.5rem;
@@ -786,6 +801,23 @@
         --bs-table-striped-color: var(--text);
         --bs-table-striped-bg: var(--surface-sunken);
       }
+
+      /* The image-variant swap. Placed after the token block, not before it:
+         tests/test_theme.py reads the FIRST :root[data-theme="dark"] rule
+         in this block as the palette, so a component rule above it makes
+         that helper measure the wrong thing.
+
+         `inline` rather than `revert` or `initial`: nothing in either
+         stylesheet sets a display on an image, so inline is what the light one
+         already has. A `revert` here would discard any author rule a later
+         release adds. */
+      :root[data-theme="dark"] .doc-img--light {
+        display: none;
+      }
+      :root[data-theme="dark"] .doc-img--dark {
+        display: inline;
+      }
+
     }
 
     /* The theme control. Fixed on a document, and re-parented into the
