@@ -14,6 +14,8 @@ combination produces a separator with nothing on one side.
 
 from __future__ import annotations
 
+import re
+
 import pytest
 
 pytestmark = pytest.mark.integration
@@ -212,10 +214,15 @@ def test_the_separators_hide_the_middot_without_hiding_the_gap(render_soup):
     # Not normalized: the point is that a whitespace character is present, and
     # " ".join(x.split()) would insert one wherever the DOM has none.
     accessible = meta.get_text()
-    assert "LovelaceGrace" not in accessible, (
-        "the only gap between two authors lives inside the aria-hidden "
-        f"separator, so it is not in the accessibility tree: {accessible!r}"
-    )
-    assert "AuthorAda" not in accessible, (
-        f"the label runs into the first author: {accessible!r}"
+
+    # Matched whole, with \s+ standing for the boundary. Asserting only that
+    # "LovelaceGrace" is absent would pass for "Ada Lovelace-Grace Hopper",
+    # which has no whitespace boundary either -- and would pass for a visible
+    # separator that had escaped its aria-hidden wrapper. \s matches U+00A0.
+    assert re.fullmatch(
+        r"\s*Author\s+Ada\s+Lovelace\s+Grace\s+Hopper\s*", accessible
+    ), (
+        "with every aria-hidden subtree removed the byline should read as "
+        "whitespace-separated words; the accessibility tree would be handed "
+        f"{accessible!r}"
     )
