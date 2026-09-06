@@ -152,6 +152,18 @@
       border-bottom: 2px solid var(--accent);
     }
 
+    /* The title's h1 carries no styling of its own -- .doc-title above is
+       where the type is set. This cancels the user-agent h1 so adding the
+       element changed nothing visible: without it, an h1 brings its own
+       2em size and block margins and the header grows. */
+    .doc-name {
+      font-family: inherit;
+      font-size: inherit;
+      font-weight: inherit;
+      line-height: inherit;
+      margin: 0;
+    }
+
     /* Subordinate to the title, the way .deck-subtitle is on a title slide.
        font-weight is spelled out rather than left off: this div sits inside
        .doc-title, so an omitted weight inherits that block's 700 instead of

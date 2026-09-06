@@ -13,7 +13,18 @@
    an absent one here. #}
 $if(title)$
 <header class="doc-title">
-    <div class="doc-identity">$title$
+    <div class="doc-identity">
+      {# An h1, not bare text in a div. A document had no h1 at ALL: its first
+         heading was whatever the author wrote, normally ##, so every document
+         opened on an H2 with nothing above it. PDF/UA 7.4.2 rejects that --
+         "Heading level 1 is skipped in a descending sequence" -- and it is
+         wrong on its own terms, since the document's title IS its top heading.
+         The deck has always spelled this <h1 class="deck-title">.
+
+         Styling stays on .doc-title, the header, and .doc-name only cancels
+         the user-agent h1 so nothing moves: the heading inherits the size,
+         weight and family it was already rendering at. #}
+      <h1 class="doc-name">$title$</h1>
 $if(subtitle)$
       <div class="doc-subtitle">$subtitle$</div>
 $endif$
