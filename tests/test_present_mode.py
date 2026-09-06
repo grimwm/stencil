@@ -83,7 +83,28 @@ const puppeteer = require("puppeteer");
   await page.keyboard.press("ArrowRight");
   const afterSecond = await state();
 
-  console.log(JSON.stringify({entered, chosen, afterArrow, afterSecond}));
+  // A keyboard-only presenter's path to the control: every option is its own
+  // tab stop while presenting, because the arrows are spoken for.
+  const tabStops = await page.evaluate(() =>
+    Array.from(document.querySelectorAll('[role="radio"]')).map((b) => b.tabIndex)
+  );
+
+  // Tab to the option after the checked one and activate it with Enter.
+  await page.evaluate(() => {
+    const radios = Array.from(document.querySelectorAll('[role="radio"]'));
+    radios[radios.findIndex((b) => b.getAttribute("aria-checked") === "true")].focus();
+  });
+  await page.keyboard.press("Tab");
+  await page.keyboard.press("Enter");
+  const afterEnter = await state();
+
+  // Space activates a focused button; it must not also skip a slide.
+  await page.keyboard.press("Space");
+  const afterSpace = await state();
+
+  console.log(JSON.stringify({
+    entered, chosen, afterArrow, afterSecond, tabStops, afterEnter, afterSpace,
+  }));
   await browser.close();
 })();
 """
@@ -141,3 +162,40 @@ def test_the_arrows_still_change_slides(deck_keyboard):
     first = deck_keyboard["chosen"]["current"]
     assert deck_keyboard["afterArrow"]["current"] == first + 1
     assert deck_keyboard["afterSecond"]["current"] == first + 2
+
+
+def test_every_theme_option_is_reachable_by_tab_while_presenting(deck_keyboard):
+    """The other half of taking the arrows away.
+
+    Roving tabindex leaves only the CHECKED option tabbable, and the arrows are
+    what normally reach the rest. Disable them during a presentation without
+    doing anything else and a keyboard-only presenter can focus the control and
+    never change it -- a quieter bug than the one being fixed, and a worse one.
+    """
+    assert deck_keyboard["tabStops"] == [0, 0, 0], (
+        "not every theme option is a tab stop while presenting, so the arrows "
+        f"were removed without a replacement: tabIndex {deck_keyboard['tabStops']}"
+    )
+
+
+def test_enter_on_a_theme_option_changes_the_theme_not_the_slide(deck_keyboard):
+    before, after = deck_keyboard["afterSecond"], deck_keyboard["afterEnter"]
+    assert after["pref"] != before["pref"], (
+        "Tab then Enter did not change the theme, so the keyboard path is dead"
+    )
+    assert after["current"] == before["current"], (
+        "activating the theme control also moved the deck"
+    )
+
+
+def test_space_on_a_focused_button_does_not_also_skip_a_slide(deck_keyboard):
+    """The same double-action, one key over.
+
+    Space activates a focused button AND is the deck's "next slide". A
+    presenter who has tabbed to the theme control and pressed Space would
+    otherwise change the setting and lose a slide at once.
+    """
+    before, after = deck_keyboard["afterEnter"], deck_keyboard["afterSpace"]
+    assert after["current"] == before["current"], (
+        "Space on a focused button skipped a slide as well as activating it"
+    )

@@ -385,12 +385,21 @@ def test_the_pressed_segment_tracks_the_preference_not_the_resolved_theme():
     pressed segment must still read System. Tracking the resolved value would
     have the control report a choice the reader never made."""
     markup = TOGGLE.read_text()
-    m = re.search(r"subscribe\(function \(theme, pref\) \{(.*?)\n      \}\);",
-                  markup, re.S)
-    assert m, "no subscription"
+    # Anchored on refresh(), which is what the subscription now calls. This
+    # reads the source rather than the rendered control, so it is a fast
+    # signal and a brittle one -- it broke on a rename that changed no
+    # behaviour. It stays because it fails in milliseconds without a
+    # container; the property itself is exercised for real by the browser
+    # tests in test_present_mode.py.
+    m = re.search(r"function refresh\(\) \{(.*?)\n      \}", markup, re.S)
+    assert m, "no refresh(); the pressed-state computation was renamed again"
     body = m.group(1)
     assert "=== pref" in body, "the pressed segment is not compared against pref"
     assert "=== theme" not in body, "the pressed segment follows the resolved theme"
+    assert "__stencilTheme.get()" in body, (
+        "refresh() no longer reads the preference, so `pref` here may be the "
+        "resolved theme under another name"
+    )
 
 
 def test_the_glyph_is_hidden_and_the_label_carries_the_name():
