@@ -191,8 +191,9 @@ def test_the_separators_hide_the_middot_without_hiding_the_gap(render_soup):
     rather than predicting what any particular screen reader announces.
     Measured against Chromium's own accessibility tree while this was written:
     the 0.12.0 markup gave the runs 'Author', 'Ada Lovelace', 'Grace Hopper'
-    with no whitespace anywhere between them, and it now gives 'Author ',
-    'Ada Lovelace ', 'Grace Hopper '.
+    with no whitespace anywhere between them, and it now gives each of them a
+    trailing U+00A0. (Spelled out rather than written literally: an invisible
+    non-breaking space in prose is indistinguishable from an ordinary one.)
     """
     soup = render_soup(
         "doc",

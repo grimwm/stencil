@@ -273,7 +273,7 @@ def test_the_byline_labels_every_field_it_names():
     unlabelled author next to two labelled dates reads as an oversight."""
     body = (TEMPLATES / "_doc-body.html.j2").read_text()
     for field in ["Author", "Issued", "Due", "Points"]:
-        assert f'<span class="doc-label">{field}' in body, field
+        assert f'<span class="doc-label">{field}&#160;</span>' in body, field
 
 
 def test_every_byline_label_ends_in_a_non_breaking_space():
@@ -287,8 +287,13 @@ def test_every_byline_label_ends_in_a_non_breaking_space():
     characters does.
     """
     body = (TEMPLATES / "_doc-body.html.j2").read_text()
-    labels = re.findall(r'<span class="doc-label">(.*?)</span>', body)
-    assert labels, "no .doc-label spans at all"
+    # re.S because pandoc templates are hand-wrapped and a label could be split
+    # across lines; a pattern that quietly matched none of them, or two of the
+    # four, would make this assert nothing.
+    labels = re.findall(r'<span class="doc-label">(.*?)</span>', body, re.S)
+    assert len(labels) == 4, (
+        f"expected the four byline labels, found {len(labels)}: {labels}"
+    )
     for label in labels:
         assert label.endswith("&#160;"), (
             f"the label {label!r} has no trailing non-breaking space, so its "
