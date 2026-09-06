@@ -365,9 +365,12 @@ Every generated page carries a three-way theme control — light, dark, or follo
 operating system. It sits top right on a document and in the toolbar on a deck. Nothing in
 the front matter turns it on or off; it is simply there.
 
-The choice is remembered. On `file://` URLs a browser pools every local page into one
-storage origin, so picking dark once applies to every handout you open afterwards, not just
-the one in front of you.
+The choice is remembered, though how widely depends on the browser. Opened over `http://`,
+it applies to every page on that origin. Opened as a `file://` URL — which is how a
+generated handout is usually read — browsers disagree: some treat all local files as one
+storage origin, so the choice follows you from handout to handout; others partition per
+file, or decline to store anything at all. If cross-page persistence matters, serve the
+folder over HTTP rather than relying on it.
 
 **PDFs are always light.** Not by a setting that could be got wrong — by construction. Every
 dark declaration lives inside an `@media screen` block, and print does not match `@media screen`, so the light values are the only ones a printer or a PDF ever sees. That holds for

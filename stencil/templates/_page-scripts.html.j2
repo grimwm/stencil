@@ -56,10 +56,24 @@
       pre.remove();
     });
 
-    async function renderMermaid() {
-      const diagrams = document.querySelectorAll('.mermaid');
-      if (!diagrams.length) return;
-      diagrams.forEach((div) => {
+    // Mermaid measures the element as it draws, so a diagram inside a hidden
+    // tab pane renders at zero size and comes out broken. On first load that
+    // cannot happen -- the tab code runs after this, so everything is still
+    // visible -- but a theme redraw happens with the panes already built.
+    // Hidden ones are left alone and marked stale instead, then redrawn when
+    // their pane is shown.
+    function visible(el) {
+      return el.offsetParent !== null || el.getClientRects().length > 0;
+    }
+
+    async function renderMermaid(scope) {
+      const all = Array.from((scope || document).querySelectorAll('.mermaid'));
+      const ready = [];
+      all.forEach((div) => {
+        if (!visible(div)) {
+          div.dataset.mermaidStale = 'true';
+          return;
+        }
         // A redraw has to undo the last one: restore the source and clear the
         // flag mermaid sets, or run() skips the element as already done.
         if (div.dataset.mermaidSource !== undefined) {
@@ -67,15 +81,28 @@
         }
         delete div.dataset.processed;
         div.removeAttribute('data-processed');
+        delete div.dataset.mermaidStale;
+        ready.push(div);
       });
+      if (!ready.length) return;
       mermaid.initialize({
         startOnLoad: false,
         theme: 'base',
         themeVariables: themeVariables(),
       });
-      await mermaid.run({ querySelector: '.mermaid' });
+      await mermaid.run({ nodes: ready });
       prefixSvgIds();
     }
+
+    // A pane that becomes visible redraws whatever it was hiding.
+    document.addEventListener('shown.bs.tab', function (event) {
+      const pane = document.querySelector(
+        event.target.getAttribute('data-bs-target') || ''
+      );
+      if (pane && pane.querySelector('.mermaid[data-mermaid-stale]')) {
+        renderMermaid(pane);
+      }
+    });
 
     // Re-applied after every render: mermaid numbers ids from scratch each
     // time, so a second diagram would duplicate the first's (WCAG 4.1.1).
@@ -139,17 +166,20 @@
     // stays set and the ready event is not fired again, so the tab code
     // and the PDF driver each see exactly one signal.
     if (window.__stencilTheme) {
-      let firstCall = true;
-      // Redraws are chained, not fired in parallel. renderMermaid() restores
-      // each element's source and re-initializes mermaid globally, so two in
-      // flight at once mutate the same nodes and the same config -- easy to
-      // reach by clicking twice.
+      // Keyed on the RESOLVED theme, not on set() being called. Every arrow
+      // key press calls set(), and light -> system on a light machine
+      // resolves to the same palette -- redrawing on each would queue a full
+      // re-render per keystroke for no visible change.
+      let rendered = document.documentElement.dataset.theme;
+      // Chained, not parallel. renderMermaid() restores every source and
+      // re-initializes mermaid globally, so two in flight mutate the same
+      // nodes and the same config.
       let pending = Promise.resolve();
-      window.__stencilTheme.subscribe(function () {
-        // subscribe() calls back immediately with the current theme; the
-        // diagram it would redraw has just been drawn.
-        if (firstCall) { firstCall = false; return; }
-        pending = pending.then(renderMermaid).catch(function () {});
+      window.__stencilTheme.subscribe(function (theme) {
+        if (theme === rendered) return;
+        rendered = theme;
+        pending = pending.then(function () { return renderMermaid(); })
+                         .catch(function () {});
       });
     }
   })();

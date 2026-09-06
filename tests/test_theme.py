@@ -433,14 +433,39 @@ def test_mermaid_ready_is_set_once_and_never_cleared():
     assert js.count("new Event('mermaid-ready')") == 1
 
 
-def test_mermaid_redraw_skips_the_subscription_callback():
-    """subscribe() calls back immediately with the current theme. Redrawing on
-    that call would render every diagram twice on load, doubling the slowest
-    part of the page."""
+def test_mermaid_redraws_only_when_the_resolved_theme_changes():
+    """Keyed on the resolved theme, not on set() having been called.
+
+    subscribe() calls back immediately, so a naive handler renders every
+    diagram twice on load. And every arrow-key press calls set(), while
+    light -> system on a light machine resolves to the same palette -- one
+    full re-render per keystroke for no visible change. Comparing against the
+    last rendered theme covers both.
+    """
     js = SCRIPTS.read_text()
-    m = re.search(r"__stencilTheme\.subscribe\(function \(\) \{(.*?)\n      \}\);", js, re.S)
-    assert m, "no theme subscription"
-    assert "firstCall" in m.group(1), "the immediate callback is not skipped"
+    m = re.search(
+        r"__stencilTheme\.subscribe\(function \(theme\) \{(.*?)\n      \}\);",
+        js,
+        re.S,
+    )
+    assert m, "no theme subscription taking the resolved theme"
+    body = m.group(1)
+    assert "theme === rendered" in body, "the redraw is not keyed on the theme"
+    assert "return" in body, "there is no early exit for an unchanged theme"
+
+
+def test_mermaid_leaves_hidden_diagrams_alone():
+    """Mermaid measures as it draws, so a diagram in a closed tab pane renders
+    at zero size and comes out broken. On first load nothing is hidden -- the
+    tab code runs afterwards -- but a theme redraw happens with the panes
+    already built."""
+    js = SCRIPTS.read_text()
+    assert "dataset.mermaidStale" in js, "hidden diagrams are not marked stale"
+    assert "offsetParent" in js, "visibility is not checked"
+    assert "shown.bs.tab" in js, "a revealed pane never redraws what it hid"
+    assert "nodes: ready" in js, (
+        "run() is still given a selector, so it would draw the hidden ones too"
+    )
 
 
 def test_mermaid_reads_its_palette_from_the_tokens():

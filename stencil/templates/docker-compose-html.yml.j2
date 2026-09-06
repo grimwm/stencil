@@ -91,12 +91,13 @@
         for f in *.html; do
           [ -f "$$f" ] || continue
           case "$$f" in html-template.html|slide-template.html) continue ;; esac
-          # Both themes. The dark config clicks the theme control before
-          # measuring, so this is the rendered dark page rather than a claim
-          # about it -- and its contrast ratios are the ones nobody has looked
-          # at, 0.11.0 having shipped a 3.88:1 label that looked fine.
+          # Both themes, each forced by clicking the control -- so these are
+          # rendered pages rather than claims about them, and neither pass is
+          # left to resolve `system` into whatever the runner happens to
+          # report. A light pass that inherited a dark runner would measure
+          # dark twice and still go green.
           echo "Checking $$f (light)..."
-          pa11y --config /opt/pa11y.json --standard WCAG2AA \
+          pa11y --config /opt/pa11y-light.json --standard WCAG2AA \
             "file:///workspace/$$f" || failed=1
           echo "Checking $$f (dark)..."
           pa11y --config /opt/pa11y-dark.json --standard WCAG2AA \

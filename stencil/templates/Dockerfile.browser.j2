@@ -23,31 +23,32 @@ RUN apk add --no-cache chromium font-noto ttf-dejavu
 
 RUN npm install --global --prefix /opt/tools puppeteer pa11y
 
-# Chromium cannot use its own sandbox inside an unprivileged container.
-RUN printf '%s\n' \
-  '{' \
-  '  "chromeLaunchConfig": {' \
-  '    "args": ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"]' \
-  '  }' \
-  '}' > /opt/pa11y.json
-
-# A second pa11y config that drives the theme control before measuring.
+# One pa11y config per theme, each driving the control before measuring.
+# chromeLaunchConfig is in both: Chromium cannot use its own sandbox inside
+# an unprivileged container.
 #
 # pa11y has no --run-before; it has `actions`, which is better here anyway --
 # clicking the real segment exercises the same path a reader does rather than
 # asserting about a page that was set up some other way.
 #
-# Checking one theme would leave the dark palette unmeasured, and its contrast
-# ratios are the ones nobody has looked at: 0.11.0 shipped a label at 3.88:1
-# that looked entirely unremarkable.
-RUN printf '%s\n' \
-  '{' \
-  '  "chromeLaunchConfig": {' \
-  '    "args": ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"]' \
-  '  },' \
-  '  "actions": [' \
-  '    "click element .theme-toggle__option[data-theme=\"dark\"]"' \
-  '  ]' \
-  '}' > /opt/pa11y-dark.json
+# Both are forced. Leaving the light pass to resolve `system` would measure
+# whatever preference the runner reports -- on a machine reporting dark, both
+# passes would measure dark and the light palette would go unchecked while
+# the check still went green.
+#
+# Checking one theme would leave the other's contrast unmeasured, and those
+# are the ratios nobody has looked at: 0.11.0 shipped a label at 3.88:1 that
+# looked entirely unremarkable.
+RUN for theme in light dark; do \
+      printf '%s\n' \
+        '{' \
+        '  "chromeLaunchConfig": {' \
+        '    "args": ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"]' \
+        '  },' \
+        '  "actions": [' \
+        "    \"click element .theme-toggle__option[data-theme=\\\"$theme\\\"]\"" \
+        '  ]' \
+        '}' > "/opt/pa11y-$theme.json"; \
+    done
 
 WORKDIR /workspace

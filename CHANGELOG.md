@@ -14,8 +14,9 @@ How the version gets bumped is written down in
 - **A light/dark/system theme control on every HTML page**, top right on a
   document and in the toolbar on a deck. Three segments in a `radiogroup`, so
   all three states are visible and the pressed one says which is active. The
-  choice persists; on `file://` a browser pools local pages into one storage
-  origin, so it applies across handouts.
+  choice persists per storage origin; over `file://` browsers disagree about
+  what that means, so it may or may not follow you between handouts -- serve
+  the folder over HTTP if that matters.
 
   The theme resolves in a synchronous inline script ahead of every stylesheet.
   Anything deferred paints light first, which is a white flash for a dark
