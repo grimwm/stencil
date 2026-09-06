@@ -312,8 +312,14 @@ function describeLinkAnnotations(pdf, domLinks) {
   // they disagree -- a browser change, an anchor laid out in print and not on
   // screen -- fall back to matching on the URI rather than shifting every
   // description by one, which would be worse than the URI itself.
-  const aligned = structLinks.length === domLinks.length;
+  const sameLength = structLinks.length === domLinks.length;
   const described = new Map();
+  // Equal lengths are necessary and not sufficient: two lists of the same
+  // size can still be in different orders. Every pair that carries a URI on
+  // both sides is checked, and a single disagreement is enough to say the
+  // descriptions are not trustworthy -- the per-pair fallback keeps that link
+  // usable, but it must not do so silently.
+  let mismatched = 0;
 
   structLinks.forEach((structLink, index) => {
     for (const ref of structLink.annots) {
@@ -324,8 +330,12 @@ function describeLinkAnnotations(pdf, domLinks) {
       // The URI is checked per pair rather than across the whole list: one
       // anchor that fails to line up should cost one description, not all of
       // them.
-      if (aligned && (!uri || uri === domLinks[index].href)) {
-        text = domLinks[index].text;
+      if (sameLength) {
+        if (!uri || uri === domLinks[index].href) {
+          text = domLinks[index].text;
+        } else {
+          mismatched += 1;
+        }
       }
       if (!text && uri) text = byHref.get(uri) || null;
       if (text) described.set(annot, text);
@@ -361,7 +371,17 @@ function describeLinkAnnotations(pdf, domLinks) {
     }
   }
 
-  return { fromText, fromUri, aligned: aligned || structLinks.length === 0 };
+  // Both lists empty is a document with no links, which is aligned by
+  // definition. ONE of them empty is not: a page full of anchors whose
+  // structure tree has no /Link element is exactly the case worth hearing
+  // about, and reporting it as aligned would suppress the only signal there
+  // is.
+  return {
+    fromText,
+    fromUri,
+    aligned: sameLength && mismatched === 0,
+    mismatched,
+  };
 }
 
 function xmpFor(title) {
@@ -686,7 +706,11 @@ main()
       // out loud rather than discovering in a PDF a year later.
       console.error(
         `${output}: the link structure elements and the page's anchors did ` +
-          "not line up, so link descriptions fell back to their URIs."
+          "not line up" +
+          (links.mismatched
+            ? ` (${links.mismatched} annotation(s) pointed somewhere their anchor did not)`
+            : "") +
+          ", so link descriptions fell back to their URIs."
       );
     }
   })

@@ -909,9 +909,11 @@ looked at nothing.
 **Your link text becomes the PDF's description of the link.** PDF/UA requires every link
 annotation to carry an alternate description, and Chromium writes none, so `make pdf` adds one
 after printing — taken from the anchor's `aria-label`, then its text, then the accessible name of a
-picture inside it, then its `title`, and only as a last resort the URL itself. So
-`[the authoring guide](https://…)` describes itself and `[click here](https://…)` describes
-nothing, exactly as on the web; the difference is that in the PDF the fallback is the raw URL read
-out character by character. Nothing to do here beyond writing the link text you would want read
-aloud — but a bare `<https://example.com/a/b/c.html>` autolink is its own description, and that is
-what a reader gets.
+picture inside it, then its `title`, and only when all of those are empty, the URL itself.
+
+So there is nothing to do here beyond writing link text you would want read aloud:
+`[the authoring guide](https://…)` describes itself, and `[click here](https://…)` reaches the PDF
+as "click here" — no worse than on the web, and no better. The URL fallback is only for a link with
+no words anywhere, such as an anchor wrapped around a decorative image; a bare
+`<https://example.com/a/b/c.html>` autolink is already its own text, and that is what gets read
+out, character by character.
