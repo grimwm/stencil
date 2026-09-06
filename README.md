@@ -56,12 +56,19 @@ Stencil is driven by a YAML config file (default: `.config.yaml`). See [`config.
 
 ### Top-level fields
 
-| Field           | Description                                                          |
-| --------------- | -------------------------------------------------------------------- |
-| `templates_dir` | Path(s) to template directories, relative to config. String or list. |
-| `output_dir`    | Base output directory, relative to CWD. Defaults to CWD.             |
-| `templates`     | List of template definitions to render.                              |
-| `packages`      | Dictionary of package configurations keyed by package ID.            |
+| Field           | Description                                                                                      |
+| --------------- | ------------------------------------------------------------------------------------------------ |
+| `templates_dir` | Path(s) to template directories, relative to config. String or list.                             |
+| `output_dir`    | Base output directory, **relative to the working directory**, not to this file. Defaults to CWD. |
+| `templates`     | List of template definitions to render.                                                          |
+| `packages`      | Dictionary of package configurations keyed by package ID.                                        |
+
+`output_dir` is resolved against the process's working directory rather than against the config
+file that names it, which is worth stating plainly because it is the opposite of what every other
+path in this file does — `templates_dir` and every `brand: file://` are relative to the config.
+So `output_dir: build` puts output under `build/` **wherever you happened to run `stencil` from**,
+and the same config generates into a different place depending on your shell's `cd`. Drive it from a
+Makefile that runs in a fixed directory, or pass an absolute path.
 
 ### Template definitions
 
@@ -154,6 +161,8 @@ Stencil includes a minimal set of templates for document generation:
 | `_page-*.html.j2`              | Head, styling and scripts shared by both           |
 | `_doc-body.html.j2`            | Document body block                                |
 | `_slide-*.j2`                  | Deck body, slide styling and present mode          |
+| `_theme-toggle.html.j2`        | The three-way light/dark/system control            |
+| `frontmatter-filter.lua.j2`    | Pandoc Lua filter normalizing title-block metadata |
 | `hidden-filter.lua.j2`         | Pandoc Lua filter for hidden content sections      |
 | `mermaid-figure-filter.lua.j2` | Pandoc Lua filter for Mermaid diagram captions     |
 | `figure-name-filter.lua.j2`    | Pandoc Lua filter naming figures for PDF/UA        |

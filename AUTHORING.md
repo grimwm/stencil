@@ -515,6 +515,27 @@ and the wrong one for a page with fifty photographs, so keep an eye on the total
 Images referenced by URL are left alone. Fetching them at build time would make the build depend on
 the network and bake in whatever that URL served that day.
 
+**A figure can have a dark variant.** Put `images/foo-dark.svg` beside `images/foo.svg` and both are
+embedded — one shown in light, one in dark. You write the figure exactly as you always did:
+
+```markdown
+![Cumulative flow: arrivals outrun departures until the WIP limit lands](images/cfd.svg)
+```
+
+There is no new syntax and nothing to set in the front matter. The `-dark` file is found by name or
+it is not; a figure with no dark sibling is emitted unchanged and costs nothing. A figure that
+*does* have one embeds twice, so a deck full of dark variants roughly doubles that part of its
+weight.
+
+This matters because mermaid diagrams already follow the theme — they are drawn in the browser, so
+they are redrawn when the palette changes. A static SVG cannot do that, so a deck mixing the two
+goes half-themed in dark mode: recoloured diagrams beside white-plate figures. The dark sibling is
+how a static figure keeps up.
+
+**The PDF always prints the light one**, whatever the screen was showing. Same guarantee as the rest
+of the theme: the rule that *hides* the dark variant lives outside `@media screen`, so print never
+sees the dark figure at all.
+
 A deck caps figure height so a diagram cannot push a slide off the page, on screen and in print. A
 document does not, so an oversized image will run past the text column — scale it yourself, or use
 SVG, which stays sharp at whatever width it lands on.
@@ -625,13 +646,19 @@ Four fenced divs shape a slide:
 
 | Fence          | Effect                                                                  |
 | -------------- | ----------------------------------------------------------------------- |
-| `::: columns`  | Two side-by-side halves, one per child block                            |
+| `::: columns`  | Side-by-side, one column per child block                                |
 | `::: lead-in`  | A larger pull statement with an accent rule — the one thing to remember |
 | `::: takeaway` | A boxed conclusion, pinned to the bottom of the slide                   |
 | `::: center`   | Centers the text inside                                                 |
 
-`columns` splits evenly. Add `wide-left` or `wide-right` to bias it about 60/40 — useful when prose
-sits beside a diagram:
+**A columns block is as wide as its contents.** Two children give two columns, three give three,
+four give four. You do not declare the count anywhere; the number of top-level blocks inside the
+fence is the number of columns. (Before 0.20.0 it was always two, so three children left an empty
+cell and four stacked 2×2. If an old deck looks different, that is why, and the new shape is the
+one you meant.)
+
+Add `wide-left` or `wide-right` to bias a **two**-column split about 60/40 — useful when prose sits
+beside a diagram. These name two explicit tracks, so they say two columns and mean it:
 
 ```markdown
 ::: {.columns .wide-right}
@@ -645,6 +672,75 @@ Kanban limits work in progress, so the queue has to drain before anything new is
 
 `takeaway` is positioned at the bottom of its slide regardless of how much content is above it, so a
 deck built around one boxed conclusion per slide stays visually consistent.
+
+#### Columns as cards
+
+Add `cards` and each column gets a surface, a border, a radius and padding, built from the same
+tokens `takeaway` uses so a card matches the boxed conclusion under it rather than introducing a
+second kind of box. It is **opt-in**: a card costs vertical space on a medium that has none spare,
+so a plain `::: columns` stays plain.
+
+```markdown
+::::: {.columns .cards}
+
+:::: column
+**Discover.** Job boards, referrals, the career fair. Wide and cheap.
+::::
+
+:::: column
+**Apply.** A tailored résumé per posting. Narrower and expensive.
+::::
+
+:::: column
+**Interview.** The part everyone prepares for, and the smallest step of the three.
+::::
+
+:::::
+```
+
+Note the colon counts. A fence closes at the same width it opened, so the children need fewer
+colons than the block that holds them — `:::::` outside, `::::` inside. Bare paragraphs work as
+children too, one paragraph per column; a `column` div is what lets a card hold more than one block,
+and what an accent class attaches to.
+
+Three things a card does that plain columns do not:
+
+| Class         | On             | Effect                                                                    |
+| ------------- | -------------- | ------------------------------------------------------------------------- |
+| `cards`       | the fence      | Surface, border, radius, padding, and an accent stripe down the left edge |
+| `accent-2..4` | a single child | Overrides that one card's accent colour                                   |
+| `lead-letter` | the fence      | Enlarges the first character of each card's lead run                      |
+
+The accent reaches both the left stripe and the **lead run** — the bold text that opens the card —
+so `**Discover**` above is coloured to match its own stripe. Cards default to the deck accent;
+`accent-2`, `accent-3` and `accent-4` step through three more so a four-card row reads as four
+things rather than one thing four times. Put them on the child, not the fence:
+
+```markdown
+::::: {.columns .cards .lead-letter}
+
+:::: column
+**S — Situation.** Where you were and what was at stake.
+::::
+
+:::: {.column .accent-2}
+**T — Task.** What you specifically owned.
+::::
+
+:::: {.column .accent-3}
+**A — Action.** What you did, in the first person singular.
+::::
+
+:::: {.column .accent-4}
+**R — Result.** The number, if you have one.
+::::
+
+:::::
+```
+
+`lead-letter` is what makes the `S`, `T`, `A`, `R` above read as letters rather than as bold words:
+it enlarges the first character of each card's opening bold run and leaves the rest alone. It does
+nothing on a card whose first block is not bold, so it is safe to put on the fence and forget.
 
 ### Presenter-only slides
 
@@ -692,11 +788,25 @@ Present mode shows one slide at a time and asks the browser for fullscreen; leav
 present mode. Arrow keys only navigate while presenting, so they still scroll the page normally when
 you are reading the deck. Keystrokes inside a text field are left alone.
 
+**While presenting, the arrows belong to the deck** — no matter what has focus. That is a deliberate
+carve-out rather than the browser's default. The theme control is a radiogroup, and a radiogroup
+answers arrow keys by changing its selection, so before 0.18.0 a presenter who had touched the
+control once found every later slide change also repainting the deck. Presenting suspends the
+control's arrow handling; Tab walks its three options and Enter picks one, so it stays reachable
+from the keyboard. Space is handled the same way: on a focused button it activates the button and
+does not also advance the slide.
+
 ### Printing a deck
 
-Run `make pdf`, or print from the browser — both give you the same file. The page is set up for
-letter landscape, one slide per page, with the toolbar suppressed. There is no separate deck build
-and no extra flag: the deck you present is the deck that prints.
+Run `make pdf`. The page is set up for letter landscape, one slide per page, with the toolbar
+suppressed. There is no separate deck build and no extra flag: the deck you present is the deck that
+prints.
+
+Your browser's own Ctrl+P lays the pages out identically and is fine for a quick look, but **it does
+not produce the same file**. `make pdf` drives headless Chromium and then repairs the result to
+PDF/UA-1 — it adds the role map, the XMP metadata and the list-body tags Chromium omits, and marks
+the decoration Chromium paints untagged. A browser print skips all of that and hands you an untagged
+PDF that no accessibility checker will pass. Use `make pdf` for anything you hand out or submit.
 
 ## Fenced divs and prettier
 
@@ -775,8 +885,19 @@ other two changes have already broken.
 ## Before you hand it out
 
 ```bash
+make doc            # or make slide
 make check-access
+make pdf
 ```
 
-This runs pa11y against every built HTML file at WCAG 2.1 AA. It is the cheap check that catches a
-missing diagram caption, a contrast problem, or a heading level skipped on the way down.
+`make check-access` runs pa11y against every built HTML file at WCAG 2.1 AA, in **both** themes —
+it clicks the theme control the way a reader would, because a colour that only fails in dark is
+still a failure. It is the cheap check that catches a missing diagram caption, a contrast problem,
+or a heading level skipped on the way down.
+
+`make pdf` is the other half, and it checks something pa11y cannot see. WCAG and PDF/UA-1
+(ISO 14289-1) disagree about figures: an HTML page can be perfectly accessible and still produce a
+PDF whose `<figure>` wrappers carry no accessible name, because HTML has no `alt` on `<figure>` and
+WCAG has no rule requiring one. Everything needed to close that gap happens inside `make pdf`, so a
+handout that passes `check-access` and was built with `make pdf` satisfies both standards. One
+built with Ctrl+P satisfies only the first.
