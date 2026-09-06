@@ -110,6 +110,13 @@ async function main() {
       // Honors the print-color-adjust: exact declarations on table headers,
       // row stripes, blockquotes, task-list checkboxes and slide title bars.
       printBackground: true,
+      // The structure tree: headings, lists, tables and reading order, which
+      // is what a screen reader navigates a PDF by. This is Puppeteer's own
+      // default today, and stating it is the point -- an accessibility
+      // property nothing asserts is one a version bump can remove silently,
+      // and until stn-40n nothing in this repository looked at a PDF at all.
+      // tests/test_pdf.py::test_the_pdf_is_tagged fails if this goes.
+      tagged: true,
     });
   } finally {
     await browser.close();

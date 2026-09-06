@@ -109,8 +109,13 @@
     /* Generated between siblings, so no combination of the three leaves a
        separator with nothing on one side of it. */
     .slide--title .deck-context span + span::before {
-      content: "\00b7";
-      margin: 0 0.45em;
+      /* Spaces in the content rather than the margin, for the reason
+         _page-style.css.j2 gives at length: margin paints a gap the PDF text
+         layer cannot see. Held at the old width -- 0.45em of margin a side
+         became a non-breaking space (0.28em) plus the letter-spacing that
+         follows it (0.14em), leaving 0.03em of margin. */
+      content: "\00a0\00b7\00a0";
+      margin: 0 0.03em;
       color: var(--on-accent-faint);
     }
 

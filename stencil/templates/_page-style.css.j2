@@ -255,10 +255,22 @@
        generated between siblings so no combination leaves a stray middot with
        nothing on one side of it. */
     .doc-context span + span::before {
-      content: "\00b7";
-      /* The whole gap, and symmetric: _doc-body.html.j2 emits these spans on
-         one line precisely so no collapsed newline lands on one side. */
-      margin: 0 0.4rem;
+      /* The spaces are in the content, not the margin. A generated middot
+         with margin either side paints a gap and puts no whitespace glyph in
+         the text layer, so the context line extracted from the PDF as
+         "001\00b7Fall 2026" -- the same defect as the byline, one layer down,
+         and the one place where there is no text node to move a space into.
+
+         The gap is held at what it was rather than allowed to tighten. Each
+         side used to be 0.4rem of pure margin; a non-breaking space measures
+         0.28em at this font, so 0.12em of margin is the remainder. Measured
+         in the browser image at letter print width and at a 420px screen, the
+         rendered gap either side of the middot is unchanged to within 0.05px.
+
+         Symmetric, and _doc-body.html.j2 emits these spans on one line
+         precisely so no collapsed newline lands on one side. */
+      content: "\00a0\00b7\00a0";
+      margin: 0 0.12em;
       color: var(--text-faint);
     }
 
@@ -860,6 +872,12 @@
        of pushing it off the page. */
     .doc-facts {
       min-width: 0;
+      /* display: flex is load-bearing beyond layout. Its children blockify,
+         which is what puts a boundary between "Sep 05" and the next fact's
+         label in the accessibility tree -- the fact separators are
+         aria-hidden, so they contribute no whitespace of their own. Change
+         this to inline flow and the facts line runs together for a screen
+         reader, silently, the way the author list did before 0.13.0. */
       display: flex;
       flex-wrap: wrap;
       align-items: baseline;

@@ -230,9 +230,15 @@ def test_the_context_line_keeps_program_section_and_term_together():
     Asserted against the stylesheet because the separators are ::before
     generated content. They are not in the DOM, so BeautifulSoup cannot see
     them and every structural test in this suite reads straight past them.
-    Confirmed once in a real browser: computed content "." at margin 0 for the
-    section, "\\00b7" at 6.4px either side for the term, and .doc-term
-    computing to `inline`.
+    Confirmed in a real browser: computed content "." at margin 0 for the
+    section, and .doc-term computing to `inline`. The term's separator carries
+    its own non-breaking spaces since 0.13.0 -- generated content with margin
+    either side paints a gap that never reaches the PDF text layer, so the
+    context line extracted as "001\u00b7Fall 2026". The rendered gap is held at
+    what it was by dropping the margin the spaces now supply: measured in the
+    browser image at 14.22px against 14.17px before, and 17.42px against
+    17.39px, either side of the middot. Those numbers are measured, not
+    asserted -- the content string below is what this file can guard.
     """
     css = strip_comments(source("_page-style.css.j2"))
 
@@ -255,6 +261,11 @@ def test_the_context_line_keeps_program_section_and_term_together():
     assert sibling and "\\00b7" in sibling.group(1), (
         "the general context separator is no longer a middot"
     )
+    assert '"\\00a0\\00b7\\00a0"' in sibling.group(1), (
+        "the context separator's spaces are back in the margin; a painted gap "
+        "puts no character in the PDF text layer, so the line extracts as "
+        "'001\u00b7Fall 2026' again"
+    )
 
 
 def test_the_byline_labels_every_field_it_names():
@@ -262,7 +273,32 @@ def test_the_byline_labels_every_field_it_names():
     unlabelled author next to two labelled dates reads as an oversight."""
     body = (TEMPLATES / "_doc-body.html.j2").read_text()
     for field in ["Author", "Issued", "Due", "Points"]:
-        assert f'<span class="doc-label">{field}</span>' in body, field
+        assert f'<span class="doc-label">{field}&#160;</span>' in body, field
+
+
+def test_every_byline_label_ends_in_a_non_breaking_space():
+    """The gap after a label is a character inside the label, not a margin.
+
+    This is the whole of the 0.13.0 fix, and it is otherwise guarded only by
+    tests/test_pdf.py, which is marked integration -- so a plain `pytest` run
+    would be green while a deleted `&#160;` shipped a PDF whose header reads
+    "IssuedSep 05" again. A whitespace-only text node between two inline boxes
+    does not reach the PDF text layer; one inside a run that carries printing
+    characters does.
+    """
+    body = (TEMPLATES / "_doc-body.html.j2").read_text()
+    # re.S because pandoc templates are hand-wrapped and a label could be split
+    # across lines; a pattern that quietly matched none of them, or two of the
+    # four, would make this assert nothing.
+    labels = re.findall(r'<span class="doc-label">(.*?)</span>', body, re.S)
+    assert len(labels) == 4, (
+        f"expected the four byline labels, found {len(labels)}: {labels}"
+    )
+    for label in labels:
+        assert label.endswith("&#160;"), (
+            f"the label {label!r} has no trailing non-breaking space, so its "
+            "gap is painted rather than present"
+        )
 
 
 HEAD = TEMPLATES / "_page-head.html.j2"

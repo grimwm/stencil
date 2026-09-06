@@ -21,11 +21,22 @@ $if(has-byline)$
      Each line is one line of source on purpose: a newline between these
      collapses to a word space that lands on only one side of a separator.
 
+     The author separator carries its own non-breaking spaces inside its span,
+     and a <wbr> follows it, for the reason _doc-body.html.j2 sets out at
+     length: a whitespace-only text node between two inline boxes does not
+     reach the PDF text layer, and the nbsp pair that fixes that would
+     otherwise make the list unbreakable. deck-meta below needs no such change
+     -- its spaces already share a text node with a printing character.
+
+     The space before each separator sits inside the NAME rather than inside
+     the aria-hidden separator, so it survives into the accessibility tree as
+     well as into the text layer.
+
      The separator flags are computed in frontmatter-filter.lua because each
      asks whether *any* of several keys precedes it, which a pandoc template
      cannot do. #}
 $if(author)$
-  <p class="deck-authors">$for(author)$<span class="deck-author">$author$</span>$sep$ <span class="deck-author-sep" aria-hidden="true">&middot;</span> $endfor$</p>
+  <p class="deck-authors">$for(author)$<span class="deck-author">$author$&#160;</span>$sep$<span class="deck-author-sep" aria-hidden="true">&middot;&#160;</span><wbr>$endfor$</p>
 $endif$
 $if(has-facts)$
   <p class="deck-meta">$if(date-label)$Issued <time datetime="$date-iso$">$date-label$</time>$endif$$if(due-label)$$if(sep-before-due)$ &middot; $endif$Due <time datetime="$due-iso$">$due-label$</time>$endif$$if(points-label)$$if(sep-before-points)$ &middot; $endif$Points $points-label$$endif$</p>
