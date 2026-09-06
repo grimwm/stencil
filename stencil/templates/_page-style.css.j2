@@ -104,6 +104,37 @@
       line-height: 1.7;
     }
 
+    /* Bold, stated rather than inherited.
+
+       Bootstrap's reboot says `b, strong { font-weight: bolder }`, which is
+       RELATIVE: it resolves against whatever the parent carries. That is fine
+       in prose at 400 and wrong everywhere else -- inside .doc-label at 600 it
+       asks for 700, and inside a heading at 700 it asks for 900, a weight no
+       family here ships. Naming 700 makes every <strong> the same weight
+       wherever it sits.
+
+       This is only half the reason bold looked weak. The other half was that
+       Crimson Pro was vendored at 400 and 600 ONLY, so a request for 700 found
+       no face at or above it and the browser fell back to 600 -- SemiBold
+       beside Regular, in a serif, at body size.
+
+       800, and measured rather than picked. Advance width of "the quick brown
+       fox" at 18px: 400 -> 142.6, 600 -> 149.1, 700 -> 152.8, 800 -> 156.8.
+       Bold used to render as that 600, so 700 would have added 2.5% to a step
+       already too small to read as emphasis. 900 measures identical to 800,
+       so this is the end of the family's ladder rather than a value to keep
+       pushing.
+
+       Changing this number alone does nothing. Only the weights listed in
+       scripts/vendor_page_assets.py exist as files, and a request for a weight
+       nobody ships fails silently -- the browser picks the nearest face and
+       the page looks almost right, which is exactly how this shipped in the
+       first place. tests/test_fonts.py fails if the two ever disagree. */
+    strong,
+    b {
+      font-weight: 800;
+    }
+
     .container {
       max-width: 60rem;
       padding-top: 2rem;

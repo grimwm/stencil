@@ -9,6 +9,50 @@ and the closed epics in `.beads/issues.jsonl` are the readable index.
 How the version gets bumped is written down in
 [AGENTS.md](AGENTS.md#cutting-a-release), not here.
 
+## 0.17.0
+
+- **Bold is bold now.** `**like this**` in a handout rendered SemiBold rather
+  than Bold, and in a serif at body size that is a difference you have to look
+  for rather than one you see.
+
+  The cause was not a CSS value, it was a missing file. Crimson Pro -- the body
+  face -- was vendored at 400 and 600 only. Bootstrap's reboot says
+  `b, strong { font-weight: bolder }`, which resolved to 700, no face at or
+  above 700 existed, and the browser fell back to the nearest one it had: 600.
+  A CSS rule naming a weight nobody ships does not fail. It renders as
+  something close and looks almost right.
+
+  Bold italic was worse. With no italic above 400, `***like this***` rendered
+  as plain italic at regular weight -- no emphasis at all beyond the slant.
+
+  The new weight is 800, and it was measured rather than picked. Advance width
+  of "the quick brown fox" at 18px:
+
+  | weight | width |                                                  |
+  | ------ | ----- | ------------------------------------------------ |
+  | 400    | 142.6 | regular                                          |
+  | 600    | 149.1 | **what bold used to render as**                  |
+  | 700    | 152.8 |                                                  |
+  | 800    | 156.8 | what bold renders as now                         |
+  | 900    | 156.8 | identical to 800; the family has nothing heavier |
+
+  600 is the number to compare against, not 400, and against 600 a move to 700
+  would have added 2.5% to a step that was already too small to read as
+  emphasis. 800 roughly doubles it. 900 buys nothing at all.
+
+  `strong, b` now names 800 explicitly rather than inheriting Bootstrap's
+  relative `bolder`, which resolves against whatever the parent carries: inside
+  `.doc-label` at 600 it asked for 700, and inside a heading at 700 it asked for
+  900\. Emphasis should be one weight wherever it appears.
+
+  Inter is untouched. It always shipped 700, which is why headings and the
+  byline looked properly bold while the prose did not.
+
+  `tests/test_fonts.py` now fails if the stylesheet and the vendor script ever
+  disagree about which weights exist, in either direction. That is the check
+  that was missing: nothing in the build, the suite, or a five-way CI matrix
+  had anything to say about a rule asking for a face that was never fetched.
+
 ## 0.16.0
 
 - **A figure can have a dark variant, and the PDF still prints the light one.**
