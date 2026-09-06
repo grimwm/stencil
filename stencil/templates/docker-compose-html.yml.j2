@@ -73,6 +73,36 @@
       - html-to-pdf.js
     restart: "no"
 
+  # PDF/UA-1 (ISO 14289-1) conformance, which is a DIFFERENT STANDARD from the
+  # WCAG 2.1 AA that check-access measures. pa11y reads the HTML; this reads
+  # the PDF. A page can pass the first and produce a file that fails the
+  # second -- <figure> wrappers are exactly that case, because HTML has no alt
+  # on <figure> and WCAG has no rule asking for one.
+  #
+  # The image tag and the script both come from stencil/pipeline.py, so a test
+  # runs the same text this file ships rather than an approximation of it. The
+  # zero-file guard inside it is the reason it is a script: veraPDF exits 0
+  # when it is given no files, so a check that ran too early would pass having
+  # opened nothing. That rationale is written down at VERAPDF_SCRIPT.
+  #
+  # Every $ is doubled on the way in. Compose substitutes $VAR in a service
+  # definition before the shell ever sees it, so an unescaped $found reaches
+  # the script as the empty string and the guard silently stops guarding --
+  # `[ "" -eq 0 ]` is not a comparison that fails safely. The escaping happens
+  # here rather than in the constant so that pipeline.verapdf() can run the
+  # same text directly through sh, where a doubled $ would be wrong.
+  check-pdf:
+    image: {{ verapdf_image }}
+    volumes:
+      - .:/workspace:z
+    working_dir: /workspace
+    entrypoint:
+      - sh
+      - -c
+      - |
+{{ verapdf_script | replace('$', '$$') | indent(8, first=True) }}
+    restart: "no"
+
   # Shares the pdf service's image: both drive Chromium from Node, and building
   # one image for the pair keeps either from installing a browser at run time.
   check-access:

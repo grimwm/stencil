@@ -55,4 +55,11 @@ check-access: ## Check HTML accessibility (WCAG 2.1 AA)
 	$(DC) build check-access
 	$(DC) run --rm check-access
 
+# Depends on pdf for the same reason check-access does not need to depend on
+# doc: there is a file it is meaningless without. veraPDF exits 0 on an empty
+# file list, so a check-pdf that ran before pdf would pass having checked
+# nothing; the service refuses to, and this edge means it never has to.
+check-pdf: pdf ## Check PDF/UA-1 conformance of the generated PDFs
+	$(DC) run --rm check-pdf
+
 {% endif %}

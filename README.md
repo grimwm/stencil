@@ -111,11 +111,11 @@ Each key under `packages` is a package ID passed to the CLI.
 
 ### Package types
 
-| Type   | Description                                                                            |
-| ------ | -------------------------------------------------------------------------------------- |
-| `zip`  | Generates `pkg` target to create submission archive. Requires `package_name`.          |
-| `doc`  | Documentation only. Generates `doc`, `slide` and `pdf` targets for HTML from markdown. |
-| `none` | Infrastructure only. No `pkg` target, no `package_name` required.                      |
+| Type   | Description                                                                                  |
+| ------ | -------------------------------------------------------------------------------------------- |
+| `zip`  | Generates `pkg` target to create submission archive. Requires `package_name`.                |
+| `doc`  | Documentation only. Generates `doc`, `slide`, `pdf`, `check-access` and `check-pdf` targets. |
+| `none` | Infrastructure only. No `pkg` target, no `package_name` required.                            |
 
 ### Context variables
 
@@ -154,7 +154,7 @@ Stencil includes a minimal set of templates for document generation:
 | `Makefile-doc.j2`              | HTML generation via Pandoc, plus the `pdf` target  |
 | `Makefile-pkg.j2`              | Submission packaging (zip)                         |
 | `docker-compose.yml.j2`        | HTML generation service (Pandoc)                   |
-| `docker-compose-html.yml.j2`   | Service definitions for HTML, PDF and a11y checks  |
+| `docker-compose-html.yml.j2`   | Services for HTML, PDF, WCAG and PDF/UA checks     |
 | `Dockerfile.browser.j2`        | Shared Chromium image for `pdf` and `check-access` |
 | `html-template.html.j2`        | Pandoc HTML template for flowing documents         |
 | `slide-template.html.j2`       | Pandoc HTML template for slide decks               |

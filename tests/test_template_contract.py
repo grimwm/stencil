@@ -55,12 +55,19 @@ CONTRACT = {
         "pandoc_image",
         "slides",
     },
+    # verapdf_image and verapdf_script arrived with check-pdf in 0.22.0, and
+    # they are a real addition to the interface: a consumer whose own
+    # docker-compose.yml.j2 includes this partial gets the new service for
+    # free, but a consumer that copied the partial instead of including it
+    # will not, and StrictUndefined is what tells them so.
     "docker-compose-html.yml.j2": {
         "has_slides",
         "package_id",
         "pandoc_argv_doc",
         "pandoc_argv_slide",
         "pandoc_image",
+        "verapdf_image",
+        "verapdf_script",
     },
     "_doc-body.html.j2": set(),
     "_page-head.html.j2": {"assets"},

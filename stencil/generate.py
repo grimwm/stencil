@@ -252,6 +252,11 @@ def get_template_context(package_id: str, config: dict) -> dict:
         "pandoc_image": pipeline.PANDOC_IMAGE,
         "pandoc_argv_doc": pipeline.annotated_argv("doc"),
         "pandoc_argv_slide": pipeline.annotated_argv("slide"),
+        # Same rule as the pandoc argv above: the check-pdf service's image
+        # and script live in pipeline.py so a test can assert on the text
+        # this file renders rather than on a copy of it.
+        "verapdf_image": pipeline.VERAPDF_IMAGE,
+        "verapdf_script": pipeline.VERAPDF_SCRIPT,
         # CSS, JS and webfonts inlined into the pandoc templates. Loaded here
         # rather than fetched at page load, so a handout is self-contained and
         # make pdf does not depend on the network.
