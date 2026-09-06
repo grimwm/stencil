@@ -23,7 +23,23 @@ end
 function CodeBlock(block)
   if block.classes:includes('mermaid') then
     has_mermaid = true
-    local caption_text = block.attr.attributes['caption'] or 'Diagram'
+    -- The default is written BACK onto the block, not just used below,
+    -- because two consumers read this caption and they were reading different
+    -- things. The <figcaption> here took the default; data-caption -- which
+    -- the page script uses to name the drawn diagram -- existed only if the
+    -- author had written a caption, so a captionless block produced a named
+    -- <figure> around an unnamed diagram.
+    --
+    -- The nil check is not enough on its own either. In Lua the empty string
+    -- is truthy, so `'' or 'Diagram'` is '', and caption="" reached the page
+    -- as an empty <figcaption> on a <figure> with no accessible name at all --
+    -- the exact PDF/UA failure this release exists to fix, still reachable
+    -- through the one input that looks like it asks for no caption.
+    local caption_text = block.attr.attributes['caption']
+    if caption_text == nil or caption_text:match('^%s*$') then
+      caption_text = 'Diagram'
+    end
+    block.attr.attributes['caption'] = caption_text
     -- pandoc.Caption takes BLOCKS first. Passing the inlines straight in made
     -- pandoc coerce the list, turning every Str and Space into a block of its
     -- own: "Diagram: the review loop" reached the page as five paragraphs

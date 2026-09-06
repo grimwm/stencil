@@ -58,6 +58,19 @@ How the version gets bumped is written down in
   `<figcaption>` holding four of them. Found while wiring the fix above, which
   reads the caption's structure.
 
+- **A mermaid block with no caption, or an empty one, is now named too.** The
+  default caption ("Diagram") was used but never written back to the block, so
+  `data-caption` -- which the page script reads to name the drawn diagram --
+  existed only when the author had written a caption. A captionless block got a
+  named `<figure>` around an anonymous diagram.
+
+  `caption=""` was worse: in Lua the empty string is truthy, so the existing
+  `or 'Diagram'` default never fired for it, and the figure reached the page
+  with an empty `<figcaption>` and no accessible name at all -- the exact
+  PDF/UA failure this release removes, still reachable through the most natural
+  way to ask for no caption. Both were found by review after the fix above was
+  written, and both are now normalized in one place that every consumer reads.
+
 - **No change for table headers, deliberately.** The ticket recorded all 20
   `/TH` on a real deck reaching the PDF with `/Scope: None`, and a Lua filter
   was planned to add `scope="col"`. Measured on that same PDF, every one of

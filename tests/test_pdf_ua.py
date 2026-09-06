@@ -34,6 +34,20 @@ flowchart LR
   B --> A
 ```
 
+A block with no caption at all, and one whose caption is explicitly empty.
+Both take the default name, and both are here so the check over *every*
+/Figure below covers them rather than covering only the happy path.
+
+```{.mermaid}
+flowchart LR
+  C --> D
+```
+
+```{.mermaid caption=""}
+flowchart LR
+  E --> F
+```
+
 ## A table
 
 | Stage  | Owner | Days |
@@ -229,3 +243,51 @@ def test_a_mermaid_caption_is_one_paragraph_not_one_per_word(render_soup):
         f"split it into one block per word: {caption!r}"
     )
     assert " ".join(children[0].get_text().split()) == "Diagram: the review loop"
+
+
+def test_a_mermaid_block_without_a_caption_still_names_its_diagram(render_soup):
+    """The default name has to reach BOTH consumers, not just the figcaption.
+
+    mermaid-figure-filter defaults a missing caption to "Diagram" and always
+    did -- but it used the default without writing it back to the block, so
+    data-caption, which is what the page script reads to name the drawn
+    diagram, existed only when the author had written a caption. The result
+    was a named <figure> wrapped around an anonymous diagram, which is half of
+    the defect this release fixes and the half nothing would have reported.
+    """
+    soup = render_soup(
+        "doc",
+        "nocap.md",
+        text='---\ntitle: "T"\n---\n\n## B\n\n```{.mermaid}\nflowchart LR\n  A --> B\n```\n',
+    )
+    pre = soup.select_one("pre.mermaid")
+    assert pre is not None, "the mermaid block did not survive to the page"
+    assert pre.get("data-caption") == "Diagram", (
+        "the page script has no caption to name the diagram with: "
+        f"{pre.attrs!r}"
+    )
+
+
+def test_an_empty_caption_is_treated_as_no_caption(render_soup):
+    """caption="" is the one input that looks like it asks for no caption.
+
+    In Lua the empty string is truthy, so the existing `or 'Diagram'` default
+    did not fire for it: the figure reached the page with an empty
+    <figcaption> and no accessible name -- precisely the PDF/UA failure this
+    release exists to remove, reachable through the most natural way to ask
+    for silence.
+    """
+    soup = render_soup(
+        "doc",
+        "emptycap.md",
+        text=(
+            '---\ntitle: "T"\n---\n\n## B\n\n'
+            '```{.mermaid caption=""}\nflowchart LR\n  A --> B\n```\n'
+        ),
+    )
+    figure = soup.select_one("figure")
+    assert figure is not None
+    assert figure.get("aria-labelledby"), (
+        f"the figure has no accessible name: {figure.attrs!r}"
+    )
+    assert soup.select_one("figcaption").get_text(strip=True) == "Diagram"
