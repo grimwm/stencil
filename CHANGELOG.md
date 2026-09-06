@@ -9,6 +9,43 @@ and the closed epics in `.beads/issues.jsonl` are the readable index.
 How the version gets bumped is written down in
 [AGENTS.md](AGENTS.md#cutting-a-release), not here.
 
+## 0.20.0
+
+- **A columns block is as wide as its contents.** `.columns` was
+  `grid-template-columns: 1fr 1fr` — two columns whatever you put in it. Three
+  children left an **empty cell**; four stacked 2×2. Both shipped in a deck in
+  use, and both read as mistakes rather than choices.
+
+  `grid-auto-flow: column` takes the count from the content instead. Two stay
+  two, three sit in a row of three, four in a row of four. `wide-left` and
+  `wide-right` are unchanged — they name two explicit tracks, which is exactly
+  what a biased two-column split is.
+
+  Measured in a browser, not read off the stylesheet: a grid's *used* track
+  count is not in the CSS, so the tests count distinct top offsets of the
+  rendered boxes.
+
+- **Columns can be cards.** `::: {.columns .cards}` gives each one a surface, a
+  border, a radius and padding, built from the tokens `.takeaway` already uses
+  so a card matches the boxed conclusion below it rather than introducing a
+  second surface.
+
+  **Opt-in, not default.** A card costs vertical space on a medium that has
+  none spare, and every existing deck writes bare `::: columns`. Contrast was
+  measured on the rendered card rather than assumed — body text is 13.76:1 in
+  light and 11.6:1 in dark, the lead run 8.79:1 and 6.17:1.
+
+- **A card can carry its own accent.** `--card-accent` defaults to the deck
+  accent, and `::: {.column .accent-2}` overrides it for one card. The accent
+  reaches both a left border — the same device `.lead-in` has always used — and
+  the card's lead run, so `**S -- Situation**` is coloured the way the rest of
+  the card is. `.lead-letter` on the block sets the first character larger,
+  which is what a STAR-style slide wants.
+
+  Page fit was checked rather than argued: a four-card slide and the same slide
+  with plain columns both come out at the same page count, so the treatment
+  adds no overflow of its own.
+
 ## 0.19.0
 
 - **The document title is an `<h1>`.** It was bare text in a `<div>`, so a
