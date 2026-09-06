@@ -32,13 +32,24 @@ How the version gets bumped is written down in
   that should be 1.6 MB is three times harder to send.
 
   `mermaid-figure-filter.lua` now sets a `has-mermaid` metadata flag and the
-  template gates the bundle on it. The flag covers all three routes to a
-  `.mermaid` element, not just the fenced code block the filter already
-  rewrote: a fenced div (`::: {.mermaid}`) and raw HTML both reach the page
-  script without passing through `CodeBlock`. The raw-HTML test is a plain
-  substring search and deliberately over-matches -- a false positive inlines a
-  bundle the page does not need, which is what every page did before this
-  release, while a false negative would render a diagram blank.
+  template gates the bundle on it. The flag covers every route to a `.mermaid`
+  element, not just the fenced code block the filter already rewrote -- the
+  page script matches the class on any element, and four other things produce
+  one. `<div class="mermaid">` and a fenced `::: {.mermaid}` both arrive as a
+  `Div`; `<span class="mermaid">` arrives as a `Span`, because pandoc's
+  `native_spans` and `native_divs` extensions parse those into the AST rather
+  than leaving them raw. Only the tags pandoc has no native element for --
+  `<pre class="mermaid">`, a custom element -- stay raw, as a `RawBlock` or a
+  `RawInline`. Those two are matched by a plain substring search that
+  deliberately over-matches: a false positive inlines a bundle the page does
+  not need, which is what every page did before this release, while a false
+  negative renders a diagram blank.
+
+  The `Span` case is worth calling out because the markdown and the rendered
+  HTML both say `<span`, so it reads like raw HTML from either end of the
+  pipeline; only the AST in between disagrees. It was found by a review comment
+  pointing at the right gap with the wrong mechanism, and settled by
+  instrumenting the filter rather than by reasoning about it.
 
   The driver script is **not** gated, only the bundle. It no-ops on a page with
   no `.mermaid` element, and it is what sets `window.__mermaidReady` -- which

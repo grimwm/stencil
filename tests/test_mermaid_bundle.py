@@ -87,6 +87,39 @@ def test_raw_html_counts_as_a_diagram(render):
     )
 
 
+def test_a_span_in_a_paragraph_counts_as_a_diagram(render):
+    """`<span class="mermaid">` is a Span in the AST, not raw HTML.
+
+    This is the case the obvious reading of the markdown gets wrong. The source
+    says `<span`, the rendered page says `<span`, and it is tempting to
+    conclude the filter sees raw HTML -- but pandoc's native_spans extension
+    parses it into a Span element on the way through, exactly as native_divs
+    does for a fenced div, so neither RawInline nor RawBlock is ever called for
+    it. Instrumenting the filter is what settled it; reading either end of the
+    pipeline would not have.
+    """
+    assert BUNDLE in html_of(
+        render,
+        'A diagram <span class="mermaid">flowchart LR; A --> B</span> inline.',
+    )
+
+
+def test_an_unknown_inline_tag_counts_as_a_diagram(render):
+    """The case that is genuinely RawInline, and the reason that handler stays.
+
+    pandoc has a native AST element for `<span>` and for `<div>`, so those are
+    caught by Span and Div above. A tag it has no element for stays raw, and
+    the browser still applies the class -- `.mermaid` matches any element. This
+    test was added after the Span fix because removing the RawInline handler
+    broke nothing: a guard no test can breach is a guess, whether or not it is
+    a correct one.
+    """
+    assert BUNDLE in html_of(
+        render,
+        'A <mermaid-chart class="mermaid">flowchart LR; A to B</mermaid-chart> here.',
+    )
+
+
 def test_a_deck_is_gated_the_same_way(render):
     """slide-template.html.j2 includes the same partial, and the filter runs on
     both kinds, but the deck build adds slide-sections.lua after it -- so the

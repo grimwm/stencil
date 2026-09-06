@@ -45,8 +45,29 @@ function Div(div)
   end
 end
 
+-- Span, not RawInline, is what `<span class="mermaid">` becomes: pandoc's
+-- native_spans extension parses it into the AST rather than leaving it raw,
+-- exactly as native_divs does for the Div above. Reading the rendered page is
+-- the only way to see this -- the markdown says `<span`, the HTML says
+-- `<span`, and the AST in between is where the two stop matching.
+function Span(span)
+  if span.classes:includes('mermaid') then
+    has_mermaid = true
+  end
+end
+
 function RawBlock(block)
   if block.format:match('^html') and block.text:find('mermaid', 1, true) then
+    has_mermaid = true
+  end
+end
+
+-- Raw HTML inside a paragraph is a RawInline, never a RawBlock, so the handler
+-- above does not see it. This catches the inline tags pandoc has no native
+-- element for; `<span>` is not one of them and is handled above. The page
+-- script's `.mermaid` selector does not care which the AST called it.
+function RawInline(inline)
+  if inline.format:match('^html') and inline.text:find('mermaid', 1, true) then
     has_mermaid = true
   end
 end
