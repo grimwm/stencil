@@ -65,9 +65,26 @@ FILES = {
     ),
 }
 
+# Crimson Pro carries 800 and 800 italic because it is the BODY face and
+# <strong> lands on it. This asked for 400/600 only, so a browser resolving
+# `bolder` to 700 found no face at or above it and fell back to 600 -- every
+# **bold** word in a handout rendered SemiBold beside Regular, which in a serif
+# at body size is a difference you have to look for rather than see. Bold
+# italic was worse: with no italic above 400, `***x***` rendered as plain
+# italic at regular weight.
+#
+# 800 rather than 700, measured rather than picked. Advance width of "the quick
+# brown fox" at 18px: 400 -> 142.6, 600 -> 149.1, 700 -> 152.8, 800 -> 156.8.
+# 600 is what bold used to render as, so 700 would have added 2.5% to a step
+# that was already too small to read as emphasis. 900 measures identical to 800
+# -- the family has nothing heavier -- so 800 is the end of the ladder, not a
+# midpoint someone should try to push further.
+#
+# Inter is untouched: it always shipped 700, which is why headings and the
+# byline looked properly bold while the prose did not.
 FONT_CSS = (
     "https://fonts.googleapis.com/css2"
-    "?family=Crimson+Pro:ital,wght@0,400;0,600;1,400"
+    "?family=Crimson+Pro:ital,wght@0,400;0,600;0,800;1,400;1,800"
     "&family=Inter:wght@400;500;600;700"
     "&family=JetBrains+Mono:wght@400;500&display=swap"
 )
