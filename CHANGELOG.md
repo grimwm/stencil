@@ -9,6 +9,50 @@ and the closed epics in `.beads/issues.jsonl` are the readable index.
 How the version gets bumped is written down in
 [AGENTS.md](AGENTS.md#cutting-a-release), not here.
 
+## 0.19.0
+
+- **The document title is an `<h1>`.** It was bare text in a `<div>`, so a
+  stencil document had **no h1 at all** and opened on whatever the author wrote
+  first, normally an H2. That is wrong on its own terms — the title *is* the
+  document's top heading, and the deck has always spelled it
+  `<h1 class="deck-title">` — and PDF/UA rejects the skipped level. Styling is
+  unchanged: `.doc-title` still sets the type and `.doc-name` only cancels the
+  user-agent h1, so nothing moved.
+
+- **Three things PDF/UA-1 needs that Chromium does not write** are now added to
+  the finished PDF, after printing. None of them can be fixed from the HTML,
+  because they are properties of the PDF rather than of the page.
+
+  | added        | why                                                                                                                                                                                                   |
+  | ------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+  | `/RoleMap`   | Chromium tags `<strong>`/`<em>` as `/Strong`/`/Em`, which are not standard ISO 32000-1 structure types, and writes no map saying what they stand for. `<b>` tags identically, so no markup avoids it. |
+  | XMP metadata | The catalog had no `/Metadata` stream at all. Now carries `pdfuaid:part=1` and the title.                                                                                                             |
+  | `/LBody`     | Chromium tags a list item's content straight onto the `/LI`.                                                                                                                                          |
+
+  The role map is **built from the document**, not hardcoded to Strong and Em.
+  Chromium's tag vocabulary is not a published contract and the browser is
+  unpinned, so a version that starts emitting one more non-standard type would
+  otherwise reintroduce the same failure with nothing to catch it.
+
+  The `/LBody` fix is the one worth recording, because the obvious explanation
+  is wrong. It is **not** about tight versus loose markdown lists — measured,
+  `<li>text</li>` and `<li><p>text</p></li>` both fail. A pandoc-side filter
+  forcing loose lists was the first instinct and would have been wasted work.
+
+- **Measured against veraPDF 1.30.2 `--flavour ua1`**, on a real handout:
+
+  ```
+  before   5 rules failed, 47 checks
+  after    1 rule  failed,  3 checks
+  ```
+
+  What remains is `7.1 t3`, content Chromium paints without marking it an
+  artifact: one per page plus roughly two per table. Bisected — dropping our
+  own page background in print removes one of them, and the rest survive with
+  every table background and border set to `transparent`, so they are the
+  browser's own painting rather than anything this project declares. Reaching
+  them means rewriting the page content stream, which is not in this release.
+
 ## 0.18.0
 
 - **Changing slides no longer changes the theme.** Pick a theme while

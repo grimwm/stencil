@@ -127,3 +127,4 @@
 {"id":"int-8802f64eb58ed6715a741944877b4b89","kind":"field_change","created_at":"2026-09-06T05:07:35.887854Z","actor":"William Grim","issue_id":"stn-q26","extra":{"field":"status","new_value":"closed","old_value":"open","reason":"Closed"}}
 {"id":"int-915c6947dbf2eb180dfd0253a35c5062","kind":"field_change","created_at":"2026-09-06T05:07:42.027542Z","actor":"William Grim","issue_id":"stn-qks","extra":{"field":"status","new_value":"in_progress","old_value":"open"}}
 {"id":"int-2b9667280195be0fd27c82971372073f","kind":"field_change","created_at":"2026-09-06T05:39:42.762699Z","actor":"William Grim","issue_id":"stn-qks","extra":{"field":"status","new_value":"closed","old_value":"in_progress","reason":"Closed"}}
+{"id":"int-d70bda191b28f1c0f74abbd78110bd75","kind":"field_change","created_at":"2026-09-06T07:44:05.970914Z","actor":"William Grim","issue_id":"stn-ips","extra":{"field":"status","new_value":"in_progress","old_value":"open"}}

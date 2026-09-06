@@ -21,7 +21,9 @@ ENV PATH=/opt/tools/bin:$PATH
 # and every page break moves.
 RUN apk add --no-cache chromium font-noto ttf-dejavu
 
-RUN npm install --global --prefix /opt/tools puppeteer pa11y
+# pdf-lib is used after printing, to add the role map and XMP metadata that
+# PDF/UA-1 requires and Chromium does not write. See html-to-pdf.js.
+RUN npm install --global --prefix /opt/tools puppeteer pa11y pdf-lib
 
 # One pa11y config per theme, each driving the control before measuring.
 # chromeLaunchConfig is in both: Chromium cannot use its own sandbox inside

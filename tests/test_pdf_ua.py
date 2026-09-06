@@ -19,6 +19,19 @@ from pypdf.generic import IndirectObject
 
 pytestmark = pytest.mark.integration
 
+UA_DOC = """---
+title: "Structure"
+lang: en
+---
+
+## Heading
+
+Prose with **bold** and *italic*.
+
+- an item with **bold**
+- an item with `code`
+"""
+
 FIGURE_DOC = """---
 title: "Figures"
 lang: en
@@ -291,3 +304,129 @@ def test_an_empty_caption_is_treated_as_no_caption(render_soup):
         f"the figure has no accessible name: {figure.attrs!r}"
     )
     assert soup.select_one("figcaption").get_text(strip=True) == "Diagram"
+
+
+# --- What Chromium does not write, and html-to-pdf.js adds afterwards -------
+#
+# All three are PDF/UA-1 requirements that no amount of correct HTML can
+# satisfy, because they are properties of the PDF rather than of the page.
+# Measured with veraPDF 1.30.2 --flavour ua1: they were 17 of the 47 failed
+# checks on a real handout.
+
+
+def _deref_all(obj):
+    return _deref(obj)
+
+
+@pytest.fixture(scope="module")
+def ua_pdf(to_pdf):
+    result, path = to_pdf("doc", "uastruct.md", text=UA_DOC, stem="uastruct")
+    assert result.returncode == 0, result.stderr[-3000:]
+    return path
+
+
+def struct_tree_root(path):
+    root = PdfReader(path).trailer["/Root"]
+    tree = _deref(root.get("/StructTreeRoot"))
+    assert tree is not None, "the PDF is untagged"
+    return root, tree
+
+
+def test_non_standard_structure_types_are_mapped(ua_pdf):
+    """Chromium tags <strong> and <em> as /Strong and /Em, which are not
+    standard ISO 32000-1 structure types, and writes no role map to say what
+    they stand for. No HTML spelling avoids it -- <b> tags identically."""
+    _, tree = struct_tree_root(ua_pdf)
+    role_map = _deref(tree.get("/RoleMap"))
+    assert role_map, "no /RoleMap; every /Strong is an unmapped custom type"
+
+    nodes = struct_nodes(ua_pdf)
+    kinds = {n["type"].lstrip("/") for n in nodes}
+    standard = {
+        "Document", "Part", "Art", "Sect", "Div", "BlockQuote", "Caption",
+        "TOC", "TOCI", "Index", "NonStruct", "Private", "P", "H", "H1", "H2",
+        "H3", "H4", "H5", "H6", "L", "LI", "Lbl", "LBody", "Table", "TR",
+        "TH", "TD", "THead", "TBody", "TFoot", "Span", "Quote", "Note",
+        "Reference", "BibEntry", "Code", "Link", "Annot", "Ruby", "RB", "RT",
+        "RP", "Warichu", "WT", "WP", "Figure", "Formula", "Form",
+    }
+    mapped = {str(k).lstrip("/") for k in role_map.keys()}
+    unmapped = {k for k in kinds if k not in standard} - mapped
+    assert not unmapped, (
+        f"structure types present in the document with no role map entry: "
+        f"{sorted(unmapped)}. The map is built from the document precisely so "
+        "a browser that starts emitting a new one does not go unnoticed."
+    )
+
+
+def test_the_pdf_carries_xmp_metadata(ua_pdf):
+    """PDF/UA-1 7.1: the catalog needs a /Metadata stream. Chromium writes
+    none at all, so this is added after printing."""
+    root, _ = struct_tree_root(ua_pdf)
+    metadata = _deref(root.get("/Metadata"))
+    assert metadata is not None, "the catalog has no /Metadata stream"
+    assert str(metadata.get("/Subtype")) == "/XML"
+    xmp = metadata.get_data().decode("utf-8", "replace")
+    assert "pdfuaid" in xmp, "the metadata does not identify the file as PDF/UA"
+    assert "<pdfuaid:part>1</pdfuaid:part>" in xmp
+
+
+def li_children(path):
+    """Every /LI's immediate child structure types."""
+    _, tree = struct_tree_root(path)
+    out = []
+
+    def walk(node):
+        node = _deref(node)
+        if isinstance(node, list):
+            for child in node:
+                walk(child)
+            return
+        if not isinstance(node, dict):
+            return
+        if str(node.get("/S")) == "/LI":
+            kids = _deref(node.get("/K"))
+            kids = kids if isinstance(kids, list) else [kids]
+            out.append(
+                [
+                    str(_deref(k).get("/S"))
+                    for k in kids
+                    if isinstance(_deref(k), dict) and _deref(k).get("/S")
+                ]
+            )
+        if "/K" in node:
+            walk(node["/K"])
+
+    walk(tree.get("/K"))
+    return out
+
+
+def test_list_items_contain_only_labels_and_bodies(ua_pdf):
+    """PDF/UA-1 7.2: "LI element may contain only Lbl and LBody elements".
+
+    Chromium tags a list item's content straight onto the /LI. Measured, this
+    is NOT about tight versus loose markdown -- <li>text</li> and
+    <li><p>text</p></li> both fail, so the pandoc-side fix that suggests itself
+    does not work and was tried before this one. The wrapper is inserted into
+    the structure tree instead.
+    """
+    items = li_children(ua_pdf)
+    assert items, "no /LI in the PDF; the document has two list items"
+    stray = [kids for kids in items if any(k not in ("/Lbl", "/LBody") for k in kids)]
+    assert not stray, (
+        f"{len(stray)} of {len(items)} list items carry content outside an "
+        f"/LBody: {stray}"
+    )
+
+
+def test_the_document_title_is_an_h1(ua_pdf):
+    """A document had no h1 at ALL -- the title was bare text in a div, so the
+    first heading was whatever the author wrote, normally an H2. PDF/UA 7.4.2
+    rejects a skipped level, and it is wrong on its own terms: the title IS the
+    document's top heading. The deck has always spelled it <h1>."""
+    kinds = [n["type"] for n in struct_nodes(ua_pdf)]
+    assert "/H1" in kinds, "the PDF has no H1; the title is not a heading"
+    headings = [k for k in kinds if k.startswith("/H") and k != "/H"]
+    assert headings[0] == "/H1", (
+        f"the first heading in reading order is {headings[0]}, not /H1: {headings[:5]}"
+    )

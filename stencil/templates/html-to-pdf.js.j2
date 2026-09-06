@@ -9,6 +9,14 @@
 // captures whatever is on screen at an arbitrary moment and exits 0 either
 // way. Puppeteer can wait for the first and detect the second.
 const puppeteer = require("puppeteer");
+const fs = require("fs");
+const {
+  PDFDocument,
+  PDFName,
+  PDFDict,
+  PDFArray,
+  PDFRawStream,
+} = require("pdf-lib");
 
 const [input, output] = process.argv.slice(2);
 
@@ -34,6 +42,201 @@ function assertNoFailures() {
   if (failures.length > 0) {
     throw new Error("assets failed to load");
   }
+}
+
+// PDF/UA-1 needs two things from the file that Chromium does not write, and
+// neither can be produced from the HTML side no matter how the page is marked
+// up. Measured with veraPDF 1.30.2 --flavour ua1 on a real handout: 101 rules
+// passed, 5 failed, and two of the five are these.
+//
+//   7.1 t5   "Non-standard structure type Strong is not mapped to a standard
+//            type". Chromium tags <strong> as /Strong, which is not one of the
+//            standard structure types in ISO 32000-1 14.8.4, and writes no
+//            /RoleMap to say what it means. <b> tags identically, so there is
+//            no HTML spelling that avoids it.
+//
+//   7.1 t8   The catalog has no /Metadata stream at all.
+//
+// The role map is BUILT FROM THE DOCUMENT rather than hardcoded to Strong and
+// Em. Chromium's tag vocabulary is not a published contract and this image
+// does not pin it, so a browser bump that starts emitting one more
+// non-standard type would otherwise reintroduce exactly this failure with
+// nothing to catch it until the next PDF/UA run.
+
+// ISO 32000-1 14.8.4. Anything outside this set needs a role map entry.
+const STANDARD_STRUCTURE_TYPES = new Set([
+  "Document", "Part", "Art", "Sect", "Div", "BlockQuote", "Caption", "TOC",
+  "TOCI", "Index", "NonStruct", "Private", "P", "H", "H1", "H2", "H3", "H4",
+  "H5", "H6", "L", "LI", "Lbl", "LBody", "Table", "TR", "TH", "TD", "THead",
+  "TBody", "TFoot", "Span", "Quote", "Note", "Reference", "BibEntry", "Code",
+  "Link", "Annot", "Ruby", "RB", "RT", "RP", "Warichu", "WT", "WP", "Figure",
+  "Formula", "Form",
+]);
+
+function collectStructureTypes(node, context, found, seen) {
+  if (!node) return;
+  const resolved = node instanceof PDFDict ? node : context.lookup(node);
+  if (!resolved) return;
+
+  if (resolved instanceof PDFArray) {
+    for (let i = 0; i < resolved.size(); i += 1) {
+      collectStructureTypes(resolved.get(i), context, found, seen);
+    }
+    return;
+  }
+  if (!(resolved instanceof PDFDict)) return;
+
+  // The tree is a DAG in practice -- /K entries are shared -- so an unguarded
+  // walk revisits nodes and, on a large deck, does not finish.
+  const ref = resolved.dict ? null : resolved;
+  if (ref && seen.has(ref)) return;
+  if (ref) seen.add(ref);
+
+  const type = resolved.get(PDFName.of("S"));
+  if (type instanceof PDFName) {
+    const name = type.asString().replace(/^\//, "");
+    if (!STANDARD_STRUCTURE_TYPES.has(name)) found.add(name);
+  }
+  collectStructureTypes(resolved.get(PDFName.of("K")), context, found, seen);
+}
+
+// PDF/UA 7.2 t20: "LI element may contain only Lbl and LBody elements".
+// Chromium tags a list item's content straight onto the /LI with no /LBody
+// around it. Measured, this is not about tight versus loose markdown lists --
+// <li>text</li> and <li><p>text</p></li> both fail, so there is no authoring
+// spelling that avoids it.
+//
+// The repair is structural and says nothing new about the document: everything
+// in a list item that is not its label IS the item's body, which is what
+// /LBody means. So the children are moved into one, and the /P parent links
+// are repointed at it so the tree stays walkable in both directions.
+function wrapListBodies(structTreeRoot, context) {
+  let wrapped = 0;
+  const seen = new Set();
+
+  const visit = (ref) => {
+    const node = context.lookup(ref);
+    if (!node) return;
+
+    if (node instanceof PDFArray) {
+      for (let i = 0; i < node.size(); i += 1) visit(node.get(i));
+      return;
+    }
+    if (!(node instanceof PDFDict)) return;
+    if (seen.has(node)) return;
+    seen.add(node);
+
+    const kids = node.get(PDFName.of("K"));
+    const type = node.get(PDFName.of("S"));
+
+    if (type instanceof PDFName && type.asString() === "/LI") {
+      const children = [];
+      const resolvedKids = context.lookup(kids);
+      if (resolvedKids instanceof PDFArray) {
+        for (let i = 0; i < resolvedKids.size(); i += 1) children.push(resolvedKids.get(i));
+      } else if (kids) {
+        children.push(kids);
+      }
+
+      // Anything already correct is left alone: a run that has nothing to fix
+      // must not rewrite the tree, or every rebuild churns the file.
+      const stray = children.filter((child) => {
+        const c = context.lookup(child);
+        if (!(c instanceof PDFDict)) return true;
+        const s = c.get(PDFName.of("S"));
+        const name = s instanceof PDFName ? s.asString() : "";
+        return name !== "/Lbl" && name !== "/LBody";
+      });
+      if (stray.length) {
+        const keep = children.filter((c) => !stray.includes(c));
+        const body = context.obj({ Type: "StructElem", S: "LBody" });
+        const bodyRef = context.register(body);
+        body.set(PDFName.of("P"), ref);
+        body.set(PDFName.of("K"), context.obj(stray));
+        for (const child of stray) {
+          const c = context.lookup(child);
+          if (c instanceof PDFDict) c.set(PDFName.of("P"), bodyRef);
+        }
+        node.set(PDFName.of("K"), context.obj([...keep, bodyRef]));
+        wrapped += 1;
+      }
+    }
+
+    visit(node.get(PDFName.of("K")));
+  };
+
+  visit(structTreeRoot.get(PDFName.of("K")));
+  return wrapped;
+}
+
+function xmpFor(title) {
+  // pdfuaid:part is the identification PDF/UA-1 asks for. dc:title is carried
+  // alongside it because the title is the one piece of metadata a reader
+  // actually sees -- html-to-pdf already sets ViewerPreferences
+  // /DisplayDocTitle, and a displayed title that is absent from the metadata
+  // is a worse state than either alone.
+  const escaped = String(title || "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+  return `<?xpacket begin="﻿" id="W5M0MpCehiHzreSzNTczkc9d"?>
+<x:xmpmeta xmlns:x="adobe:ns:meta/">
+  <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+    <rdf:Description rdf:about="" xmlns:pdfuaid="http://www.aiim.org/pdfua/ns/id/">
+      <pdfuaid:part>1</pdfuaid:part>
+    </rdf:Description>
+    <rdf:Description rdf:about="" xmlns:dc="http://purl.org/dc/elements/1.1/">
+      <dc:title><rdf:Alt><rdf:li xml:lang="x-default">${escaped}</rdf:li></rdf:Alt></dc:title>
+    </rdf:Description>
+  </rdf:RDF>
+</x:xmpmeta>
+<?xpacket end="w"?>`;
+}
+
+async function addPdfUaStructure(path) {
+  const pdf = await PDFDocument.load(fs.readFileSync(path));
+  const context = pdf.context;
+  const catalog = pdf.catalog;
+
+  const structTreeRoot = context.lookup(
+    catalog.get(PDFName.of("StructTreeRoot"))
+  );
+  if (!(structTreeRoot instanceof PDFDict)) {
+    // tagged: true is asserted by tests/test_pdf.py, so this means the PDF
+    // came out untagged despite it -- a failure, not something to paper over.
+    throw new Error("no structure tree; the PDF is untagged");
+  }
+
+  const nonStandard = new Set();
+  collectStructureTypes(
+    structTreeRoot.get(PDFName.of("K")),
+    context,
+    nonStandard,
+    new Set()
+  );
+
+  const existing = context.lookup(structTreeRoot.get(PDFName.of("RoleMap")));
+  const roleMap = existing instanceof PDFDict ? existing : context.obj({});
+  for (const name of nonStandard) {
+    // Span, not a guess at the semantics. A role map says which STANDARD type
+    // a non-standard one stands in for, and Span is the generic inline
+    // container -- Strong and Em carry emphasis that PDF has no structure type
+    // for, and claiming a more specific one would assert something untrue
+    // about the content.
+    roleMap.set(PDFName.of(name), PDFName.of("Span"));
+  }
+  structTreeRoot.set(PDFName.of("RoleMap"), roleMap);
+
+  const wrapped = wrapListBodies(structTreeRoot, context);
+
+  const xmp = context.stream(xmpFor(pdf.getTitle()), {
+    Type: "Metadata",
+    Subtype: "XML",
+  });
+  catalog.set(PDFName.of("Metadata"), context.register(xmp));
+
+  fs.writeFileSync(path, await pdf.save({ useObjectStreams: false }));
+  return { mapped: Array.from(nonStandard).sort(), wrapped };
 }
 
 async function main() {
@@ -124,8 +327,12 @@ async function main() {
 }
 
 main()
-  .then(() => {
-    console.log(`Wrote ${output}`);
+  .then(() => addPdfUaStructure(output))
+  .then(({ mapped, wrapped }) => {
+    const notes = [];
+    if (mapped.length) notes.push(`role map: ${mapped.join(", ")} -> Span`);
+    if (wrapped) notes.push(`${wrapped} list items wrapped in LBody`);
+    console.log(`Wrote ${output}` + (notes.length ? ` (${notes.join("; ")})` : ""));
   })
   .catch((error) => {
     console.error(`Failed to convert ${input}: ${error.message}`);
