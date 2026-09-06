@@ -9,6 +9,59 @@ and the closed epics in `.beads/issues.jsonl` are the readable index.
 How the version gets bumped is written down in
 [AGENTS.md](AGENTS.md#cutting-a-release), not here.
 
+## 0.14.0
+
+- **A document that draws no diagram no longer carries the mermaid bundle.**
+  Every generated page inlined `mermaid.min.js` unconditionally. It is 3.5 MB.
+  A handout with no diagram in it weighed 5.19 MB, of which 3.57 MB was a
+  library the page never called -- and none of the handouts in the course
+  repository this tool was written for draw diagrams. They are all in that
+  state. Dropping it takes such a page to 1.62 MB, a 69% cut.
+
+  This is not a build-time fix and was not shipped as one. Measured both ways,
+  alternating, on a real package:
+
+  ```
+  with the bundle     1776 ms / 1738 ms
+  without             1756 ms / 1762 ms
+  ```
+
+  V8 does not charge for a script it never runs. What the weight cost was the
+  point of the file: `embed-images.lua` and the asset inlining exist so a
+  handout is one self-contained file somebody can email, and a 5 MB attachment
+  that should be 1.6 MB is three times harder to send.
+
+  `mermaid-figure-filter.lua` now sets a `has-mermaid` metadata flag and the
+  template gates the bundle on it. The flag covers every route to a `.mermaid`
+  element, not just the fenced code block the filter already rewrote -- the
+  page script matches the class on any element, and four other things produce
+  one. `<div class="mermaid">` and a fenced `::: {.mermaid}` both arrive as a
+  `Div`; `<span class="mermaid">` arrives as a `Span`, because pandoc's
+  `native_spans` and `native_divs` extensions parse those into the AST rather
+  than leaving them raw. Only the tags pandoc has no native element for --
+  `<pre class="mermaid">`, a custom element -- stay raw, as a `RawBlock` or a
+  `RawInline`. Those two are matched by a plain substring search that
+  deliberately over-matches: a false positive inlines a bundle the page does
+  not need, which is what every page did before this release, while a false
+  negative renders a diagram blank.
+
+  The `Span` case is worth calling out because the markdown and the rendered
+  HTML both say `<span`, so it reads like raw HTML from either end of the
+  pipeline; only the AST in between disagrees. It was found by a review comment
+  pointing at the right gap with the wrong mechanism, and settled by
+  instrumenting the filter rather than by reasoning about it.
+
+  The driver script is **not** gated, only the bundle. It no-ops on a page with
+  no `.mermaid` element, and it is what sets `window.__mermaidReady` -- which
+  `html-to-pdf.js` blocks on. Gating it too would not fail a PDF build, it
+  would hang one for the full two-minute timeout first. `renderMermaid()` also
+  now bails out with a console error rather than throwing if it somehow finds a
+  diagram with no bundle loaded, for the same reason: an uncaught throw escapes
+  the async function and `__mermaidReady` is never set.
+
+  No action needed in a consuming repository. Re-run `stencil gen` and rebuild;
+  pages with diagrams are byte-for-byte unchanged.
+
 ## 0.13.0
 
 - **The header's PDF text layer no longer jams words together.** Extracted

@@ -4,6 +4,13 @@
 --   flowchart LR
 --   ...
 --   ```
+--
+-- The filter also reports whether the document draws a diagram at all, as the
+-- `has-mermaid` metadata flag. The template inlines the mermaid bundle only
+-- when that is set: it is 3.5 MB, most handouts contain no diagram, and the
+-- bundle was better than two thirds of every file that never called it.
+
+local has_mermaid = false
 
 local function string_to_inlines(s)
   local doc = pandoc.read(s, 'markdown')
@@ -15,9 +22,61 @@ end
 
 function CodeBlock(block)
   if block.classes:includes('mermaid') then
+    has_mermaid = true
     local caption_text = block.attr.attributes['caption'] or 'Diagram'
     local short = string_to_inlines(caption_text)
     local caption = pandoc.Caption(short, {})
     return pandoc.Figure({ block }, caption)
   end
+end
+
+-- Two more routes to a .mermaid element, both of which reach the page script
+-- without ever passing through CodeBlock: a fenced div (`::: {.mermaid}`) and
+-- raw HTML written straight into the markdown, which is how `pre.mermaid` --
+-- one of the two selectors the page script reads -- gets into a document.
+--
+-- The raw-HTML test is the whole substring, not a parsed class attribute. It
+-- over-matches on purpose: a false positive inlines a bundle the page does not
+-- need, which is what every document does today, while a false negative drops
+-- a diagram. The asymmetry is not close, so the cheap test is the right one.
+function Div(div)
+  if div.classes:includes('mermaid') then
+    has_mermaid = true
+  end
+end
+
+-- Span, not RawInline, is what `<span class="mermaid">` becomes: pandoc's
+-- native_spans extension parses it into the AST rather than leaving it raw,
+-- exactly as native_divs does for the Div above. Reading the rendered page is
+-- the only way to see this -- the markdown says `<span`, the HTML says
+-- `<span`, and the AST in between is where the two stop matching.
+function Span(span)
+  if span.classes:includes('mermaid') then
+    has_mermaid = true
+  end
+end
+
+function RawBlock(block)
+  if block.format:match('^html') and block.text:find('mermaid', 1, true) then
+    has_mermaid = true
+  end
+end
+
+-- Raw HTML inside a paragraph is a RawInline, never a RawBlock, so the handler
+-- above does not see it. This catches the inline tags pandoc has no native
+-- element for; `<span>` is not one of them and is handled above. The page
+-- script's `.mermaid` selector does not care which the AST called it.
+function RawInline(inline)
+  if inline.format:match('^html') and inline.text:find('mermaid', 1, true) then
+    has_mermaid = true
+  end
+end
+
+-- Pandoc runs last, after every block has been walked, which is what makes the
+-- flag above trustworthy at this point.
+function Pandoc(doc)
+  if has_mermaid then
+    doc.meta['has-mermaid'] = true
+  end
+  return doc
 end
