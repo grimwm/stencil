@@ -9,6 +9,56 @@ and the closed epics in `.beads/issues.jsonl` are the readable index.
 How the version gets bumped is written down in
 [AGENTS.md](AGENTS.md#cutting-a-release), not here.
 
+## 0.18.0
+
+- **Changing slides no longer changes the theme.** Pick a theme while
+  presenting and the next arrow key put it back; the palette then cycled
+  light, dark, system as the talk went on. Reported by someone teaching from a
+  deck, which was the only way it could be reported.
+
+  Two keyboard handlers wanted the same key. The theme control is a
+  radiogroup, and **selection follows focus** in a radiogroup -- its arrow
+  handler does not merely move a highlight, it calls
+  `__stencilTheme.set()`. The deck listens for the same arrows on `document`
+  and guarded only `INPUT`, `TEXTAREA` and `contentEditable`. So once a reader
+  had focused the theme control, one `ArrowRight` advanced the slide *and*
+  stepped the theme, because the control's `preventDefault()` does not stop the
+  event reaching the deck.
+
+  That is why the behaviour looked so strange from outside: never touch the
+  control and everything is fine, touch it once and every later slide change
+  also repaints the deck.
+
+  While `html.presenting` is set, the arrows now belong to the deck and the
+  theme control ignores them. It is still clickable, and outside a
+  presentation it keeps full keyboard control -- a document never sets that
+  class, so nothing changes there.
+
+  The obvious alternative fix is worse and is guarded against: silencing the
+  *deck's* handler when focus sits in the toggle would make the theme stable
+  and leave a presenter pressing a dead arrow key.
+
+  Taking the arrows away needed a replacement, which a review caught before
+  this shipped. Roving tabindex leaves only the *checked* option tabbable and
+  the arrows are what normally reach the rest, so the guard on its own would
+  have let a keyboard-only presenter focus the control and never change it --
+  quieter than the bug being fixed, and worse. While presenting, every option
+  is now its own tab stop: Tab walks them, Enter activates.
+
+- **Space on a focused button no longer skips a slide as well.** The same
+  double-action, one key over: Space activates a focused button and is also the
+  deck's "next slide", so tabbing to the theme control and pressing Space
+  changed the setting and lost a slide at once. Only the activation keys are
+  surrendered -- the arrows stay with the deck wherever focus happens to be.
+
+- **The deck's keyboard is now testable at all.** Every other test in this
+  repository reads markup or a built PDF and none of them can press a key,
+  which is why a collision between two handlers shipped. `pipeline.run_in_browser`
+  runs a node script against the browser image the PDF build already uses, and
+  `tests/test_present_mode.py` drives real key presses through it -- routed by
+  focus, exactly as they would be for a person. Both failure modes above are
+  covered, and both were confirmed to fail before the fix.
+
 ## 0.17.0
 
 - **Bold is bold now.** `**like this**` in a handout rendered SemiBold rather

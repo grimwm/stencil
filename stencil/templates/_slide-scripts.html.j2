@@ -223,6 +223,16 @@
       }
       if (event.metaKey || event.ctrlKey || event.altKey) return;
 
+      /* Space activates a focused button. The deck also treats Space as
+         "next slide", so without this a presenter who has tabbed to the theme
+         control and pressed Space both changes the setting and skips a slide
+         -- the same double-action this release exists to remove, one key over.
+         Only the activation keys are surrendered: the arrows stay with the
+         deck wherever focus happens to be. */
+      if (event.key === ' ' && target && target.closest && target.closest('button')) {
+        return;
+      }
+
       switch (event.key) {
         case 'p':
         case 'P':

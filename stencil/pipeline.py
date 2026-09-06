@@ -191,6 +191,53 @@ def build_browser_image(
     )
 
 
+def run_in_browser(
+    script: str,
+    *,
+    workdir: Path,
+    tag: str = BROWSER_IMAGE_TAG,
+    runtime: str | None = None,
+    timeout: float | None = None,
+) -> subprocess.CompletedProcess:
+    """Run a node script in the browser image, over the package directory.
+
+    The same image and mount html_to_pdf uses, with the script supplied rather
+    than fixed. It exists because a deck's behaviour -- present mode, the theme
+    control, the tab panes -- had no instrument at all: every test in this
+    repository reads markup or a built PDF, and none of them can press a key.
+    The first bug it was written for was a keyboard collision that only appears
+    once a reader has focused one control and then used another.
+
+    The script is written into the workdir rather than piped, so a failure
+    leaves it on disk beside the page it was driving.
+    """
+    runtime = runtime or container_runtime()
+    if runtime is None:
+        raise RuntimeError("no container runtime found (looked for docker, podman)")
+
+    workdir = Path(workdir).resolve()
+    name = "_browser-probe.js"
+    (workdir / name).write_text(script)
+
+    return subprocess.run(
+        [
+            runtime,
+            "run",
+            "--rm",
+            "-v",
+            f"{workdir}:/workspace:z",
+            "-w",
+            "/workspace",
+            tag,
+            "node",
+            name,
+        ],
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+    )
+
+
 def html_to_pdf(
     source: str,
     output: str,
