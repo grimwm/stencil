@@ -14,9 +14,6 @@
 $if(title)$
 <header class="doc-title">
     <div class="doc-identity">$title$
-$if(points-label)$
-      <span class="doc-points">$points-label$</span>
-$endif$
 $if(subtitle)$
       <div class="doc-subtitle">$subtitle$</div>
 $endif$
@@ -24,22 +21,36 @@ $endif$
 $if(has-byline)$
   <div class="doc-byline">
 $if(author)$
-    <div class="doc-meta">$for(author)$$author$$sep$ &middot; $endfor$</div>
+    {# Each name is its own element so a list wraps between names rather
+       than mid-name, and the separator travels with the name it follows.
+       author: takes a single value or a YAML list; a list is what a team
+       project needs, and six names have to survive the header.
+
+       The spaces here are real characters, not a flex gap. A gap paints
+       the space but leaves nothing behind, so copy-paste and pdftotext
+       both read "AuthorAda Lovelace". #}
+    <div class="doc-meta"><span class="doc-label">Author</span> $for(author)$<span class="doc-author">$author$</span>$sep$ <span class="doc-author-sep" aria-hidden="true">&middot;</span> $endfor$</div>
 $endif$
-$if(has-dates)$
-    {# .doc-date stays the wrapper it always was, so the margin-left/text-align
-       rule that pushes it right keeps applying to one element rather than two.
-       The labels are not decoration: two bare dates in one column cannot be
-       told apart, and the build stamp went unlabelled before `due` existed
-       only because it was the only date there. #}
-    <div class="doc-date">
-$if(date-label)$
-      <div class="doc-issued"><span class="doc-date-label">Issued</span> <time datetime="$date-iso$">$date-label$</time></div>
-$endif$
-$if(due-label)$
-      <div class="doc-due"><span class="doc-date-label">Due</span> <time datetime="$due-iso$">$due-label$</time></div>
-$endif$
-    </div>
+$if(has-facts)$
+    {# Issued, Due and Points on one line, spread across the space the author
+       does not use. They were a stacked column and a badge beside the title;
+       the badge read as a UI chip on a document that has no other chrome.
+
+       Separators are their own elements rather than ::before content, so the
+       flex row can space them evenly instead of hanging each one off the item
+       that follows it. Each is conditional on something actually preceding
+       it AND on the item it precedes existing -- a separator emitted on
+       'something came before' alone strands one whenever the next fact is
+       absent, which is the bug this shape prevents.
+
+       The separator's spaces are non-breaking. It is its own flex item, so
+       ordinary spaces collapse away at its edges and the header extracts
+       as "Sep 01·Due" -- fine on screen, wrong in a paste and wrong in
+       pdftotext.
+
+       One line on purpose: a newline between these collapses to a word space
+       that lands on one side of a separator only. #}
+    <div class="doc-facts">$if(date-label)$<span class="doc-fact doc-issued"><span class="doc-label">Issued</span> <time datetime="$date-iso$">$date-label$</time></span>$endif$$if(due-label)$$if(sep-before-due)$<span class="doc-fact-sep" aria-hidden="true">&#160;&middot;&#160;</span>$endif$<span class="doc-fact doc-due"><span class="doc-label">Due</span> <time datetime="$due-iso$">$due-label$</time></span>$endif$$if(points-label)$$if(sep-before-points)$<span class="doc-fact-sep" aria-hidden="true">&#160;&middot;&#160;</span>$endif$<span class="doc-fact doc-points"><span class="doc-label">Points</span> $points-label$</span>$endif$</div>
 $endif$
   </div>
 $endif$

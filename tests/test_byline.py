@@ -67,7 +67,7 @@ def test_author_and_date(render_soup):
         "byline.md",
         text=document('title: "T"\nauthor: Ada Lovelace\ndate: 2026-09-02\n'),
     )
-    assert authors(soup) == "Ada Lovelace"
+    assert authors(soup) == "Author Ada Lovelace"
     assert when(soup) == "Issued Sep 02"
 
 
@@ -80,7 +80,7 @@ def test_an_author_list_is_joined_with_middots(render_soup):
             "date: 2026-09-02\n"
         ),
     )
-    assert authors(soup) == f"Ada Lovelace {MIDDOT} Grace Hopper"
+    assert authors(soup) == f"Author Ada Lovelace {MIDDOT} Grace Hopper"
     assert when(soup) == "Issued Sep 02"
 
 
@@ -89,7 +89,7 @@ def test_author_only_emits_no_date_element(render_soup):
     soup = render_soup(
         "doc", "byline.md", text=document('title: "T"\nauthor: Ada Lovelace\n')
     )
-    assert authors(soup) == "Ada Lovelace"
+    assert authors(soup) == "Author Ada Lovelace"
     assert MIDDOT not in authors(soup)
     assert when(soup) is None
 

@@ -22,6 +22,11 @@ def document(front_matter: str) -> str:
 
 
 def badge(soup, selector: str = ".doc-points") -> str | None:
+    """The Points fact, label and all.
+
+    It was a pill beside the title until the byline gained a facts row; the
+    class stayed, the chrome did not.
+    """
     found = soup.select_one(selector)
     return None if found is None else " ".join(found.get_text().split())
 
@@ -40,14 +45,14 @@ def test_points_pluralize(render_soup, value, expected):
     soup = render_soup(
         "doc", "pts.md", text=document(f'title: "T"\npoints: {value}\n')
     )
-    assert badge(soup) == expected
+    assert badge(soup) == f"Points {expected}"
 
 
 def test_a_non_numeric_value_renders_verbatim(render_soup):
     soup = render_soup(
         "doc", "pts.md", text=document('title: "T"\npoints: "extra credit"\n')
     )
-    assert badge(soup) == "extra credit"
+    assert badge(soup) == "Points extra credit"
 
 
 def test_absent_points_emits_no_badge(render_soup):
@@ -73,8 +78,9 @@ def test_blank_points_renders_as_if_absent(render):
     assert blank_path.read_text() == absent_path.read_text()
 
 
-def test_the_badge_reaches_the_deck_title_slide(render_soup):
+def test_points_reaches_the_deck_byline(render_soup):
     soup = render_soup(
         "slide", "deck.md", text=document('title: "T"\npoints: 50\n')
     )
-    assert badge(soup, ".deck-points") == "50 pts"
+    meta = " ".join(soup.select_one(".deck-meta").get_text().split())
+    assert "Points 50 pts" in meta

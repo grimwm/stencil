@@ -70,3 +70,47 @@ def test_a_rendered_document_stays_offline(render_soup):
         assert host not in html
     # Mermaid must still initialise from the inlined UMD build.
     assert soup.find("script", string=re.compile(r"globalThis\.mermaid"))
+
+
+def test_scope_css_prefixes_every_selector_in_a_list():
+    from stencil.assets import scope_css
+
+    out = scope_css("pre code.hljs{display:block}.a,.b{color:red}", "#s")
+    assert out == "#s pre code.hljs{display:block}#s .a, #s .b{color:red}"
+
+
+def test_scope_css_drops_comments_and_keeps_every_rule():
+    from stencil.assets import scope_css
+
+    css = "/*! banner */.a{color:red}/* mid */.b{color:blue}"
+    out = scope_css(css, "#s")
+    assert "banner" not in out, "a leading comment survived"
+    assert "mid" not in out, "an interior comment survived"
+    assert out.count("{") == 2, "a rule was lost"
+
+
+def test_scope_css_refuses_a_stylesheet_it_cannot_scope():
+    """The transform splits on `}`, which an at-rule block would break. It
+    fails loudly rather than silently mangling one -- highlight.js themes are
+    flat today and this is what notices if a bump changes that."""
+    from stencil.assets import scope_css
+
+    with pytest.raises(ValueError, match="at-rule"):
+        scope_css("@media print{.a{color:red}}", "#s")
+
+
+def test_the_vendored_dark_theme_is_scoped_and_intact():
+    """Every rule in the real asset survives the transform.
+
+    Rule counts compared before and after: a selector-prefixing bug that drops
+    a rule leaves code highlighting subtly wrong in dark mode and nothing else
+    would notice.
+    """
+    from stencil.assets import ASSETS_DIR, load, scope_css
+
+    raw = (ASSETS_DIR / "highlight-github-dark.min.css").read_text()
+    expected = re.sub(r"/\*.*?\*/", "", raw, flags=re.S).count("{")
+    scoped = load()["highlight_css_dark"]
+    assert scoped.count("{") == expected, "the transform lost or added a rule"
+    assert ":root[data-theme=\"dark\"] .hljs{" in scoped
+    assert not re.search(r"(?<![\]\w]) \.hljs\{", scoped), "an unscoped rule survived"

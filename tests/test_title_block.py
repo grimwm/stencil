@@ -276,19 +276,6 @@ def test_the_printed_heading_scale_never_inverts(to_pdf):
     assert_strictly_descending(words, sizes)
 
 
-def test_the_points_badge_is_subordinate_to_the_title(css):
-    """The badge sits inside .doc-title, so an omitted font-size would inherit
-    that block's 2.2rem -- the same inversion .doc-subtitle exists to prevent,
-    and the print block would carry it into the PDF just as it did there.
-
-    Asserted against the stylesheet rather than a rendered PDF because the
-    relationship is a stated one: measuring glyphs would test the renderer.
-    """
-    title = size_rem(rule(css, ".doc-title"))
-    badge = size_rem(rule(css, ".doc-points"))
-    assert badge < title, f"badge {badge}rem is not below title {title}rem"
-
-
 def test_the_header_grid_rule_survives_the_parser(css):
     """A stray `*/` upstream silently deletes this rule.
 
@@ -340,52 +327,3 @@ def test_the_stylesheet_comments_are_balanced(template):
             f"{template}: comment opened at {opener} is never closed"
         )
         cursor = closer + 2
-
-
-
-def relative_luminance(hex_color: str) -> float:
-    """WCAG relative luminance of a #rgb or #rrggbb colour.
-
-    Both spellings are in use here -- .doc-subtitle is #555 -- and a reader
-    that only understands the long form silently skips the short one, which
-    would make this check pass by not looking.
-    """
-    digits = hex_color.lstrip("#")
-    if len(digits) == 3:
-        digits = "".join(d * 2 for d in digits)
-    channels = (int(digits[i : i + 2], 16) / 255 for i in (0, 2, 4))
-    linear = [
-        c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4
-        for c in channels
-    ]
-    return 0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2]
-
-
-def contrast(foreground: str, background: str = "#ffffff") -> float:
-    a, b = relative_luminance(foreground), relative_luminance(background)
-    return (max(a, b) + 0.05) / (min(a, b) + 0.05)
-
-
-@pytest.mark.parametrize(
-    ("selector", "name"),
-    [
-        (".doc-date-label", "Issued/Due label"),
-        (".doc-subtitle", "subtitle"),
-        (".doc-meta,\n    .doc-date,\n    .doc-context", "byline and context"),
-    ],
-)
-def test_header_text_meets_aa_contrast(css, selector, name):
-    """Muted greys in the header are still text, and take the 4.5:1 threshold.
-
-    The Issued/Due label shipped at #7a828f, which is 3.88:1 on white -- under
-    AA, and `make check-access` runs pa11y at WCAG 2.1 AA. Nothing in this
-    suite would have caught it: the label rendered, the DOM was right, and the
-    stylesheet contained exactly the colour it was asked for.
-    """
-    declarations = rule(css, selector)
-    match = re.search(r"color:\s*(#[0-9a-fA-F]{3,6})\b", declarations)
-    assert match, f"no hex colour in {name}"
-    ratio = contrast(match.group(1))
-    assert ratio >= 4.5, (
-        f"{name} ({match.group(1)}) is {ratio:.2f}:1 on white, under AA's 4.5:1"
-    )

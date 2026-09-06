@@ -1,0 +1,92 @@
+{# The light/dark/system control, shared by documents and decks.
+
+   A segmented group rather than a cycling button: all three states are
+   visible at once and the pressed one says which is active, where a single
+   icon hides both what the next click does and what the current state is.
+
+   Two mount points, one implementation. A document gets a fixed container in
+   html-template.html.j2; a deck's toolbar is built by JS at runtime, so
+   _slide-scripts.html.j2 calls mountThemeToggle() once it exists. #}
+  <script>
+  (function () {
+    var OPTIONS = [
+      { value: 'light',  label: 'Light',  glyph: '☀' },
+      { value: 'dark',   label: 'Dark',   glyph: '☾' },
+      { value: 'system', label: 'System', glyph: '◐' },
+    ];
+
+    window.mountThemeToggle = function (container) {
+      if (!container || container.querySelector('.theme-toggle')) return;
+
+      var group = document.createElement('div');
+      group.className = 'theme-toggle';
+      /* radiogroup rather than a set of buttons: the three are mutually
+         exclusive, and a screen reader should announce "2 of 3" rather than
+         three unrelated controls. */
+      group.setAttribute('role', 'radiogroup');
+      group.setAttribute('aria-label', 'Color theme');
+
+      var buttons = OPTIONS.map(function (option) {
+        var button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'theme-toggle__option';
+        button.setAttribute('role', 'radio');
+        button.dataset.theme = option.value;
+        /* The glyph is decorative -- the accessible name comes from the
+           label, which is visually hidden rather than absent so the control
+           is still announced as "Light" and not as a character nobody can
+           pronounce. */
+        button.innerHTML =
+          '<span aria-hidden="true">' + option.glyph + '</span>' +
+          '<span class="theme-toggle__label">' + option.label + '</span>';
+        button.addEventListener('click', function () {
+          window.__stencilTheme.set(option.value);
+        });
+        group.appendChild(button);
+        return button;
+      });
+
+      /* Roving tabindex: the group is one tab stop, and the arrows move
+         within it. Three separate tab stops for one setting is the thing
+         radiogroup exists to avoid. */
+      function focusAt(index) {
+        var next = (index + buttons.length) % buttons.length;
+        buttons[next].focus();
+        window.__stencilTheme.set(OPTIONS[next].value);
+      }
+
+      group.addEventListener('keydown', function (event) {
+        var index = buttons.indexOf(document.activeElement);
+        if (index < 0) return;
+        if (event.key === 'ArrowRight' || event.key === 'ArrowDown') {
+          event.preventDefault();
+          focusAt(index + 1);
+        } else if (event.key === 'ArrowLeft' || event.key === 'ArrowUp') {
+          event.preventDefault();
+          focusAt(index - 1);
+        }
+      });
+
+      /* Tracks the PREFERENCE, not the resolved theme. With "system" chosen
+         in a dark OS, data-theme is "dark" while the pressed segment must
+         still read System -- otherwise the control reports a choice the
+         reader never made. */
+      window.__stencilTheme.subscribe(function (theme, pref) {
+        buttons.forEach(function (button, i) {
+          var on = OPTIONS[i].value === pref;
+          button.setAttribute('aria-checked', on ? 'true' : 'false');
+          button.tabIndex = on ? 0 : -1;
+        });
+      });
+
+      container.appendChild(group);
+      return group;
+    };
+
+    /* Documents mount immediately; a deck waits for its toolbar. */
+    document.addEventListener('DOMContentLoaded', function () {
+      var host = document.querySelector('.theme-toggle-host');
+      if (host) window.mountThemeToggle(host);
+    });
+  })();
+  </script>

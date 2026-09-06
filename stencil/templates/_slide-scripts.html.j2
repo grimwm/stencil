@@ -23,6 +23,17 @@
       '<button type="button" class="deck-present">Present</button>';
     document.body.appendChild(toolbar);
 
+    /* The theme control lives in the toolbar rather than in a corner of its
+       own: a deck already has one place where its chrome goes, and a second
+       floating thing would compete with the slide for the same space. It is
+       inserted before Present so the destructive-ish action stays last. */
+    if (window.mountThemeToggle) {
+      var themeGroup = window.mountThemeToggle(toolbar);
+      if (themeGroup) {
+        toolbar.insertBefore(themeGroup, toolbar.querySelector('.deck-present'));
+      }
+    }
+
     var position = toolbar.querySelector('.deck-position');
     var button = toolbar.querySelector('.deck-present');
 

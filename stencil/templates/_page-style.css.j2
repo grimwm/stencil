@@ -1,12 +1,100 @@
 {# Shared page styling: typography, callouts, code, tables, figures, print rules.
    Included by html-template.html.j2 and slide-template.html.j2. #}
+    /* The light palette, and the only unconditional definition of it. Dark
+       values live in exactly one place -- an @media screen block at the foot
+       of this file -- because print cannot match that block, so these values
+       apply to every printed page with nothing to undo.
+
+       Every colour in this file and in _slide-style.css.j2 is one of these
+       tokens. A hardcoded colour is a value that escapes theming: right in
+       light, wrong in dark, and invisible to a suite that reads structure.
+       tests/test_theme.py fails on one. */
     :root {
+      /* Light unless the sealed block below says otherwise, so print -- which
+         cannot match @media screen -- always gets light UA widgets. */
+      color-scheme: light;
+
       --font-serif: 'Crimson Pro', Georgia, 'Times New Roman', serif;
       --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
       --font-mono: 'JetBrains Mono', 'Fira Code', Consolas, Monaco, monospace;
-      --accent-color: #29417a;
+
+      /* Surfaces */
+      --surface: #fff;
+      --surface-sunken: #f6f8fa;
+      --surface-muted: #f5f7fa;
+      --surface-accent: #e8eef7;
+      --surface-accent-on: #d2def2;
+
+      /* Text. Every one of these is measured against --surface in
+         tests/test_theme.py; the Issued/Due label already shipped once at
+         3.88:1 and had to be raised. */
+      --text: #212529;
+      --text-subtle: #555;
+      --text-muted: #5a6270;
+      --text-label: #687080;
+      --text-strong: #3a424f;
+      --text-faint: #6b7280;
+
+      /* Lines */
+      --border: #dee2e6;
+      --border-muted: #c8c8c8;
+
+      /* Accent, and what sits on top of it */
+      /* Two roles, two tokens. --accent is ink: text, borders, rules, and it
+         has to be legible ON a surface. --accent-fill is a background that
+         --on-accent text sits on. They are the same colour in light, which is
+         exactly why one token survived until dark mode made --accent light
+         and every filled control turned white-on-pale -- the deck's Present
+         button measured 2.35:1. */
+      --accent: #29417a;
+      --accent-fill: #29417a;
+      --on-accent: #fff;
+      --on-accent-muted: rgba(255, 255, 255, 0.85);
+      --on-accent-bright: rgba(255, 255, 255, 0.9);
+      --on-accent-faint: rgba(255, 255, 255, 0.5);
+      --on-accent-fill: rgba(255, 255, 255, 0.15);
+
+      /* Callout card */
       --card-bg: #fffdf5;
       --card-border: #c8b48c;
+
+      /* Code */
+      --code-inline: #c7254e;
+      --hl-builtin: #c85200;
+      --hl-string: #0550ae;
+
+      --shadow-card: rgba(0, 0, 0, 0.08);
+      --focus-ring: #ffbf47;
+
+      /* Deck tokens. Defined here rather than in _slide-style.css.j2 because
+         a deck includes this file, so there is one :root, not two. */
+      --deck-surface: #fff;
+      --deck-border: #d8dee9;
+      --deck-shadow: rgba(20, 30, 60, 0.10);
+      --deck-shadow-md: rgba(20, 30, 60, 0.16);
+      --deck-shadow-lg: rgba(20, 30, 60, 0.26);
+      --deck-counter: #8a93a5;
+      --deck-accent-from: #29417a;
+      --deck-accent-to: #3c5da8;
+      --deck-accent-edge: #22335e;
+      --deck-body-text: #2c3444;
+      --deck-quote-bg: #eef2fb;
+      --deck-quote-border: #c3cfe8;
+      --deck-toolbar-bg: rgba(255, 255, 255, 0.94);
+      --deck-toolbar-border: #ccd4e2;
+      --deck-toolbar-fg: #55607a;
+      --deck-toolbar-hover: #1d2f5c;
+      --deck-presenting-bg: #e9edf4;
+
+      /* Print-only, and deliberately not the screen values. These are their
+         own tokens rather than literals so the drift guard can stay absolute:
+         every colour in the file is a token, with no exemption to remember. */
+      --print-th-bg: #e8e8e8;
+      --print-stripe-bg: #f5f5f5;
+      --print-card-bg: #fffef8;
+      --print-deck-bg: #29417a;
+      --print-deck-fg: #fff;
+      --print-deck-quote-bg: #eef2fb;
     }
 
     /* Academic fonts */
@@ -30,7 +118,7 @@
       font-weight: 700;
       margin-bottom: 1.5rem;
       padding-bottom: 0.5rem;
-      border-bottom: 2px solid var(--accent-color);
+      border-bottom: 2px solid var(--accent);
     }
 
     /* Subordinate to the title, the way .deck-subtitle is on a title slide.
@@ -40,38 +128,13 @@
     .doc-subtitle {
       font-size: 1.4rem;
       font-weight: 400;
-      color: #555;
-      margin-top: 0.5rem;
+      font-style: italic;
+      color: var(--text-subtle);
+      /* Tight to the title. A subtitle belongs to the line above it, and half
+         a rem of air read as two unrelated headings rather than one unit. */
+      margin-top: 0.15rem;
     }
 
-    /* What the document is worth, beside the title. Sits inside .doc-title,
-       so like .doc-subtitle it has to opt out of that block's 2.2rem/700
-       rather than inherit it -- a badge that outranks the title is the same
-       inversion .doc-subtitle was fixed for, and the print block would carry
-       it into the PDF.
-
-       Colors are literal rather than tokens: there is no token layer to hang
-       them on yet, and the theming release converts them along with the other
-       fifty-odd in this file.
-
-       No white-space: nowrap. A non-numeric `points` renders verbatim and can
-       be long, and nowrap would push it past the page edge; the non-breaking
-       space frontmatter-filter.lua puts between the number and its unit is
-       what keeps "50 pts" together without forbidding a wrap. */
-    .doc-points {
-      display: inline-block;
-      margin-left: 0.5rem;
-      padding: 0.15em 0.55em;
-      border-radius: 999px;
-      background: #e8eef7;
-      color: #29417a;
-      font-family: var(--font-sans);
-      font-size: 0.95rem;
-      font-weight: 600;
-      line-height: 1.4;
-      overflow-wrap: anywhere;
-      vertical-align: middle;
-    }
 
     /* The header's two rows, as a grid rather than two flex rows.
 
@@ -109,51 +172,57 @@
       grid-row: 1;
     }
 
+    /* Two stacked lines, not two columns: authors above, facts below.
+
+       An author list is the reason. Side by side, six names squeeze the facts
+       into a column too narrow to spread, and the two wrap into each other at
+       exactly the widths a project handout uses. Given the full width each,
+       a long author list simply takes another line and the facts keep their
+       own. */
     .doc-byline {
       grid-column: 1 / -1;
       grid-row: 2;
       margin-top: 0.6rem;
       display: flex;
-      flex-wrap: wrap;
-      align-items: baseline;
-      gap: 0.35rem 1.5rem;
+      flex-direction: column;
+      align-items: stretch;
+      gap: 0.3rem;
     }
 
     /* Both right-hand columns push themselves over rather than relying on
        space-between, which would strand a lone date on the left. */
-    .doc-context,
-    .doc-date {
+    .doc-context {
       margin-left: auto;
       text-align: right;
     }
 
-    /* Byline: author(s) and date, from the front matter. Both of these sit
-       inside .doc-title, so they have to opt out of that block's 2.2rem/700
-       rather than inherit it. */
+    /* Byline and context, from the front matter. All of these sit inside
+       .doc-title, so they have to opt out of that block's 2.2rem/700 rather
+       than inherit it -- and .doc-facts has to be named here even though
+       its children set their own size, because a flex container's own
+       font-size still raises a 2.2rem strut and pads the row to 60px for a
+       27px line. */
     .doc-meta,
-    .doc-date,
+    .doc-facts,
     .doc-context {
       font-size: 1rem;
       font-weight: 400;
-      color: #5a6270;
+      color: var(--text-muted);
     }
 
-    /* "Issued" and "Due" name which date is which. Two bare dates in one
-       column cannot be told apart, and the build stamp went unlabelled until
-       now only because it was the only one there. */
-    .doc-date-label {
+    /* "Author", "Issued" and "Due" name which byline field is which. Two
+       bare dates in one column cannot be told apart, and once they are
+       labelled an unlabelled author is the odd one out. */
+    .doc-label {
       font-weight: 600;
       /* 4.98:1 on white. The muted grey this started at, #7a828f, was 3.88:1
          -- under AA for text this size, and `make check-access` runs pa11y at
          WCAG 2.1 AA. A label naming which date you are looking at is not
          decoration, so it takes the text threshold rather than the 3:1 one. */
-      color: #687080;
+      color: var(--text-label);
       margin-right: 0.3em;
     }
 
-    .doc-due {
-      margin-top: 0.15rem;
-    }
 
     /* Brand: what the document belongs to, above the program it is part of.
        A name sits larger and darker than the context lines under it, so the
@@ -162,7 +231,7 @@
     .doc-brand {
       font-size: 1.15rem;
       font-weight: 600;
-      color: #3a424f;
+      color: var(--text-strong);
       margin-bottom: 0.2rem;
     }
 
@@ -190,17 +259,17 @@
       /* The whole gap, and symmetric: _doc-body.html.j2 emits these spans on
          one line precisely so no collapsed newline lands on one side. */
       margin: 0 0.4rem;
-      color: #99a1b0;
+      color: var(--text-faint);
     }
 
-    .doc-term {
-      display: block;
-    }
-
-    /* Two classes, so it outranks the sibling rule above without !important:
-       the term starts a line, and a line does not open with a separator. */
-    .doc-context .doc-term::before {
-      content: none;
+    /* A section belongs to its program, so it joins with a full stop and no
+       gap -- "CS 425.001" reads as one identifier -- while the term stays a
+       separate fact behind the middot. Two classes, so this outranks the
+       sibling rule above without !important. */
+    .doc-context .doc-section::before {
+      content: ".";
+      margin: 0;
+      color: inherit;
     }
 
     /* Narrow viewports: nothing is wide enough for two columns, so the header
@@ -220,10 +289,15 @@
         grid-column: 1;
         grid-row: auto;
       }
-      .doc-context,
-      .doc-date {
+      .doc-context {
         margin-left: 0;
         text-align: left;
+      }
+      /* Stacked, the facts have no blank space to spread into, so they close
+         up behind their separators instead of drifting apart. */
+      .doc-facts {
+        justify-content: flex-start;
+        gap: 0.45rem;
       }
     }
 
@@ -243,13 +317,13 @@
     h1 {
       font-size: 1.75rem;
       padding-bottom: 0.5rem;
-      border-bottom: 2px solid var(--accent-color);
+      border-bottom: 2px solid var(--accent);
     }
 
     h2 {
       font-size: 1.45rem;
       padding-bottom: 0.25rem;
-      border-bottom: 1px solid #dee2e6;
+      border-bottom: 1px solid var(--border);
     }
 
     /* h4 lands on body size deliberately: below it a heading is told apart by
@@ -268,7 +342,7 @@
       margin-left: 3em;
       font-style: italic;
       font-size: inherit;
-      box-shadow: 2px 2px 8px rgba(0,0,0,0.08);
+      box-shadow: 2px 2px 8px var(--shadow-card);
     }
 
     blockquote p:last-child {
@@ -277,7 +351,7 @@
 
     blockquote strong {
       font-style: normal;
-      color: var(--accent-color);
+      color: var(--accent);
     }
 
     /* Task lists: pandoc wraps each item as <li><label><input type=checkbox>text</label>.
@@ -309,7 +383,7 @@
       height: 1em;
       /* Native control, so a checked box renders its tick in every browser and
          stays clickable on screen; accent-color just tints it to match. */
-      accent-color: var(--accent-color);
+      accent-color: var(--accent);
     }
 
     /* Ordered task lists. Pandoc puts class="task-list" on a <ul> only -- an
@@ -329,7 +403,7 @@
          the box -- but with only that, the box lands hard against the
          ordinal instead and the same complaint reads "1.[ ] text". */
       margin: 0 0.45em 0 0.35em;
-      accent-color: var(--accent-color);
+      accent-color: var(--accent);
     }
 
     /* Code: mono font */
@@ -338,15 +412,15 @@
     }
 
     pre {
-      background: #f6f8fa;
-      border: 1px solid #dee2e6;
+      background: var(--surface-sunken);
+      border: 1px solid var(--border);
       border-radius: 6px;
       padding: 1rem;
     }
 
     code {
       font-size: 0.875em;
-      color: #c7254e;
+      color: var(--code-inline);
     }
 
     pre code {
@@ -354,9 +428,9 @@
     }
 
     /* Highlight.js contrast fixes for WCAG 2.1 AA */
-    .hljs-built_in { color: #c85200; }
-    .hljs-string { color: #0550ae; }
-    .hljs-symbol { color: #c85200; }
+    .hljs-built_in { color: var(--hl-builtin); }
+    .hljs-string { color: var(--hl-string); }
+    .hljs-symbol { color: var(--hl-builtin); }
 
     /* Tables: header color, borders */
     table {
@@ -385,18 +459,18 @@
       text-align: left;
       padding: 0.5rem 0.75rem;
       caption-side: top;
-      background: #e8eef7;
-      border: 1px solid #c8c8c8;
+      background: var(--surface-accent);
+      border: 1px solid var(--border-muted);
       border-bottom: none;
     }
 
     thead {
-      background: #d2def2;
+      background: var(--surface-accent-on);
     }
 
     th, td {
       padding: 0.5rem 0.75rem;
-      border: 1px solid #c8c8c8;
+      border: 1px solid var(--border-muted);
       text-align: left;
     }
 
@@ -406,7 +480,7 @@
     }
 
     tbody tr:nth-child(even) {
-      background: #f5f7fa;
+      background: var(--surface-muted);
     }
 
     /* Display math: block + centered */
@@ -425,7 +499,7 @@
       text-align: center;
       margin-top: 0.5rem;
       font-size: 0.95em;
-      color: #555;
+      color: var(--text-subtle);
       white-space: normal;
     }
 
@@ -453,7 +527,7 @@
 
     /* Navigation tabs - Bootstrap overrides */
     .nav-tabs.problem-tabs {
-      background: var(--accent-color);
+      background: var(--accent-fill);
       border-radius: 6px 6px 0 0;
       border: none;
       padding: 0.5rem 0.5rem 0;
@@ -461,7 +535,7 @@
     }
 
     .nav-tabs.problem-tabs .nav-link {
-      color: rgba(255,255,255,0.85);
+      color: var(--on-accent-muted);
       font-family: var(--font-sans);
       font-size: 0.95rem;
       font-weight: 500;
@@ -472,22 +546,22 @@
     }
 
     .nav-tabs.problem-tabs .nav-link:hover {
-      color: #fff;
-      background: rgba(255,255,255,0.15);
+      color: var(--on-accent);
+      background: var(--on-accent-fill);
     }
 
     .nav-tabs.problem-tabs .nav-link.active {
-      background: #fff;
-      color: var(--accent-color);
+      background: var(--surface);
+      color: var(--accent);
       border: none;
     }
 
     .tab-content {
-      border: 1px solid #dee2e6;
+      border: 1px solid var(--border);
       border-top: none;
       border-radius: 0 0 6px 6px;
       padding: 1.5rem;
-      background: #fff;
+      background: var(--surface);
     }
 
     .tab-pane h1:first-child,
@@ -543,19 +617,19 @@
       }
 
       thead {
-        background: #e8e8e8 !important;
+        background: var(--print-th-bg) !important;
         -webkit-print-color-adjust: exact;
         print-color-adjust: exact;
       }
 
       tbody tr:nth-child(even) {
-        background: #f5f5f5 !important;
+        background: var(--print-stripe-bg) !important;
         -webkit-print-color-adjust: exact;
         print-color-adjust: exact;
       }
 
       blockquote {
-        background: #fffef8 !important;
+        background: var(--print-card-bg) !important;
         box-shadow: none;
         -webkit-print-color-adjust: exact;
         print-color-adjust: exact;
@@ -596,4 +670,219 @@
       .tab-pane + .tab-pane {
         margin-top: 1.5rem;
       }
+    }
+
+    /* Dark, and the only place in either stylesheet that may be.
+
+       @media screen is the entire print guarantee. Print does not match it,
+       so none of this reaches the print formatter and the light :root values
+       above apply to every printed page. That is why no light value is
+       re-declared for print anywhere: there is nothing to undo. Move one
+       declaration out of this wrapper and every handout prints dark.
+
+       System resolution happens in JS -- _page-head.html.j2 writes a resolved
+       light/dark to data-theme -- rather than through a prefers-color-scheme
+       variant here, so this palette is written once instead of twice.
+
+       tests/test_theme.py holds three things about this block: that nothing
+       theme-conditional escapes the wrapper, that it defines exactly the
+       token names :root does, and that every text colour clears 4.5:1
+       against --surface. */
+    @media screen {
+      :root[data-theme="dark"] {
+        color-scheme: dark;
+
+        --surface: #1b1f27;
+        --surface-sunken: #22262f;
+        --surface-muted: #202631;
+        --surface-accent: #24304a;
+        --surface-accent-on: #2f4680;
+
+        --text: #e3e6ea;
+        --text-subtle: #c2c8d2;
+        --text-muted: #a8b0bd;
+        --text-label: #aab2bf;
+        --text-strong: #f0f2f5;
+        --text-faint: #8b94a3;
+
+        --border: #333a46;
+        --border-muted: #3d4552;
+
+        --accent: #8fa9e0;
+        --accent-fill: #2f4680;
+        --on-accent: #fff;
+        --on-accent-muted: rgba(255, 255, 255, 0.85);
+        --on-accent-bright: rgba(255, 255, 255, 0.9);
+        --on-accent-faint: rgba(255, 255, 255, 0.55);
+        --on-accent-fill: rgba(255, 255, 255, 0.18);
+
+        /* The callout keeps its warmth rather than going flat grey; it is a
+           cream card in light, so a warm dark reads as the same element. */
+        --card-bg: #232016;
+        --card-border: #5c5031;
+
+        --code-inline: #ff9ab0;
+        --hl-builtin: #ffa657;
+        --hl-string: #a5d6ff;
+
+        --shadow-card: rgba(0, 0, 0, 0.5);
+        --focus-ring: #ffbf47;
+
+        --deck-surface: #1b1f27;
+        --deck-border: #333a46;
+        --deck-shadow: rgba(0, 0, 0, 0.45);
+        --deck-shadow-md: rgba(0, 0, 0, 0.55);
+        --deck-shadow-lg: rgba(0, 0, 0, 0.65);
+        --deck-counter: #8b94a3;
+        --deck-accent-from: #223258;
+        --deck-accent-to: #2f4680;
+        --deck-accent-edge: #16203a;
+        --deck-body-text: #e3e6ea;
+        --deck-quote-bg: #22293a;
+        --deck-quote-border: #39445c;
+        --deck-toolbar-bg: rgba(27, 31, 39, 0.94);
+        --deck-toolbar-border: #3d4552;
+        --deck-toolbar-fg: #a8b0bd;
+        --deck-toolbar-hover: #3f5da8;
+        --deck-presenting-bg: #14171c;
+
+        /* Bootstrap, mapped from our own tokens rather than through
+           data-bs-theme. Bootstrap's dark block lives inside the vendored
+           bootstrap.min.css and is NOT wrapped in @media screen, so setting
+           that attribute would put a second dark mechanism in the page that
+           print cannot switch off -- and we would be back to re-asserting
+           values and hoping specificity holds. These are the variables these
+           pages actually surface: the container, tables and the tab strip. */
+        --bs-body-bg: var(--surface);
+        --bs-body-color: var(--text);
+        --bs-emphasis-color: var(--text-strong);
+        --bs-border-color: var(--border);
+        --bs-secondary-bg: var(--surface-sunken);
+        --bs-tertiary-bg: var(--surface-muted);
+        /* Bootstrap 5.3 resolves links through --bs-link-color-rgb, not
+           --bs-link-color: `a { color: rgba(var(--bs-link-color-rgb), ...) }`.
+           Setting the wrong one left every link at Bootstrap's light-mode
+           #0d6efd on a dark page -- 3.67:1, which pa11y caught. */
+        --bs-link-color-rgb: 143, 169, 224;
+        --bs-link-hover-color-rgb: 143, 169, 224;
+        --bs-link-color: var(--accent);
+        --bs-link-hover-color: var(--accent);
+        --bs-code-color: var(--code-inline);
+        --bs-table-color: var(--text);
+        --bs-table-bg: transparent;
+        --bs-table-border-color: var(--border);
+        --bs-table-striped-color: var(--text);
+        --bs-table-striped-bg: var(--surface-sunken);
+      }
+    }
+
+    /* The theme control. Fixed on a document, and re-parented into the
+       toolbar on a deck -- see _slide-scripts.html.j2 -- so these rules cover
+       both and the deck stylesheet adds only what the toolbar needs. */
+    .theme-toggle {
+      display: inline-flex;
+      gap: 0.125rem;
+      padding: 0.15rem;
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      background: var(--surface);
+      font-family: var(--font-sans);
+    }
+
+    .theme-toggle-host {
+      position: fixed;
+      top: 1rem;
+      right: 1rem;
+      z-index: 10;
+    }
+
+    .theme-toggle__option {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-width: 2rem;
+      min-height: 1.9rem;
+      padding: 0 0.4rem;
+      border: 0;
+      border-radius: 999px;
+      background: transparent;
+      color: var(--text-muted);
+      font-size: 0.95rem;
+      line-height: 1;
+      cursor: pointer;
+    }
+
+    /* The pressed segment is a filled chip rather than a tinted one: it
+       reads as pressed at a glance, and it puts --on-accent on
+       --accent-fill, a pair the contrast test holds at 4.5:1 in both
+       palettes. The tinted version measured 2.67:1 on the deck toolbar,
+       whose own translucent background pa11y cannot composite. */
+    .theme-toggle__option[aria-checked="true"] {
+      background: var(--accent-fill);
+      color: var(--on-accent);
+    }
+
+    .theme-toggle__option:focus-visible {
+      outline: 3px solid var(--focus-ring);
+      outline-offset: 1px;
+    }
+
+    /* Visually hidden, not absent. The glyph is aria-hidden, so this is the
+       control's entire accessible name -- display: none would leave three
+       buttons announcing nothing. */
+    .theme-toggle__label {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      padding: 0;
+      margin: -1px;
+      overflow: hidden;
+      clip-path: inset(50%);
+      white-space: nowrap;
+      border: 0;
+    }
+
+    @media print {
+      /* A control that cannot be operated on paper is furniture. */
+      .theme-toggle,
+      .theme-toggle-host {
+        display: none !important;
+      }
+    }
+
+    /* Issued, Due and Points on one line, spread across whatever horizontal
+       space the author leaves. space-between rather than a fixed gap: the
+       point is to use the width, and the separators are real elements so they
+       are spaced with everything else rather than hugging the item after
+       them.
+
+       flex: 1 with min-width: 0 so a long author shortens this group instead
+       of pushing it off the page. */
+    .doc-facts {
+      min-width: 0;
+      display: flex;
+      flex-wrap: wrap;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 0.35rem 0.5rem;
+    }
+
+    .doc-fact {
+      white-space: nowrap;
+    }
+
+    /* Laid out as inline text rather than a flex row. Inline content wraps
+       between names on its own, and the spaces between them are real
+       characters -- a flex gap paints the space but leaves nothing to copy,
+       so the header reads "AuthorAda Lovelace" in a paste or a pdftotext. */
+    .doc-author {
+      white-space: nowrap;
+    }
+
+    .doc-author-sep {
+      color: var(--text-faint);
+    }
+
+    .doc-fact-sep {
+      color: var(--text-faint);
     }

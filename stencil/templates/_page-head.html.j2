@@ -5,11 +5,79 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>$if(program)$$program$: $endif$$title$</title>
 
+  <!-- Theme resolution. Inline, synchronous, and ahead of every stylesheet on
+       purpose: anything deferred paints the light palette first, so a reader
+       who chose dark gets a white flash on every page load.
+
+       Resolution happens here rather than through a prefers-color-scheme
+       variant in CSS so the dark palette is written once instead of twice.
+       These pages already need JS for Mermaid, tabs and highlighting, so
+       no-JS-means-light is an acceptable floor.
+
+       data-theme carries the RESOLVED value the stylesheet reads;
+       data-theme-pref carries the preference the control shows as pressed.
+       They differ whenever the preference is "system". -->
+  <script>
+  (function () {
+    var KEY = 'stencil-theme';
+    var root = document.documentElement;
+    var query = window.matchMedia('(prefers-color-scheme: dark)');
+    var listeners = [];
+
+    /* Every storage access is wrapped. Private windows and blocked site data
+       throw on access, and html-to-pdf.js treats an uncaught page error as a
+       failed build -- so an unguarded read here would turn a reader's browser
+       setting into a broken PDF. */
+    function read() {
+      try {
+        var stored = window.localStorage.getItem(KEY);
+        return stored === 'light' || stored === 'dark' ? stored : 'system';
+      } catch (error) {
+        return 'system';
+      }
+    }
+
+    function apply(pref) {
+      var theme = pref === 'system' ? (query.matches ? 'dark' : 'light') : pref;
+      root.dataset.theme = theme;
+      root.dataset.themePref = pref;
+      /* color-scheme is set in CSS, not here. An inline style is not scoped
+         by any media query, so assigning it would put "dark" somewhere
+         @media screen cannot reach and hand the print formatter a dark
+         canvas -- the one hole in the containment. */
+      for (var i = 0; i < listeners.length; i++) listeners[i](theme, pref);
+    }
+
+    apply(read());
+
+    /* Only while the preference is "system": an explicit choice outranks the
+       operating system, and following it anyway would silently overturn what
+       the reader picked. */
+    query.addEventListener('change', function () {
+      if (read() === 'system') apply('system');
+    });
+
+    window.__stencilTheme = {
+      get: read,
+      set: function (pref) {
+        try { window.localStorage.setItem(KEY, pref); } catch (error) {}
+        apply(pref);
+      },
+      subscribe: function (fn) { listeners.push(fn); fn(root.dataset.theme, read()); },
+    };
+  })();
+  </script>
+
   <!-- Bootstrap 5 -->
   <style>{{ assets.bootstrap_css }}</style>
 
   <!-- Highlight.js for code syntax highlighting -->
   <style>{{ assets.highlight_css }}</style>
+  <!-- The dark counterpart, scoped in assets.py to :root[data-theme="dark"]
+       and wrapped here in @media screen. Same containment rule as every other
+       dark declaration: print cannot match the block, so a printed listing
+       keeps the light theme with nothing to undo. -->
+  <style>@media screen { {{ assets.highlight_css_dark }} }</style>
 
   <!-- Crimson Pro (serif) + Inter (sans) + JetBrains Mono; latin + latin-ext only -->
   <style>{{ assets.fonts_css }}</style>

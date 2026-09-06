@@ -91,8 +91,17 @@
         for f in *.html; do
           [ -f "$$f" ] || continue
           case "$$f" in html-template.html|slide-template.html) continue ;; esac
-          echo "Checking $$f..."
-          pa11y --config /opt/pa11y.json --standard WCAG2AA "file:///workspace/$$f" || failed=1
+          # Both themes, each forced by clicking the control -- so these are
+          # rendered pages rather than claims about them, and neither pass is
+          # left to resolve `system` into whatever the runner happens to
+          # report. A light pass that inherited a dark runner would measure
+          # dark twice and still go green.
+          echo "Checking $$f (light)..."
+          pa11y --config /opt/pa11y-light.json --standard WCAG2AA \
+            "file:///workspace/$$f" || failed=1
+          echo "Checking $$f (dark)..."
+          pa11y --config /opt/pa11y-dark.json --standard WCAG2AA \
+            "file:///workspace/$$f" || failed=1
         done
         exit $$failed
     restart: "no"

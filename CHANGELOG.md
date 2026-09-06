@@ -9,6 +9,61 @@ and the closed epics in `.beads/issues.jsonl` are the readable index.
 How the version gets bumped is written down in
 [AGENTS.md](AGENTS.md#cutting-a-release), not here.
 
+## 0.12.0
+
+- **A light/dark/system theme control on every HTML page**, top right on a
+  document and in the toolbar on a deck. Three segments in a `radiogroup`, so
+  all three states are visible and the pressed one says which is active. The
+  choice persists per storage origin; over `file://` browsers disagree about
+  what that means, so it may or may not follow you between handouts -- serve
+  the folder over HTTP if that matters.
+
+  The theme resolves in a synchronous inline script ahead of every stylesheet.
+  Anything deferred paints light first, which is a white flash for a dark
+  reader on every load. `data-theme` carries the resolved value the stylesheet
+  reads and `data-theme-pref` the preference the control shows; they differ
+  whenever the preference is "system".
+
+- **PDFs are light by construction, not by configuration.** Every colour in
+  both stylesheets is a token, and every dark value lives in one `@media screen` block. Print does not match `@media screen`, so the light `:root`
+  values are the only ones a printer sees — no second copy of the palette to
+  keep in sync, and it holds for a browser's own Ctrl+P as well as for
+  Puppeteer. Measured with `data-theme="dark"` still set: screen paints
+  `rgb(27,31,39)`, print paints `rgb(255,255,255)`.
+
+  Bootstrap's `data-bs-theme` is deliberately unused. Its dark block sits
+  inside the vendored CSS and is *not* wrapped, so that attribute would put a
+  second dark mechanism in the page that print cannot switch off. The
+  variables these pages surface are mapped from stencil's own tokens instead.
+
+- **Diagrams follow the theme.** Mermaid bakes its colours into the SVG at
+  draw time, so a theme change redraws them, with `themeVariables` read off
+  the live tokens rather than a second palette that would drift.
+  `__mermaidReady` is still set once and never cleared — `html-to-pdf.js`
+  blocks on it, and a PDF build never changes theme.
+
+- **`make check-access` runs pa11y in both themes**, clicking the real control
+  rather than injecting state. It found three failures the first time it ran:
+  `--accent` was serving as both ink and fill, so dark turned the deck's
+  Present button white-on-pale at 2.35:1; `--text-faint` had been 2.60:1 for
+  as long as it was `::before` content the checker could not see; and links
+  stayed at Bootstrap's light-mode blue because 5.3 resolves them through
+  `--bs-link-color-rgb`, not `--bs-link-color`.
+
+- **The header reads as a header.** The points badge is gone from beside the
+  title — it read as UI chrome on a document that has none — and Points joins
+  Issued and Due on one line spread across the width. The byline is two
+  stacked lines, authors above facts, so a team's `author:` list has room.
+  Each name is its own element, so a list wraps between names and never
+  mid-name. The subtitle is italic and sits tight to the title. `program`,
+  `section` and `term` share one line, the section attaching to its program
+  with a full stop — `CS 425.001 · Fall 2026`.
+
+  The gaps in that header are real characters. A flex `gap` paints space and
+  leaves nothing behind, so the header copied out of the page read
+  "AuthorAda Lovelace". The same is not yet true of the PDF text layer
+  (stn-40n).
+
 ## 0.11.0
 
 - **`points` renders as a badge beside the title.** `points: 50` reads `50 pts`

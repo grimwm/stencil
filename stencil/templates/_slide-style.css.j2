@@ -18,10 +18,10 @@
       min-height: 30rem;
       margin: 0 0 2rem;
       padding: 2.25rem 2.75rem 3rem;
-      background: #fff;
-      border: 1px solid #d8dee9;
+      background: var(--deck-surface);
+      border: 1px solid var(--deck-border);
       border-radius: 10px;
-      box-shadow: 0 2px 14px rgba(20, 30, 60, 0.10);
+      box-shadow: 0 2px 14px var(--deck-shadow);
       break-after: page;
     }
 
@@ -34,7 +34,7 @@
       font-family: var(--font-sans);
       font-size: 0.8rem;
       font-variant-numeric: tabular-nums;
-      color: #8a93a5;
+      color: var(--deck-counter);
     }
 
     /* The slide's own heading is its title bar, whatever level it came in at.
@@ -48,8 +48,8 @@
     .slide:not(.slide--title) > h3:first-child {
       margin-top: 0;
       padding-bottom: 0.4rem;
-      border-bottom: 2px solid var(--accent-color);
-      color: var(--accent-color);
+      border-bottom: 2px solid var(--accent);
+      color: var(--accent);
       font-size: 1.75rem;
       line-height: 1.25;
     }
@@ -66,9 +66,9 @@
     .slide--title {
       justify-content: center;
       align-items: flex-start;
-      background: linear-gradient(135deg, #29417a 0%, #3c5da8 100%);
-      border-color: #22335e;
-      color: #fff;
+      background: linear-gradient(135deg, var(--deck-accent-from) 0%, var(--deck-accent-to) 100%);
+      border-color: var(--deck-accent-edge);
+      color: var(--on-accent);
     }
 
     /* Brand above the context line on a title slide, the same order a
@@ -78,7 +78,7 @@
       font-family: var(--font-sans);
       font-size: 1.35rem;
       font-weight: 600;
-      color: #fff;
+      color: var(--on-accent);
       margin-bottom: 0.6rem;
     }
 
@@ -102,7 +102,7 @@
       font-size: 0.95rem;
       letter-spacing: 0.14em;
       text-transform: uppercase;
-      color: rgba(255, 255, 255, 0.78);
+      color: var(--on-accent-muted);
       margin-bottom: 1rem;
     }
 
@@ -111,7 +111,15 @@
     .slide--title .deck-context span + span::before {
       content: "\00b7";
       margin: 0 0.45em;
-      color: rgba(255, 255, 255, 0.5);
+      color: var(--on-accent-faint);
+    }
+
+    /* As in the document header: the section joins its program with a full
+       stop and no gap, so "CS 425.001" reads as one identifier. */
+    .slide--title .deck-context .deck-section::before {
+      content: ".";
+      margin: 0;
+      color: inherit;
     }
 
     .slide--title .deck-title {
@@ -122,49 +130,42 @@
       margin: 0 0 0.75rem;
       border: none;
       padding: 0;
-      color: #fff;
+      color: var(--on-accent);
     }
 
     .slide--title .deck-subtitle {
       font-size: 1.5rem;
+      font-style: italic;
       line-height: 1.35;
-      color: rgba(255, 255, 255, 0.9);
+      color: var(--on-accent-bright);
       margin-bottom: 1.25rem;
       max-width: 46rem;
     }
 
-    /* The title slide sits on the accent gradient, so the badge is a
-       translucent plate rather than the light one documents use. Subordinate
-       to .deck-title's 2.9rem for the reason .doc-points is subordinate to the
-       document title.
 
-       The plate darkens rather than lightens. A translucent white one washes
-       toward the page as the gradient reaches its light end (#3c5da8), and
-       white text on that lands near 4:1 -- under AA for text this size, which
-       `make check-access` runs pa11y to catch. Darkening holds well clear of
-       the threshold at both gradient stops.
+    /* Authors above the facts, matching the document header. Left-aligned
+       like every other line on this slide -- .slide--title sets
+       align-items: flex-start, so a centred box would only centre text
+       inside its own width and sit left of everything else anyway. */
+    .slide--title .deck-authors {
+      font-family: var(--font-sans);
+      font-size: 1.05rem;
+      color: var(--on-accent-bright);
+      margin: 0 0 0.35rem;
+    }
 
-       No white-space: nowrap. A non-numeric `points` renders verbatim and can
-       be long, and nowrap would push it off a narrow slide; the non-breaking
-       space frontmatter-filter.lua puts between the number and its unit is
-       what keeps "50 pts" together without forbidding a wrap. */
-    .slide--title .deck-points {
-      display: inline-block;
-      margin-left: 0.6rem;
-      padding: 0.12em 0.5em;
-      border-radius: 999px;
-      background: rgba(16, 26, 52, 0.35);
-      color: #fff;
-      font-size: 1.1rem;
-      font-weight: 600;
-      overflow-wrap: anywhere;
-      vertical-align: middle;
+    .slide--title .deck-author {
+      white-space: nowrap;
+    }
+
+    .slide--title .deck-author-sep {
+      color: var(--on-accent-faint);
     }
 
     .slide--title .deck-meta {
       font-family: var(--font-sans);
       font-size: 1rem;
-      color: rgba(255, 255, 255, 0.78);
+      color: var(--on-accent-muted);
       margin: 0;
     }
 
@@ -191,8 +192,8 @@
     .lead-in {
       font-size: 1.3rem;
       line-height: 1.45;
-      color: #2c3444;
-      border-left: 4px solid var(--accent-color);
+      color: var(--deck-body-text);
+      border-left: 4px solid var(--accent);
       padding-left: 1rem;
       margin: 0.5rem 0 1rem;
     }
@@ -200,15 +201,15 @@
     /* ::: takeaway  ->  boxed conclusion, sits at the bottom of a slide */
     .takeaway {
       margin-top: auto;
-      background: #eef2fb;
-      border: 1px solid #c3cfe8;
+      background: var(--deck-quote-bg);
+      border: 1px solid var(--deck-quote-border);
       border-radius: 8px;
       padding: 0.85rem 1.15rem;
       font-family: var(--font-sans);
       font-size: 1rem;
     }
     .takeaway > :last-child { margin-bottom: 0; }
-    .takeaway strong { color: var(--accent-color); }
+    .takeaway strong { color: var(--accent); }
 
     .center { text-align: center; }
 
@@ -237,11 +238,11 @@
       gap: 0.6rem;
       font-family: var(--font-sans);
       font-size: 0.85rem;
-      background: rgba(255, 255, 255, 0.94);
-      border: 1px solid #ccd4e2;
+      background: var(--deck-toolbar-bg);
+      border: 1px solid var(--deck-toolbar-border);
       border-radius: 999px;
       padding: 0.35rem 0.5rem 0.35rem 0.9rem;
-      box-shadow: 0 2px 10px rgba(20, 30, 60, 0.16);
+      box-shadow: 0 2px 10px var(--deck-shadow-md);
       /* Draggable, for when it sits on top of a figure. `grab` belongs to the
          bar itself; the button below keeps its own pointer cursor. */
       cursor: grab;
@@ -255,7 +256,7 @@
       cursor: grabbing;
       /* No easing mid-drag: the bar has to track the pointer exactly. */
       transition: none;
-      box-shadow: 0 6px 20px rgba(20, 30, 60, 0.26);
+      box-shadow: 0 6px 20px var(--deck-shadow-lg);
     }
 
     /* Idle. Faded rather than display:none so the return can animate, and
@@ -274,21 +275,21 @@
 
     .deck-toolbar button {
       font: inherit;
-      color: #fff;
-      background: var(--accent-color);
+      color: var(--on-accent);
+      background: var(--accent-fill);
       border: none;
       border-radius: 999px;
       padding: 0.3rem 0.9rem;
       cursor: pointer;
     }
 
-    .deck-toolbar button:hover { background: #1d2f5c; }
-    .deck-toolbar button:focus-visible { outline: 3px solid #ffbf47; outline-offset: 2px; }
-    .deck-position { color: #55607a; font-variant-numeric: tabular-nums; }
+    .deck-toolbar button:hover { background: var(--deck-toolbar-hover); }
+    .deck-toolbar button:focus-visible { outline: 3px solid var(--focus-ring); outline-offset: 2px; }
+    .deck-position { color: var(--deck-toolbar-fg); font-variant-numeric: tabular-nums; }
 
     /* --- Present mode: one slide, full viewport --- */
     html.presenting { font-size: clamp(16px, 0.85vw + 11px, 25px); }
-    html.presenting body { overflow: hidden; background: #e9edf4; }
+    html.presenting body { overflow: hidden; background: var(--deck-presenting-bg); }
     html.presenting .container.deck { max-width: none; padding: 0; }
     html.presenting .slide { display: none; }
 
@@ -359,15 +360,15 @@
 
 
       .slide--title {
-        background: #29417a !important;
-        color: #fff !important;
+        background: var(--print-deck-bg) !important;
+        color: var(--print-deck-fg) !important;
         padding: 1.5rem !important;
         -webkit-print-color-adjust: exact;
         print-color-adjust: exact;
       }
 
       .takeaway {
-        background: #eef2fb !important;
+        background: var(--print-deck-quote-bg) !important;
         -webkit-print-color-adjust: exact;
         print-color-adjust: exact;
       }
