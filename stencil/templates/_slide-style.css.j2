@@ -181,17 +181,84 @@
 
     /* --- Content helpers usable from markdown fenced divs --- */
 
-    /* ::: columns  ->  side-by-side halves; ::: {.columns .wide-left} to bias */
+    /* ::: columns  ->  one row, however many children there are.
+
+       This was `grid-template-columns: 1fr 1fr`, which is two columns whatever
+       you put in it: three children left an empty cell and four stacked 2x2.
+       Both were real slides -- The Interview Funnel and the STAR method in the
+       cs425 job-search deck -- and both read as mistakes rather than choices.
+
+       grid-auto-flow: column with equal auto columns takes the count from the
+       content instead, so two stay two and four sit in a row. wide-left and
+       wide-right still work: they name two explicit tracks, which is exactly
+       what a biased two-column split is. */
     .columns {
       display: grid;
-      grid-template-columns: 1fr 1fr;
+      grid-auto-flow: column;
+      grid-auto-columns: minmax(0, 1fr);
       gap: 1.75rem;
       align-items: start;
     }
-    .columns.wide-left  { grid-template-columns: 1.6fr 1fr; }
-    .columns.wide-right { grid-template-columns: 1fr 1.6fr; }
+    /* minmax(0, ...) rather than 1fr on both: a grid track's default minimum is
+       its content, so one long unbroken word in a card widens that column and
+       squeezes the rest. */
+    .columns.wide-left  { grid-template-columns: 1.6fr minmax(0, 1fr); }
+    .columns.wide-right { grid-template-columns: minmax(0, 1fr) 1.6fr; }
     .columns > * > :first-child { margin-top: 0; }
     .columns > * > :last-child { margin-bottom: 0; }
+
+    /* ::: {.columns .cards}  ->  every column becomes a card.
+
+       Opt-in, not the default. A card costs vertical space on a medium that
+       has none to give: _slide-style.css caps figures at min(42vh, 24rem)
+       precisely because one figure can push a slide off the page, and padding
+       on every column of every existing deck would do the same thing more
+       quietly. Decks that want cards say so.
+
+       Built from the tokens .takeaway already uses, so a card matches the
+       boxed conclusion beneath it rather than introducing a second surface. */
+    .columns.cards > * {
+      background: var(--deck-quote-bg);
+      border: 1px solid var(--deck-quote-border);
+      border-radius: 10px;
+      padding: 1rem 1.15rem;
+    }
+
+    /* An accent per card, reaching the left edge and the lead run together.
+
+       --card-accent is a token like any other -- defined once per palette in
+       _page-style.css.j2, defaulting to the deck accent -- so a card carries
+       the house colour with no extra markup and ::: {.column .accent-2}
+       overrides it for one. Defining it only here would put it outside the
+       token layer, where test_theme.py's undefined-token guard cannot see it;
+       that guard caught exactly this, which is what it was added for after
+       0.12.0 shipped five references to a --accent-color that did not exist. The border-left echoes .lead-in, which has always drawn a
+       4px accent edge -- this is that idea made per-card rather than a
+       different device that happens to look similar. */
+    .columns.cards > * {
+      border-left: 4px solid var(--card-accent);
+    }
+    .columns > .accent-2 { --card-accent: var(--deck-accent-to); }
+    .columns > .accent-3 { --card-accent: var(--hl-builtin); }
+    .columns > .accent-4 { --card-accent: var(--deck-accent-edge); }
+
+    /* The lead run of a card -- "S -- Situation" -- picks up its accent, the
+       way .takeaway strong already picks up the deck's. Scoped to the FIRST
+       paragraph so a bold word later in the card's prose stays body text;
+       emphasis inside a sentence is not a heading. */
+    .columns.cards > * > p:first-child strong {
+      color: var(--card-accent);
+    }
+
+    /* ::: {.columns .cards .lead-letter}  ->  the first character of each
+       card's lead run, set large. The reference deck this was modelled on
+       gives STAR a 3xl letter above the label; ::first-letter reaches it
+       without asking the author to split the text into two elements. */
+    .columns.lead-letter > * > p:first-child strong::first-letter {
+      font-size: 1.9em;
+      font-weight: 800;
+      line-height: 1;
+    }
 
     /* ::: lead-in  ->  a pull statement, the one thing to remember */
     .lead-in {
