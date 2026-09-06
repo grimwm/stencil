@@ -886,18 +886,22 @@ other two changes have already broken.
 
 ```bash
 make doc            # or make slide
-make check-access
-make pdf
+make check-access   # the HTML, at WCAG 2.1 AA
+make check-pdf      # the PDF, at PDF/UA-1  (builds it first)
 ```
 
-`make check-access` runs pa11y against every built HTML file at WCAG 2.1 AA, in **both** themes —
-it clicks the theme control the way a reader would, because a colour that only fails in dark is
-still a failure. It is the cheap check that catches a missing diagram caption, a contrast problem,
-or a heading level skipped on the way down.
+**Two checks, because there are two standards.** `make check-access` runs pa11y against every built
+HTML file at WCAG 2.1 AA, in **both** themes — it clicks the theme control the way a reader would,
+because a colour that only fails in dark is still a failure. It catches a missing diagram caption, a
+contrast problem, or a heading level skipped on the way down.
 
-`make pdf` is the other half, and it checks something pa11y cannot see. WCAG and PDF/UA-1
-(ISO 14289-1) disagree about figures: an HTML page can be perfectly accessible and still produce a
-PDF whose `<figure>` wrappers carry no accessible name, because HTML has no `alt` on `<figure>` and
-WCAG has no rule requiring one. Everything needed to close that gap happens inside `make pdf`, so a
-handout that passes `check-access` and was built with `make pdf` satisfies both standards. One
-built with Ctrl+P satisfies only the first.
+`make check-pdf` runs veraPDF against the PDFs at PDF/UA-1 (ISO 14289-1), and it depends on
+`make pdf`, so it builds what it is about to check. The two standards disagree about figures: an
+HTML page can be perfectly accessible and still produce a PDF whose `<figure>` wrappers carry no
+accessible name, because HTML has no `alt` on `<figure>` and WCAG has no rule requiring one. So
+`check-access` passing tells you nothing about the PDF, and this is the target that does.
+
+If `check-pdf` says **"found no PDF to check"**, that is the check refusing to lie to you rather
+than a bug. veraPDF exits successfully when handed no files, so the target counts what it opened
+and treats zero as an error — otherwise a run in a cleaned directory would report a pass having
+looked at nothing.

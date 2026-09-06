@@ -9,6 +9,50 @@ and the closed epics in `.beads/issues.jsonl` are the readable index.
 How the version gets bumped is written down in
 [AGENTS.md](AGENTS.md#cutting-a-release), not here.
 
+## 0.22.0
+
+- **`make check-pdf` runs veraPDF against the generated PDFs.** Every
+  PDF/UA-1 number in this changelog up to now was produced by hand. Nothing in
+  the repository ran the checker, so a regression in the PDF would have been
+  invisible until someone thought to look — which, for the 13 unnamed figures
+  in 0.12.0, was three releases later.
+
+  It is a separate target from `check-access` because it measures a separate
+  standard. pa11y reads the HTML at WCAG 2.1 AA; veraPDF reads the PDF at
+  PDF/UA-1 (ISO 14289-1). A page can pass the first and produce a file that
+  fails the second, and the `<figure>` wrapper is exactly that case.
+
+- **The gate's real work is refusing to pass on nothing.** Measured against
+  `verapdf/cli:v1.30.2`: invoked with no file arguments, veraPDF **exits 0 and
+  prints nothing**. So the obvious implementation —
+  `verapdf --flavour ua1 *.pdf` — reports a clean bill of health when it is
+  run before `make pdf`, after a clean, or behind a glob that matched
+  nothing. It is decoration that looks like a check.
+
+  `check-pdf` counts the files it is about to open and fails loudly at zero,
+  names each file on its own invocation rather than handing over a glob, and
+  says how many it checked. `tests/test_pdf_ua_gate.py` points it at an empty
+  directory and requires a non-zero exit, so removing the guard fails a test
+  rather than quietly restoring the silent pass.
+
+  This is the second no-op of its kind in two releases. 0.21.0 nearly shipped
+  a content-stream rewrite that read compressed bytes, found no operators, and
+  passed everything. Both had the same shape: a step that does nothing and
+  reports success.
+
+- **The image tag and the script are pinned and shared.** `VERAPDF_IMAGE` and
+  `VERAPDF_SCRIPT` live in `stencil/pipeline.py`, the way the pandoc argv
+  already does, so the compose file renders the same text a test runs rather
+  than an approximation of it. Compose substitutes `$VAR` inside a service
+  definition, so the rendered form doubles every `$` — an unescaped `$found`
+  arrives as the empty string and `[ "" -eq 0 ]` is not a comparison that
+  fails safely. That has its own test.
+
+- **Proven against a real regression, not only against an empty directory.**
+  Reverting 0.21.0's artifact marking makes the conformance test fail. A gate
+  that only ever answers PASS is indistinguishable from one that has stopped
+  working.
+
 ## 0.21.0
 
 - **Generated PDFs are PDF/UA-1 conformant.** veraPDF 1.30.2 `--flavour ua1`,

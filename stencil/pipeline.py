@@ -35,6 +35,48 @@ PANDOC_IMAGE = "docker.io/pandoc/core:3.10.0.0"
 BROWSER_DOCKERFILE = "Dockerfile.browser"
 BROWSER_IMAGE_TAG = "localhost/stencil_browser:test"
 
+# PDF/UA-1 conformance checking. Pinned, because veraPDF's rule set is the
+# thing being asserted against: an unpinned tag lets a build go red or green
+# on someone else's release rather than on a change here.
+VERAPDF_IMAGE = "docker.io/verapdf/cli:v1.30.2"
+
+# verapdf is the image's ENTRYPOINT and is not on PATH. Measured: `sh -c
+# verapdf ...` inside this image exits 127.
+VERAPDF_BIN = "/opt/verapdf/verapdf"
+
+# The script the generated check-pdf service runs, kept here so a test runs the
+# SAME text rather than a re-typed approximation of it. tests/test_pdf_ua_gate.py
+# asserts the rendered compose file carries it verbatim.
+#
+# THE ZERO-FILE GUARD IS WHY THIS IS A SCRIPT AND NOT A BARE COMMAND. Measured
+# against verapdf/cli:v1.30.2: invoked with no file arguments, veraPDF exits 0
+# and prints nothing. So `check-pdf` run before `pdf`, or in a directory whose
+# PDFs were cleaned, or behind a glob that matched nothing, would report a
+# clean bill of health having opened no file -- the same shape as the
+# getContentsString() no-op that 0.21.0 nearly shipped. Nothing to check is a
+# build error here, not a pass.
+#
+# Each file is named on its own invocation rather than handed over as a glob,
+# so the count of results is the count of files.
+VERAPDF_SCRIPT = f"""\
+found=0
+failed=0
+for f in *.pdf; do
+  [ -f "$f" ] || continue
+  found=$((found + 1))
+  echo "Checking $f (PDF/UA-1)..."
+  {VERAPDF_BIN} --flavour ua1 --format text "$f" || failed=1
+done
+if [ "$found" -eq 0 ]; then
+  echo "check-pdf found no PDF to check in $(pwd)." >&2
+  echo "Run 'make pdf' first. veraPDF exits 0 on an empty file list, so this" >&2
+  echo "would otherwise have reported success having checked nothing." >&2
+  exit 1
+fi
+echo "Checked $found PDF(s) against PDF/UA-1."
+exit $failed
+"""
+
 # The two constraints this module exists to protect. Both were reproduced by
 # hand once and would otherwise be reproducible only by hand again.
 _CITEPROC_AFTER_HIDDEN = (
@@ -270,6 +312,42 @@ def html_to_pdf(
             "html-to-pdf.js",
             source,
             output,
+        ],
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+    )
+
+
+def verapdf(
+    *,
+    workdir: Path,
+    runtime: str | None = None,
+    timeout: float | None = None,
+) -> subprocess.CompletedProcess:
+    """Run the generated check-pdf service's script over a directory.
+
+    Same image, same script, same mount as the compose service, so a test
+    here measures the gate rather than something resembling it.
+    """
+    runtime = runtime or container_runtime()
+    if runtime is None:
+        raise RuntimeError("no container runtime found (looked for docker, podman)")
+
+    return subprocess.run(
+        [
+            runtime,
+            "run",
+            "--rm",
+            "-v",
+            f"{Path(workdir).resolve()}:/workspace:z",
+            "-w",
+            "/workspace",
+            "--entrypoint",
+            "sh",
+            VERAPDF_IMAGE,
+            "-c",
+            VERAPDF_SCRIPT,
         ],
         capture_output=True,
         text=True,
