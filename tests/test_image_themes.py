@@ -129,12 +129,25 @@ def test_the_rule_that_hides_the_dark_variant_stays_outside_media_screen():
     for block in screen_blocks(css):
         outside = outside.replace(block, "")
 
-    assert ".doc-img--dark" in outside, (
-        "the rule hiding the dark variant is not outside @media screen, so "
-        "print no longer hides it and both figures reach the page"
+    def declarations(css_text, selector):
+        m = re.search(re.escape(selector) + r"\s*\{([^}]*)\}", css_text)
+        return m.group(1) if m else None
+
+    # Placement AND declaration. Checking only where a selector sits would
+    # pass for a rule that had been placed correctly and then changed to say
+    # display:block, which is the same broken page with a tidier stylesheet.
+    hidden = declarations(outside, ".doc-img--dark")
+    assert hidden and "display: none" in hidden, (
+        "the rule hiding the dark variant is not outside @media screen, or no "
+        f"longer hides it, so both figures reach a printed page: {hidden!r}"
     )
-    assert '[data-theme="dark"] .doc-img--dark' in inside, (
-        "the rule showing the dark variant is not inside @media screen"
+    shown = declarations(inside, ':root[data-theme="dark"] .doc-img--dark')
+    assert shown and "display: inline" in shown, (
+        f"the dark variant is not shown under a dark theme: {shown!r}"
+    )
+    swapped = declarations(inside, ':root[data-theme="dark"] .doc-img--light')
+    assert swapped and "display: none" in swapped, (
+        f"the light variant is not hidden under a dark theme: {swapped!r}"
     )
 
 
