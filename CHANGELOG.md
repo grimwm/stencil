@@ -9,6 +9,73 @@ and the closed epics in `.beads/issues.jsonl` are the readable index.
 How the version gets bumped is written down in
 [AGENTS.md](AGENTS.md#cutting-a-release), not here.
 
+## 0.13.0
+
+- **The header's PDF text layer no longer jams words together.** Extracted
+  text read `IssuedSep 05`, `DueSep 12`, `Lovelace·Grace Hopper` and
+  `001·Fall 2026` on a 0.12.0 build. Anyone copying from a PDF, or reading one
+  with a screen reader, got run-on words in the header; the rendered page
+  looked perfect, and so did the HTML, which has had real spaces there since
+  0.11.0.
+
+  The measured rule, which is narrower than it looks: **a whitespace-only text
+  node sitting between two inline boxes never reaches the PDF text layer.**
+  Chromium paints the advance and emits no glyph. Substituting a non-breaking
+  space changes nothing -- a lone `&#160;` between two boxes is dropped exactly
+  the same way. What survives is a space inside a text run that also carries a
+  printing character, which is why `.doc-fact-sep`'s `&#160;&middot;&#160;`
+  already came through and why `Points&#160;50 pts` did.
+
+  So every gap moved inside its neighbour: `<span class="doc-label">Issued&#160;</span>`,
+  and each author carries its own trailing space with the middot separator
+  taking the other side. A `<wbr>` after each separator gives back the line
+  break the non-breaking pair removes -- six names still wrap between names,
+  on screen and in print, rather than overflowing.
+
+- **The space between two authors is now in the accessibility tree as well.**
+  The separator is `aria-hidden`, which removes its whole subtree, so a space
+  parked inside it would reach the PDF and not a screen reader -- the same
+  defect wearing the other coat. Chromium's accessibility tree for the 0.12.0
+  markup read `Author`, `Ada Lovelace`, `Grace Hopper` as adjacent runs with
+  no whitespace anywhere between them; it now reads `Author&nbsp;`,
+  `Ada Lovelace&nbsp;`, `Grace Hopper&nbsp;`.
+
+- **Something in this repository finally looks at a PDF.** `make check-access`
+  is pa11y, an HTML checker, so until now "the PDFs pass WCAG" was unverified
+  rather than verified-good. `tests/test_pdf.py` now asserts on a real
+  generated PDF: that both headers extract as words, and that the document is
+  tagged (`/StructTreeRoot`, `/MarkInfo /Marked true`), declares its language,
+  and sets `/ViewerPreferences /DisplayDocTitle` so a reader announces the
+  title rather than the file name. Those four held before this release only
+  because they are Puppeteer's defaults; `html-to-pdf.js` now pins
+  `tagged: true` explicitly, and turning it off fails the test.
+
+- **What changed on the page.** The context separator's gap is held where it
+  was -- 0.4rem of margin a side became 0.12em plus the non-breaking space now
+  in the content, measured glyph-to-glyph at 14.17px before and 14.22px after
+  at letter print width. The label gap is the one real change: it tightens by
+  0.39-0.47px, because a non-breaking space rendered in the label's semibold
+  face is slightly narrower than the regular-weight word space it replaced.
+  That is 5% of the gap, and correcting it per font would over-fit to this
+  one. Nothing else moves.
+
+- **Copy-paste note.** The header's gaps are U+00A0, so text pasted out of a
+  handout carries non-breaking spaces where it used to carry ordinary ones.
+  Most tools treat them as spaces; some -- shells, diff tools, form
+  validators -- do not. This was already true of `50&nbsp;pts` since 0.11.0
+  and is now true of the labels and the author separators.
+
+- **Knowingly left alone.** The rule above applies to any painted gap, and
+  only the header was fixed. `.side-by-side` and `.columns` put two blocks of
+  text on one baseline behind a `gap` with no character behind it, and the
+  facts line's accessibility boundary comes from `.doc-facts` being
+  `display: flex` -- its children blockify -- rather than from a character.
+  Both are recorded rather than repaired here.
+
+- `pypdf` is now bounded above. The suite asserts on extracted text, and
+  pypdf's space and line-break insertion is a layout heuristic that has
+  changed across majors.
+
 ## 0.12.0
 
 - **A light/dark/system theme control on every HTML page**, top right on a

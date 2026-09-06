@@ -173,3 +173,48 @@ def test_the_header_row_wrapper_is_gone(render_soup):
         text=document('title: "T"\nprogram: "CS 425"\nauthor: Ada Lovelace\n'),
     )
     assert header_of(soup).select_one(".doc-headrow") is None
+
+
+def test_the_separators_hide_the_middot_without_hiding_the_gap(render_soup):
+    """A screen reader must still hear a boundary between two names.
+
+    The author separator is aria-hidden, which removes its whole subtree from
+    the accessibility tree. Put the space between two names inside it -- the
+    obvious way to make that space reach the PDF text layer -- and the PDF is
+    fixed while a screen reader is handed "Ada LovelaceGrace Hopper". That is
+    the same defect as the one this release fixes, wearing the other coat, and
+    `make check-access` cannot see it: neither pa11y engine has a rule for
+    adjacent text with no separating whitespace.
+
+    So this asserts the property the templates actually rely on -- that a
+    whitespace character survives with every aria-hidden subtree removed --
+    rather than predicting what any particular screen reader announces.
+    Measured against Chromium's own accessibility tree while this was written:
+    the 0.12.0 markup gave the runs 'Author', 'Ada Lovelace', 'Grace Hopper'
+    with no whitespace anywhere between them, and it now gives 'Author ',
+    'Ada Lovelace ', 'Grace Hopper '.
+    """
+    soup = render_soup(
+        "doc",
+        "a.md",
+        text=document(
+            'title: "T"\nauthor:\n  - Ada Lovelace\n  - Grace Hopper\n'
+            "date: 2026-09-01\n"
+        ),
+    )
+    meta = header_of(soup).select_one(".doc-meta")
+    assert meta is not None
+
+    for hidden in meta.select('[aria-hidden="true"]'):
+        hidden.decompose()
+
+    # Not normalized: the point is that a whitespace character is present, and
+    # " ".join(x.split()) would insert one wherever the DOM has none.
+    accessible = meta.get_text()
+    assert "LovelaceGrace" not in accessible, (
+        "the only gap between two authors lives inside the aria-hidden "
+        f"separator, so it is not in the accessibility tree: {accessible!r}"
+    )
+    assert "AuthorAda" not in accessible, (
+        f"the label runs into the first author: {accessible!r}"
+    )

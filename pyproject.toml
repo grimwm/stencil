@@ -22,8 +22,13 @@ dev = [
     # Structural assertions on rendered pages. The deck reference-list test
     # needs a real ancestor chain, not a substring match.
     "beautifulsoup4>=4.12",
-    # Page geometry and text extraction from the generated PDFs.
-    "pypdf>=4.0",
+    # Page geometry and text extraction from the generated PDFs. Bounded above
+    # since 0.13.0: tests/test_pdf.py now asserts on extracted *text*, and
+    # pypdf's space and line-break insertion is a layout heuristic that has
+    # changed materially across majors. An upper bound makes that a deliberate
+    # upgrade with a test run behind it rather than a silent change in what the
+    # accessibility guards are sensitive to.
+    "pypdf>=4.0,<7",
 ]
 
 [project.scripts]
