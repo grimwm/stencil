@@ -212,6 +212,7 @@ def test_a_doc_without_sources_gets_no_pkg_target(makefile):
 SHARED_PAGE_FILES = [
     "hidden-filter.lua",
     "mermaid-figure-filter.lua",
+    "figure-name-filter.lua",
     "embed-images.lua",
     "html-to-pdf.js",
     "Dockerfile.browser",

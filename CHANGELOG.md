@@ -9,6 +9,63 @@ and the closed epics in `.beads/issues.jsonl` are the readable index.
 How the version gets bumped is written down in
 [AGENTS.md](AGENTS.md#cutting-a-release), not here.
 
+## 0.15.0
+
+- **Every figure in a generated PDF now carries an accessible name.** A PDF/UA
+  checker reported 13 text-alternative failures on a 0.12.0 deck. All 13 were
+  the `<figure>` elements: Chromium tags `<figure>` itself as `/Figure`, HTML
+  has no `alt` attribute on `<figure>` for it to carry, and PDF/UA
+  (ISO 14289-1) requires `/Alt` or `/ActualText` on every one. The `<img>`
+  inside each wrapper was named correctly, which is why the count was 21
+  `/Figure`, 8 named, 13 not.
+
+  Nothing in the HTML was wrong, and that is the point. WCAG has no equivalent
+  rule, so `make check-access` passed, the test suite passed, and a five-way CI
+  matrix passed. The two standards disagree here, and only one of them was
+  being checked.
+
+  Four candidate fixes were measured in a built PDF's tag tree rather than
+  argued about, because three of them look equally correct written down:
+
+  |                                 | result                                  |
+  | ------------------------------- | --------------------------------------- |
+  | `<figcaption>` alone, no ARIA   | outer `/Figure` still unnamed — the bug |
+  | `aria-label` on `<figure>`      | `/Alt` = the label                      |
+  | `aria-labelledby` → the caption | `/Alt` = the caption's text             |
+  | `role="none"` on `<figure>`     | wrapper not tagged **— do not use**     |
+
+  `role="none"` is the trap. It removes the unnamed `/Figure`, so it clears the
+  failure — and a mermaid figure's `<svg>` is not tagged either, so the whole
+  diagram leaves the structure tree rather than being named. It reads as a fix
+  and is a deletion.
+
+  A new `figure-name-filter.lua` sets `aria-labelledby` on every figure,
+  pointing at its own caption, so the name is derived from text already on the
+  page rather than copied into an attribute that can drift from the caption
+  beside it. It runs after `mermaid-figure-filter.lua`, which is what turns a
+  mermaid block into a figure in the first place.
+
+- **Mermaid diagrams are named in HTML too, not just in the PDF.** The drawn
+  diagram is an `<svg>` full of shapes and loose label text with no name of its
+  own; a screen reader walked into it and read the node labels as stray words.
+  The container now takes `role="img"` and the caption as its `aria-label`.
+  In the PDF this promotes the diagram to a named `/Figure` of its own, so the
+  diagram is in the structure tree instead of absent from it.
+
+- **A mermaid caption is one paragraph again, not one per word.**
+  `pandoc.Caption` takes blocks first and was being handed inlines, so pandoc
+  coerced the list and every `Str` and `Space` became a block: one
+  `<figcaption>` holding four of them. Found while wiring the fix above, which
+  reads the caption's structure.
+
+- **No change for table headers, deliberately.** The ticket recorded all 20
+  `/TH` on a real deck reaching the PDF with `/Scope: None`, and a Lua filter
+  was planned to add `scope="col"`. Measured on that same PDF, every one of
+  them already carries `/Scope /Column`: Chromium infers it from `<thead>`, and
+  infers `/Row` for a row-header table too. So nothing was added. What was
+  added is a test pinning it, because the inference depends on table shape and
+  would be lost silently by a table with no `<thead>`.
+
 ## 0.14.0
 
 - **A document that draws no diagram no longer carries the mermaid bundle.**

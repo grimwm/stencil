@@ -156,6 +156,7 @@ Stencil includes a minimal set of templates for document generation:
 | `_slide-*.j2`                  | Deck body, slide styling and present mode          |
 | `hidden-filter.lua.j2`         | Pandoc Lua filter for hidden content sections      |
 | `mermaid-figure-filter.lua.j2` | Pandoc Lua filter for Mermaid diagram captions     |
+| `figure-name-filter.lua.j2`    | Pandoc Lua filter naming figures for PDF/UA        |
 | `slide-sections.lua.j2`        | Pandoc Lua filter that groups a deck into slides   |
 | `embed-images.lua.j2`          | Pandoc Lua filter inlining local images as base64  |
 | `html-to-pdf.js.j2`            | Puppeteer driver the `pdf` service runs            |

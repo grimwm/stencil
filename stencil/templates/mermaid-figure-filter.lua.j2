@@ -24,8 +24,13 @@ function CodeBlock(block)
   if block.classes:includes('mermaid') then
     has_mermaid = true
     local caption_text = block.attr.attributes['caption'] or 'Diagram'
-    local short = string_to_inlines(caption_text)
-    local caption = pandoc.Caption(short, {})
+    -- pandoc.Caption takes BLOCKS first. Passing the inlines straight in made
+    -- pandoc coerce the list, turning every Str and Space into a block of its
+    -- own: "Diagram: the review loop" reached the page as five paragraphs
+    -- inside one <figcaption>, which rendered as the right words with doubled
+    -- spaces and tagged as five /P in the PDF. Wrapping them in a Plain makes
+    -- it the one paragraph it always looked like.
+    local caption = pandoc.Caption({ pandoc.Plain(string_to_inlines(caption_text)) })
     return pandoc.Figure({ block }, caption)
   end
 end
