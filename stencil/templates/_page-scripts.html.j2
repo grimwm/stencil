@@ -61,6 +61,20 @@ $endif$
       div.className = 'mermaid';
       div.dataset.mermaidSource = text;
       div.textContent = text;
+      // A drawn diagram is an <svg> full of shapes and stray label text, with
+      // no name of its own. mermaid-figure-filter.lua already carries the
+      // author's caption here as data-caption, so name the container with it
+      // and make it a leaf: without role="img" a screen reader walks into the
+      // SVG and reads the node labels as loose words.
+      //
+      // This is the HTML fix only. Measured, an inline <svg> inside a div
+      // produces no PDF structure node at all, named or not -- the PDF side is
+      // the <figure> wrapper, which figure-name-filter.lua handles.
+      const caption = pre.dataset.caption;
+      if (caption) {
+        div.setAttribute('role', 'img');
+        div.setAttribute('aria-label', caption);
+      }
       pre.insertAdjacentElement('afterend', div);
       pre.remove();
     });

@@ -1,0 +1,59 @@
+-- Give every figure an accessible name, so its /Figure in the PDF carries /Alt.
+--
+-- Chromium tags a <figure> ELEMENT as /Figure, and HTML has no alt attribute on
+-- <figure> for it to carry. A figure whose only text is its <figcaption>
+-- therefore reaches the PDF unnamed, which PDF/UA (ISO 14289-1) rejects: every
+-- /Figure needs /Alt or /ActualText. Measured on a 0.12.0 deck: 21 /Figure, 8
+-- with /Alt -- the <img> inside each one -- and 13 without, which is exactly
+-- the 13 <figure> wrappers. WCAG has no equivalent rule and pa11y sees a
+-- correctly captioned figure, so nothing in the HTML checks could report this.
+--
+-- The four candidates were measured in a built PDF's tag tree rather than
+-- reasoned about, because three of them look equally correct on paper:
+--
+--   figcaption alone, no ARIA     outer /Figure has no /Alt      the bug
+--   aria-label on <figure>        /Alt = the label               works
+--   aria-labelledby -> caption    /Alt = the caption's text      works
+--   role="none" on <figure>       wrapper is not tagged at all   DO NOT
+--
+-- role="none" is the trap. It removes the unnamed /Figure and so it clears the
+-- failure, but a mermaid figure's <svg> is not tagged either -- measured, an
+-- inline <svg> inside a div produces no structure node at all -- so the whole
+-- diagram vanishes from the tag tree instead of being named. It reads as a fix
+-- and is a deletion.
+--
+-- aria-labelledby is what this sets. The name is derived from the caption
+-- already on the page, so the text exists once rather than being copied into
+-- an attribute that can drift away from the caption beside it.
+--
+-- Runs after mermaid-figure-filter, which is what turns a mermaid code block
+-- into a Figure; by this point every figure in the document is a Figure.
+
+local n = 0
+
+function Figure(fig)
+  local long = fig.caption and fig.caption.long
+  if not long or #long == 0 then
+    return nil
+  end
+  -- An empty caption cannot name anything. Nothing this pipeline generates
+  -- produces one -- pandoc's implicit_figures needs alt text to make a figure
+  -- at all, and mermaid-figure-filter defaults its caption to "Diagram" -- so
+  -- this is a guard against a future source of figures, not a case in hand.
+  if pandoc.utils.stringify(long) == '' then
+    return nil
+  end
+
+  n = n + 1
+  local id = 'figure-caption-' .. n
+  local first = long[1]
+  if #long == 1 and (first.t == 'Plain' or first.t == 'Para') then
+    -- The common shape by far: one paragraph of caption. A Span keeps the
+    -- figcaption's markup inline, where a Div would introduce a block box.
+    first.content = { pandoc.Span(first.content, pandoc.Attr(id, {}, {})) }
+  else
+    fig.caption.long = { pandoc.Div(long, pandoc.Attr(id, {}, {})) }
+  end
+  fig.attributes['aria-labelledby'] = id
+  return fig
+end

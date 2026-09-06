@@ -546,6 +546,7 @@ def generate_package(
             {"src": "frontmatter-filter.lua.j2"},
             {"src": "hidden-filter.lua.j2"},
             {"src": "mermaid-figure-filter.lua.j2"},
+            {"src": "figure-name-filter.lua.j2"},
             {"src": "embed-images.lua.j2"},
             # Drives the `pdf` compose service. Emitted for every package that
             # renders markdown, so `make pdf` needs no configuration to exist.
@@ -656,6 +657,7 @@ def get_generated_files(config: dict) -> list[str]:
         "frontmatter-filter.lua",
         "hidden-filter.lua",
         "mermaid-figure-filter.lua",
+        "figure-name-filter.lua",
         "embed-images.lua",
         "html-to-pdf.js",
         "Dockerfile.browser",

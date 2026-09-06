@@ -56,6 +56,13 @@ _FAIL_IF_WARNINGS = (
     "goes straight to stderr rather than through pandoc's warning system."
 )
 
+_FIGURE_NAME_AFTER_MERMAID = (
+    "Must follow mermaid-figure-filter, which is what turns a mermaid code\n"
+    "block into a Figure. Run first and those five figures do not exist yet,\n"
+    "so they reach the PDF as the one thing this filter exists to prevent: a\n"
+    "/Figure with no /Alt, which PDF/UA rejects and no HTML checker reports."
+)
+
 _FRONTMATTER_FIRST = (
     "Metadata only, and first: it decides what the header rows are and\n"
     "resolves show_date into the date the byline asks for, so every later\n"
@@ -89,6 +96,7 @@ def annotated_argv(kind: str) -> list[tuple[str, str | None]]:
             _CITEPROC_BEFORE_SLIDES if kind == "slide" else _CITEPROC_AFTER_HIDDEN,
         ),
         ("--lua-filter=mermaid-figure-filter.lua", None),
+        ("--lua-filter=figure-name-filter.lua", _FIGURE_NAME_AFTER_MERMAID),
         ("--lua-filter=embed-images.lua", None),
     ]
     if kind == "slide":
