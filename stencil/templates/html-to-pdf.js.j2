@@ -15,6 +15,7 @@ const {
   PDFName,
   PDFDict,
   PDFArray,
+  PDFHexString,
   PDFRawStream,
   decodePDFRawStream,
 } = require("pdf-lib");
@@ -168,6 +169,199 @@ function wrapListBodies(structTreeRoot, context) {
 
   visit(structTreeRoot.get(PDFName.of("K")));
   return wrapped;
+}
+
+// PDF/UA-1 7.18.1 t2 and 7.18.5 t2: a link annotation needs an alternate
+// description in its /Contents key. Chromium writes the /Annots array, the
+// /Link annotation and its /A /URI action, and no /Contents -- and there is no
+// HTML that makes it, because /Contents is a PDF-level description with no DOM
+// equivalent, exactly as /Alt on a /Figure had none in 0.15.0.
+//
+// Measured with veraPDF 1.30.2 --flavour ua1 on the CS 425 corpus: three of the
+// six handouts failed both rules and nothing else was wrong with them. They
+// contain hyperlinks; tests/test_pdf_ua.py's fixture did not, which is why
+// 0.21.0 reported full conformance.
+//
+// WHAT THE DESCRIPTION SAYS MATTERS MORE THAN THAT IT EXISTS. A /Contents
+// reading "https://example.com/a/b/c.html" satisfies the checker and tells a
+// reader nothing, and the whole lesson of role="none" in 0.15.0 is that
+// clearing a rule is not the same as helping anyone. So the link TEXT is
+// preferred and the URI is only the fallback.
+//
+// The text is read from the DOM before printing rather than out of the PDF.
+// Recovering it from the content stream would mean decoding subset-font glyph
+// codes back through each /ToUnicode CMap; the browser still has the words.
+
+// Anchors, in document order, with the words a reader sees. Run under print
+// emulation and filtered to anchors that actually lay out, so the list matches
+// what Chromium is about to write annotations for rather than what the screen
+// shows.
+async function collectLinkText(page) {
+  await page.emulateMediaType("print");
+  return page.evaluate(() => {
+    const norm = (value) => String(value || "").replace(/\s+/g, " ").trim();
+    return Array.from(document.querySelectorAll("a[href]"))
+      .filter((anchor) => anchor.getClientRects().length > 0)
+      .map((anchor) => {
+        // An image-only link -- a logo, a badge -- has no text of its own, and
+        // its picture's accessible name is the description a reader wants.
+        const labelled = anchor.querySelector("[aria-label], img[alt], [alt]");
+        const fromLabelled = labelled
+          ? norm(labelled.getAttribute("aria-label") || labelled.getAttribute("alt"))
+          : "";
+        const text =
+          norm(anchor.getAttribute("aria-label")) ||
+          norm(anchor.textContent) ||
+          fromLabelled ||
+          norm(anchor.getAttribute("title"));
+        return { href: anchor.href, text: text };
+      });
+  });
+}
+
+// Every /Link structure element, in reading order, with the annotations each
+// one owns. This is the join between the DOM and the file: Chromium emits one
+// /Link element per anchor and hangs an /OBJR under it for every annotation
+// that anchor produced -- two when the link wraps across a line, two again for
+// an image link. Matching annotations to anchors positionally would get those
+// cases wrong; the tree already knows the grouping.
+function collectLinkStructElems(structTreeRoot, context) {
+  const links = [];
+  const seen = new Set();
+
+  const visit = (ref, owner) => {
+    const node = context.lookup(ref);
+    if (!node) return;
+
+    if (node instanceof PDFArray) {
+      for (let i = 0; i < node.size(); i += 1) visit(node.get(i), owner);
+      return;
+    }
+    if (!(node instanceof PDFDict)) return;
+
+    const kind = node.get(PDFName.of("Type"));
+    if (kind instanceof PDFName && kind.asString() === "/OBJR") {
+      if (owner) owner.annots.push(node.get(PDFName.of("Obj")));
+      return;
+    }
+
+    // Same guard as collectStructureTypes: /K entries are shared, so an
+    // unguarded walk revisits nodes and does not finish on a large deck.
+    if (seen.has(node)) return;
+    seen.add(node);
+
+    const structure = node.get(PDFName.of("S"));
+    let current = owner;
+    if (structure instanceof PDFName && structure.asString() === "/Link") {
+      current = { annots: [] };
+      links.push(current);
+    }
+    visit(node.get(PDFName.of("K")), current);
+  };
+
+  visit(structTreeRoot.get(PDFName.of("K")), null);
+  return links;
+}
+
+function pdfStringText(value) {
+  if (!value) return null;
+  if (typeof value.decodeText === "function") {
+    try {
+      return value.decodeText();
+    } catch (error) {
+      // A malformed string is not worth failing the build over; the caller
+      // falls back to a description it can still produce.
+    }
+  }
+  if (typeof value.asString === "function") return value.asString();
+  return null;
+}
+
+function linkUri(annot, context) {
+  const action = context.lookup(annot.get(PDFName.of("A")));
+  if (!(action instanceof PDFDict)) return null;
+  return pdfStringText(context.lookup(action.get(PDFName.of("URI"))));
+}
+
+// An internal link carries a named destination instead of a URI. The name is
+// the anchor it jumps to, which is a poor description but a true one, and it
+// is only reached when the anchor had no text either.
+function linkDestination(annot, context) {
+  const dest = context.lookup(annot.get(PDFName.of("Dest")));
+  if (dest instanceof PDFName) return dest.asString().replace(/^\//, "");
+  return pdfStringText(dest);
+}
+
+function describeLinkAnnotations(pdf, domLinks) {
+  const context = pdf.context;
+  const structTreeRoot = context.lookup(
+    pdf.catalog.get(PDFName.of("StructTreeRoot"))
+  );
+  const structLinks =
+    structTreeRoot instanceof PDFDict
+      ? collectLinkStructElems(structTreeRoot, context)
+      : [];
+
+  const byHref = new Map();
+  for (const link of domLinks) {
+    if (link.text && !byHref.has(link.href)) byHref.set(link.href, link.text);
+  }
+
+  // The two lists are the same links counted two ways, so their lengths
+  // agreeing is the evidence that index i means the same anchor in both. When
+  // they disagree -- a browser change, an anchor laid out in print and not on
+  // screen -- fall back to matching on the URI rather than shifting every
+  // description by one, which would be worse than the URI itself.
+  const aligned = structLinks.length === domLinks.length;
+  const described = new Map();
+
+  structLinks.forEach((structLink, index) => {
+    for (const ref of structLink.annots) {
+      const annot = context.lookup(ref);
+      if (!(annot instanceof PDFDict)) continue;
+      const uri = linkUri(annot, context);
+      let text = null;
+      // The URI is checked per pair rather than across the whole list: one
+      // anchor that fails to line up should cost one description, not all of
+      // them.
+      if (aligned && (!uri || uri === domLinks[index].href)) {
+        text = domLinks[index].text;
+      }
+      if (!text && uri) text = byHref.get(uri) || null;
+      if (text) described.set(annot, text);
+    }
+  });
+
+  let fromText = 0;
+  let fromUri = 0;
+  for (const page of pdf.getPages()) {
+    const annots = context.lookup(page.node.get(PDFName.of("Annots")));
+    if (!(annots instanceof PDFArray)) continue;
+
+    for (let i = 0; i < annots.size(); i += 1) {
+      const annot = context.lookup(annots.get(i));
+      if (!(annot instanceof PDFDict)) continue;
+
+      const subtype = annot.get(PDFName.of("Subtype"));
+      if (!(subtype instanceof PDFName) || subtype.asString() !== "/Link") continue;
+      // Never overwrite a description the file already carries. Chromium
+      // writes none today; a version that starts to knows more than this does.
+      if (annot.get(PDFName.of("Contents"))) continue;
+
+      const text = described.get(annot);
+      const description =
+        text || linkUri(annot, context) || linkDestination(annot, context);
+      if (!description) continue;
+
+      // Hex, not a literal string: a literal is PDFDocEncoded and a link
+      // labelled with a curly quote or an accent would arrive mangled.
+      annot.set(PDFName.of("Contents"), PDFHexString.fromText(description));
+      if (text) fromText += 1;
+      else fromUri += 1;
+    }
+  }
+
+  return { fromText, fromUri, aligned: aligned || structLinks.length === 0 };
 }
 
 function xmpFor(title) {
@@ -330,7 +524,7 @@ async function markPageArtifacts(pdf) {
   return wrapped;
 }
 
-async function addPdfUaStructure(path) {
+async function addPdfUaStructure(path, domLinks) {
   const pdf = await PDFDocument.load(fs.readFileSync(path));
   const context = pdf.context;
   const catalog = pdf.catalog;
@@ -365,6 +559,7 @@ async function addPdfUaStructure(path) {
   structTreeRoot.set(PDFName.of("RoleMap"), roleMap);
 
   const wrapped = wrapListBodies(structTreeRoot, context);
+  const links = describeLinkAnnotations(pdf, domLinks || []);
   const artifacts = await markPageArtifacts(pdf);
 
   const xmp = context.stream(xmpFor(pdf.getTitle()), {
@@ -374,7 +569,7 @@ async function addPdfUaStructure(path) {
   catalog.set(PDFName.of("Metadata"), context.register(xmp));
 
   fs.writeFileSync(path, await pdf.save({ useObjectStreams: false }));
-  return { mapped: Array.from(nonStandard).sort(), wrapped, artifacts };
+  return { mapped: Array.from(nonStandard).sort(), wrapped, links, artifacts };
 }
 
 async function main() {
@@ -441,6 +636,11 @@ async function main() {
     // Again, for anything that failed after the initial load settled.
     assertNoFailures();
 
+    // Before printing, while the DOM is still there to read. page.pdf()
+    // renders in print media, and this reads it in print media too, so a link
+    // the print stylesheet hides is absent from both lists rather than one.
+    const domLinks = await collectLinkText(page);
+
     await page.pdf({
       path: output,
       // The @page rules in _page-style.css.j2 and _slide-style.css.j2 are the
@@ -459,19 +659,36 @@ async function main() {
       // tests/test_pdf.py::test_the_pdf_is_tagged fails if this goes.
       tagged: true,
     });
+
+    return domLinks;
   } finally {
     await browser.close();
   }
 }
 
 main()
-  .then(() => addPdfUaStructure(output))
-  .then(({ mapped, wrapped, artifacts }) => {
+  .then((domLinks) => addPdfUaStructure(output, domLinks))
+  .then(({ mapped, wrapped, links, artifacts }) => {
     const notes = [];
     if (mapped.length) notes.push(`role map: ${mapped.join(", ")} -> Span`);
     if (wrapped) notes.push(`${wrapped} list items wrapped in LBody`);
+    if (links.fromText || links.fromUri) {
+      notes.push(
+        `${links.fromText + links.fromUri} link(s) described` +
+          (links.fromUri ? ` (${links.fromUri} by URI)` : "")
+      );
+    }
     if (artifacts) notes.push(`${artifacts} content stream(s) artifact-marked`);
     console.log(`Wrote ${output}` + (notes.length ? ` (${notes.join("; ")})` : ""));
+    if (!links.aligned) {
+      // Not fatal -- every link still carries a description -- but the good
+      // ones came from the URI instead of the words, and that is worth saying
+      // out loud rather than discovering in a PDF a year later.
+      console.error(
+        `${output}: the link structure elements and the page's anchors did ` +
+          "not line up, so link descriptions fell back to their URIs."
+      );
+    }
   })
   .catch((error) => {
     console.error(`Failed to convert ${input}: ${error.message}`);

@@ -905,3 +905,13 @@ If `check-pdf` says **"found no PDF to check"**, that is the check refusing to l
 than a bug. veraPDF exits successfully when handed no files, so the target counts what it opened
 and treats zero as an error — otherwise a run in a cleaned directory would report a pass having
 looked at nothing.
+
+**Your link text becomes the PDF's description of the link.** PDF/UA requires every link
+annotation to carry an alternate description, and Chromium writes none, so `make pdf` adds one
+after printing — taken from the anchor's `aria-label`, then its text, then the accessible name of a
+picture inside it, then its `title`, and only as a last resort the URL itself. So
+`[the authoring guide](https://…)` describes itself and `[click here](https://…)` describes
+nothing, exactly as on the web; the difference is that in the PDF the fallback is the raw URL read
+out character by character. Nothing to do here beyond writing the link text you would want read
+aloud — but a bare `<https://example.com/a/b/c.html>` autolink is its own description, and that is
+what a reader gets.
