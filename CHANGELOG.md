@@ -76,6 +76,22 @@ How the version gets bumped is written down in
   its range silently gives `check-access` a different browser than `make pdf`;
   and pa11y runs.
 
+- **`make check-access` is in CI, for the first time.** `tests/test_check_access.py`
+  runs pa11y over a generated document *and* a generated deck, in both themes,
+  through the same configs the compose service uses, and fails on any WCAG 2.1
+  AA issue. This is the counterpart to `test_pdf_ua.py`: that file checks the
+  PDF against PDF/UA-1, this one checks the HTML against WCAG 2.1 AA.
+
+  Until now the WCAG result this project claims for its output was measured
+  only by whoever last ran the target by hand — which is also why a pa11y major
+  could float in unnoticed. Both themes are separate cases because checking one
+  leaves the other's contrast unmeasured, and the deck is here because it
+  renders through a different template, filter and stylesheet: 0.28.2 found
+  exactly that omission in the PDF/UA suite, and the same one was sitting here.
+
+  Measured against the six real cs425 handouts as well as the fixtures, on
+  pa11y 10.0.0, both themes: no issues.
+
 - 0.29.0 through 0.30.2 shipped without entries here. Git is the record of them.
 
 ## 0.28.2
