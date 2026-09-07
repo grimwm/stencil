@@ -59,7 +59,11 @@ check-access: ## Check HTML accessibility (WCAG 2.1 AA)
 # doc: there is a file it is meaningless without. veraPDF exits 0 on an empty
 # file list, so a check-pdf that ran before pdf would pass having checked
 # nothing; the service refuses to, and this edge means it never has to.
+# The filenames are passed rather than globbed. A package directory holds
+# whatever anyone puts in it -- a third-party PDF in there used to fail the
+# build, which is a red nobody can act on. This target already knows exactly
+# what `pdf` above just wrote, suffix and all.
 check-pdf: pdf ## Check PDF/UA-1 conformance of the generated PDFs
-	$(DC) run --rm check-pdf
+	$(DC) run --rm check-pdf{% for md in docs + slides %} {{ md | replace('.md', '') }}$(OUTPUT_SUFFIX).pdf{% endfor %}
 
 {% endif %}

@@ -78,7 +78,9 @@ def conformant_pdf(to_pdf, pdf_workspace):
 @integration
 def test_a_generated_pdf_conforms_to_pdf_ua_1(conformant_pdf):
     """0.21.0's claim, asserted rather than recorded in a changelog."""
-    result = pipeline.verapdf(workdir=conformant_pdf, timeout=300)
+    result = pipeline.verapdf(
+        workdir=conformant_pdf, files=["gate.pdf"], timeout=300
+    )
 
     assert "PASS" in result.stdout, (
         "veraPDF did not report PASS for a PDF this build produced:\n"
@@ -95,14 +97,16 @@ def test_a_generated_pdf_conforms_to_pdf_ua_1(conformant_pdf):
 @integration
 def test_the_gate_reports_how_many_files_it_opened(conformant_pdf):
     """A count is what turns "it passed" into evidence about something."""
-    result = pipeline.verapdf(workdir=conformant_pdf, timeout=300)
-    assert "Checked 1 PDF(s)" in result.stdout, (
+    result = pipeline.verapdf(
+        workdir=conformant_pdf, files=["gate.pdf"], timeout=300
+    )
+    assert "Checked 1 of 1 PDF(s)" in result.stdout, (
         f"the gate did not say what it checked:\n{result.stdout}"
     )
 
 
 @integration
-def test_an_empty_directory_fails_the_gate(tmp_path):
+def test_an_empty_file_list_fails_the_gate(tmp_path):
     """THE BREACH THIS FILE EXISTS FOR.
 
     veraPDF's own exit code is 0 here -- measured, with no arguments it
@@ -110,14 +114,68 @@ def test_an_empty_directory_fails_the_gate(tmp_path):
     rather than because it fired, the whole check-pdf target becomes a green
     light that means nothing.
     """
-    result = pipeline.verapdf(workdir=tmp_path, timeout=120)
+    result = pipeline.verapdf(workdir=tmp_path, files=[], timeout=120)
 
     assert result.returncode != 0, (
-        "an empty directory passed the gate. veraPDF exits 0 on an empty file "
-        "list, so this is exactly the silent pass the guard exists to stop."
+        "an empty file list passed the gate. veraPDF exits 0 when it is given "
+        "no files, so this is exactly the silent pass the guard exists to stop."
     )
-    assert "no PDF to check" in result.stderr, (
+    assert "given no file to check" in result.stderr, (
         f"the gate failed without saying why:\n{result.stderr}"
+    )
+
+
+@integration
+def test_a_file_that_was_never_written_is_named(tmp_path):
+    """Naming the files instead of globbing them buys this.
+
+    A glob cannot tell "you gave me nothing" from "one of the six you promised
+    is missing" -- it just checks five and reports success. The list is what
+    `make pdf` just wrote, so a gap in it is a build failure worth a name.
+    """
+    (tmp_path / "there.pdf").write_bytes(
+        b"%PDF-1.4\n1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n"
+        b"2 0 obj<</Type/Pages/Kids[3 0 R]/Count 1>>endobj\n"
+        b"3 0 obj<</Type/Page/Parent 2 0 R/MediaBox[0 0 612 792]>>endobj\n"
+        b"trailer<</Root 1 0 R>>\n"
+    )
+
+    result = pipeline.verapdf(
+        workdir=tmp_path, files=["there.pdf", "missing.pdf"], timeout=120
+    )
+
+    assert result.returncode != 0
+    assert "missing.pdf" in result.stderr, (
+        f"the gate did not name the file it could not find:\n{result.stderr}"
+    )
+
+
+@integration
+def test_a_pdf_nobody_asked_about_is_not_opened(tmp_path):
+    """The defect this ticket is actually about.
+
+    cs425/classroom carries an 11 MB third-party book. `for f in *.pdf` failed
+    the build on it -- a true report, and one nobody can act on, which is how
+    a gate gets switched off. Asserting on the COUNT rather than only the exit
+    code, because an implementation that checked it anyway and happened to
+    pass would look identical from the outside.
+    """
+    conformant = tmp_path / "ours.pdf"
+    conformant.write_bytes(
+        b"%PDF-1.4\n1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n"
+        b"2 0 obj<</Type/Pages/Kids[3 0 R]/Count 1>>endobj\n"
+        b"3 0 obj<</Type/Page/Parent 2 0 R/MediaBox[0 0 612 792]>>endobj\n"
+        b"trailer<</Root 1 0 R>>\n"
+    )
+    (tmp_path / "somebody-elses-book.pdf").write_bytes(conformant.read_bytes())
+
+    result = pipeline.verapdf(workdir=tmp_path, files=["ours.pdf"], timeout=120)
+
+    assert "Checked 1 of 1" in result.stdout, (
+        f"the gate opened more than the one file it was given:\n{result.stdout}"
+    )
+    assert "somebody-elses-book" not in result.stdout, (
+        f"the gate opened a file nobody asked about:\n{result.stdout}"
     )
 
 
@@ -139,7 +197,7 @@ def test_a_non_conformant_pdf_fails_the_gate(tmp_path, pdf_workspace):
     )
     (tmp_path / "untagged.pdf").write_bytes(untagged)
 
-    result = pipeline.verapdf(workdir=tmp_path, timeout=120)
+    result = pipeline.verapdf(workdir=tmp_path, files=["untagged.pdf"], timeout=120)
 
     assert result.returncode != 0, (
         f"an untagged PDF passed the gate:\n{result.stdout}\n{result.stderr[-2000:]}"
