@@ -523,3 +523,176 @@ def test_the_text_layer_survived_the_rewrite(ua_pdf):
     text = "\n".join(page.extract_text() or "" for page in PdfReader(ua_pdf).pages)
     assert "Heading" in text
     assert "bold" in text
+
+
+# --- Link annotations, which have no HTML spelling at all ------------------
+#
+# PDF/UA-1 7.18.1 t2 and 7.18.5 t2: a link annotation needs an alternate
+# description in its /Contents key. Chromium writes the annotation and its URI
+# action and no /Contents, and nothing an author writes can add one.
+#
+# THE FIXTURE ABOVE HAS NO HYPERLINK, WHICH IS WHY 0.21.0 SHIPPED. Measured on
+# the CS 425 corpus with veraPDF 1.30.2: three of six handouts failed both
+# rules and nothing else about them was wrong. This document is the case the
+# suite was missing.
+
+LINK_DOC = """---
+title: "Links"
+lang: en
+---
+
+## Links
+
+A paragraph with [the authoring guide](https://example.com/AUTHORING.md) in it.
+
+A [link whose text runs on for long enough that it will certainly wrap across
+more than one line of the printed page](https://example.com/long) in a
+paragraph, which is the case that produces two annotations for one anchor.
+
+Two links to the same URL with different words: [the first
+one](https://example.com/dup) and [the second one](https://example.com/dup).
+
+An image link with a named picture:
+[![A labelled flow diagram](images/flow.svg)](https://example.com/named)
+
+An image link whose picture is decorative, so the anchor has no words
+anywhere: [![](images/flow.svg)](https://example.com/bare)
+
+A link whose text needs more than seven bits: [Café — résumé](https://example.com/accents)
+"""
+
+
+def link_annotations(path) -> list[dict]:
+    """Every /Link annotation in the file, with its description and its URI."""
+    out = []
+    for page in PdfReader(path).pages:
+        for annot in _deref(page.get("/Annots")) or []:
+            annot = _deref(annot)
+            if str(annot.get("/Subtype")) != "/Link":
+                continue
+            action = _deref(annot.get("/A")) or {}
+            out.append(
+                {
+                    "contents": annot.get("/Contents"),
+                    "uri": action.get("/URI"),
+                    "dest": annot.get("/Dest"),
+                }
+            )
+    return out
+
+
+@pytest.fixture(scope="module")
+def link_pdf(to_pdf):
+    result, path = to_pdf("doc", "links.md", text=LINK_DOC, stem="links")
+    assert result.returncode == 0, result.stderr[-3000:]
+    return path
+
+
+@pytest.fixture(scope="module")
+def link_annots(link_pdf):
+    annots = link_annotations(link_pdf)
+    assert annots, "no /Link annotation in the PDF -- the document has six links"
+    return annots
+
+
+def test_every_link_annotation_carries_a_description(link_annots):
+    """The acceptance criterion, over every annotation rather than a sample.
+
+    Written this way for the same reason the /Figure check above is: the
+    failure it replaces was never a link somebody had counted.
+    """
+    undescribed = [a for a in link_annots if not str(a["contents"] or "").strip()]
+    assert not undescribed, (
+        f"{len(undescribed)} of {len(link_annots)} link annotations carry no "
+        "/Contents, which PDF/UA-1 7.18.5 rejects"
+    )
+
+
+def test_a_link_is_described_by_its_text_and_not_by_its_url(link_annots):
+    """The half of this that a checker cannot see.
+
+    Setting /Contents to the URI clears both rules and describes nothing --
+    "https://example.com/AUTHORING.md" is a string, not a description. If the
+    fallback ever becomes the rule, every assertion above still passes and
+    this is the only one that does not.
+    """
+    described = {
+        str(a["contents"]): str(a["uri"]) for a in link_annots if a["contents"]
+    }
+    assert "the authoring guide" in described, (
+        f"no link is described by its own text: {sorted(described)}"
+    )
+    for contents, uri in described.items():
+        assert contents != uri or uri == "https://example.com/bare", (
+            f"the description of {uri} is its own URL, which tells a reader "
+            "nothing they could not already see"
+        )
+
+
+def test_a_link_that_wraps_describes_both_of_its_annotations(link_annots):
+    """One anchor, two annotations -- one per line box.
+
+    Positional matching between anchors and annotations gets this wrong and
+    then gets every link after it wrong too, which is why the structure tree's
+    /Link elements are what the DOM is matched against: the tree already
+    groups both annotations under the one anchor that produced them.
+    """
+    wrapped = [a for a in link_annots if str(a["uri"]) == "https://example.com/long"]
+    assert len(wrapped) == 2, (
+        f"expected the wrapped link to produce two annotations, found "
+        f"{len(wrapped)}; this test no longer covers what it was written for"
+    )
+    for annot in wrapped:
+        assert "runs on for long enough" in str(annot["contents"])
+
+
+def test_two_links_to_one_url_keep_their_own_words(link_annots):
+    """Matching annotations to anchors by URL would give these both the same
+    description. They are different links and say different things."""
+    same_url = [
+        str(a["contents"])
+        for a in link_annots
+        if str(a["uri"]) == "https://example.com/dup"
+    ]
+    assert sorted(same_url) == ["the first one", "the second one"], same_url
+
+
+def test_an_image_only_link_is_described_by_its_pictures_name(link_annots):
+    """An anchor wrapped around a picture has no text of its own, and the
+    picture's accessible name is the description a reader wants."""
+    named = [
+        str(a["contents"])
+        for a in link_annots
+        if str(a["uri"]) == "https://example.com/named"
+    ]
+    assert named, "the image link produced no annotation"
+    assert all(n == "A labelled flow diagram" for n in named), named
+
+
+def test_a_link_with_no_words_anywhere_falls_back_to_its_url(link_annots):
+    """The fallback, asserted so it stays the fallback.
+
+    A decorative image inside an anchor leaves nothing to say, and a URL is
+    then better than an empty /Contents -- PDF/UA requires *a* description and
+    this is the only one the document contains.
+    """
+    bare = [
+        str(a["contents"])
+        for a in link_annots
+        if str(a["uri"]) == "https://example.com/bare"
+    ]
+    assert bare, "the decorative-image link produced no annotation"
+    assert all(b == "https://example.com/bare" for b in bare), bare
+
+
+def test_a_description_survives_characters_outside_ascii(link_annots):
+    """/Contents written as a literal string is PDFDocEncoded, and a link
+    labelled with an accent or a curly quote arrives mangled. Written as a hex
+    string it is UTF-16 and arrives intact, which is the only reason to prefer
+    the uglier spelling."""
+    accented = [
+        str(a["contents"])
+        for a in link_annots
+        if str(a["uri"]) == "https://example.com/accents"
+    ]
+    assert accented == ["Café — résumé"], accented

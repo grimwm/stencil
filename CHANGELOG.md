@@ -9,6 +9,68 @@ and the closed epics in `.beads/issues.jsonl` are the readable index.
 How the version gets bumped is written down in
 [AGENTS.md](AGENTS.md#cutting-a-release), not here.
 
+## 0.23.0
+
+- **Every link in a generated PDF now carries an alternate description.**
+  PDF/UA-1 7.18.1 t2 and 7.18.5 t2 require one in the annotation's
+  `/Contents`. Chromium writes the `/Annots` array, the `/Link` annotation and
+  its URI action, and no `/Contents` — and no HTML makes it, because
+  `/Contents` is a PDF-level description with no DOM equivalent, exactly as
+  `/Alt` on a `<figure>` had none in 0.15.0. So it is added after printing,
+  next to the role map, the XMP and the list bodies.
+
+- **What this measured, which is the point of the release.** 0.22.0 shipped
+  the gate; the first thing the gate did was report that 0.21.0's claim of
+  full PDF/UA-1 conformance was true of `tests/test_pdf_ua.py`'s fixture and
+  false of real documents. Against the CS 425 corpus, veraPDF 1.30.2
+  `--flavour ua1`:
+
+  |                        | before                    | after  |
+  | ---------------------- | ------------------------- | ------ |
+  | handouts conformant    | 1 of 6                    | 4 of 6 |
+  | `final-presentation-1` | FAIL 7.18.1 t2, 7.18.5 t2 | PASS   |
+  | `final-presentation-2` | FAIL 7.18.1 t2, 7.18.5 t2 | PASS   |
+  | `resume-and-interview` | FAIL 7.18.1 t2, 7.18.5 t2 | PASS   |
+
+  Nothing else about those three documents was wrong. They failed because
+  they contain hyperlinks, and the fixture did not.
+
+- **The description is the link's own words, and the URL is only the
+  fallback.** A `/Contents` reading `https://example.com/a/b/c.html` satisfies
+  both rules and tells a reader nothing they could not already see. Preference
+  order: the anchor's `aria-label`, its text, the accessible name of a picture
+  inside it, its `title`, and only then the URL.
+
+  This is the `role="none"` lesson from 0.15.0 restated: clearing a rule is
+  not the same as helping anyone, and the cheapest way to clear this one
+  produces a document full of URLs read aloud character by character.
+
+- **Annotations are matched to anchors through the structure tree, not by
+  position or by URL.** One anchor becomes two annotations when the link wraps
+  across a line, and two again for an image link — so counting annotations
+  against anchors shifts every description after the first wrap. Two different
+  links to one URL are a separate trap: matching on the URL gives them both
+  the same words. Chromium already hangs an `/OBJR` under each `/Link`
+  structure element for every annotation that anchor produced, so the grouping
+  is read from the file rather than guessed. Both cases are in the fixture.
+
+- **The text is read from the DOM before printing, not from the PDF
+  afterwards.** Recovering it from the content stream would mean decoding
+  subset-font glyph codes back through each `/ToUnicode` CMap. The browser
+  still has the words; it is only the file that loses them.
+
+- **`/Contents` is written as a hex string.** A literal string is
+  PDFDocEncoded, and pdf-lib truncates each character to one byte — measured,
+  a link labelled `Café — résumé` arrives as `Café \x14 résumé`, an em dash
+  turned into a device-control character. The fixture uses that exact label.
+
+- **The fixture gained the case that was missing.** `tests/test_pdf_ua.py`
+  builds a document with a hyperlink, a wrapping link, two links to one URL, an
+  image link, a decorative-image link with no words anywhere, and an accented
+  label. `tests/test_pdf_ua_gate.py`'s veraPDF document gained a hyperlink too,
+  so the checker itself — not only pypdf — sees the case. A fixture is a claim
+  about the documents it resembles; this one had never seen a link.
+
 ## 0.22.0
 
 - **`make check-pdf` runs veraPDF against the generated PDFs.** Every
