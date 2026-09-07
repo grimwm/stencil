@@ -15,14 +15,12 @@ rather than asserting on the text of the rule.
 
 from __future__ import annotations
 
-import copy
 import os
 import shutil
 import subprocess
 
 import pytest
 
-from tests.conftest import DEMO_CONFIG, make_package
 
 GENERATOR = """\
 #!/bin/sh
@@ -42,16 +40,16 @@ def run_make(package, target="pre-build"):
 
 
 @pytest.fixture
-def hooked(tmp_path):
+def hooked(demo_config, generate_package):
     """A generated package whose pre_build step writes three files."""
     if shutil.which("make") is None:
         pytest.skip("make is not installed")
 
-    config = copy.deepcopy(DEMO_CONFIG)
+    config = demo_config
     config["packages"]["demo"]["pre_build"] = [
         {"run": "sh gen.sh", "outputs": "figures/*.txt", "inputs": "gen.sh"}
     ]
-    package = make_package(tmp_path, config)
+    package = generate_package(config)
     (package / "gen.sh").write_text(GENERATOR)
     return package
 
@@ -158,31 +156,30 @@ def test_doc_and_slide_depend_on_the_hook(hooked):
     assert "pre-build" in slide, slide
 
 
-def test_a_package_without_the_key_gets_no_hook_machinery(tmp_path):
+def test_a_package_without_the_key_gets_no_hook_machinery(doc_package):
     """Every existing package declares no pre_build and must be unchanged."""
-    package = make_package(tmp_path, DEMO_CONFIG)
-    makefile = (package / "Makefile").read_text()
+    makefile = (doc_package / "Makefile").read_text()
     assert "pre-build" not in makefile
     assert ".stencil-pre-build" not in makefile
 
 
-def test_outputs_are_required(tmp_path):
+def test_outputs_are_required(demo_config):
     """Without them the step has nothing to be stale against and would run on
     every build -- the behaviour the feature exists to avoid. Better to refuse
     at generation time than to quietly become a prelude."""
     from stencil.generate import get_template_context
 
-    config = copy.deepcopy(DEMO_CONFIG)
+    config = demo_config
     config["packages"]["demo"]["pre_build"] = [{"run": "sh gen.sh"}]
     with pytest.raises(ValueError) as caught:
         get_template_context("demo", config)
     assert "outputs" in str(caught.value)
 
 
-def test_run_is_required(tmp_path):
+def test_run_is_required(demo_config):
     from stencil.generate import get_template_context
 
-    config = copy.deepcopy(DEMO_CONFIG)
+    config = demo_config
     config["packages"]["demo"]["pre_build"] = [{"outputs": "figures/*.txt"}]
     with pytest.raises(ValueError) as caught:
         get_template_context("demo", config)

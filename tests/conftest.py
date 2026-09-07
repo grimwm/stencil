@@ -71,6 +71,21 @@ def install_fixtures(package: Path) -> None:
 
 
 @pytest.fixture
+def demo_config():
+    """A fresh copy of DEMO_CONFIG, for tests that need to vary it.
+
+    A fixture rather than an import: nothing else in this suite imports from
+    conftest, and `from tests.conftest import ...` resolves locally (the repo
+    root is on sys.path) while failing on CI with ModuleNotFoundError. Handing
+    it out as a fixture is both consistent and portable, and the deep copy
+    stops one test's edits reaching another.
+    """
+    import copy
+
+    return copy.deepcopy(DEMO_CONFIG)
+
+
+@pytest.fixture
 def generate_package(tmp_path: Path):
     def _generate(config: dict, package_id: str = "demo") -> Path:
         return make_package(tmp_path, config, package_id)
