@@ -9,6 +9,59 @@ and the closed epics in `.beads/issues.jsonl` are the readable index.
 How the version gets bumped is written down in
 [AGENTS.md](AGENTS.md#cutting-a-release), not here.
 
+## 0.28.0
+
+- **Emoji render instead of printing as empty boxes.** Six of them in cs425's
+  job-search deck were `.notdef` rectangles in the handed-out PDF. The text
+  faces carry no emoji, stencil inlines a closed set so a page is
+  self-contained, and `make pdf` renders in a container with no system fonts —
+  so there was nothing to fall back to. On screen it always looked right,
+  because a browser falls back to the OS emoji font; only the PDF was wrong.
+
+  Monochrome Noto Emoji is now inlined. **It costs 695 KB base64 on every
+  page**, `fonts.css` 1,422,226 → 2,117,225, and it is now 32% of the font
+  payload — as much as Inter. That is a poor ratio for six icons on one slide,
+  and it is the operator's call: emoji are characters and should behave like
+  characters. Colour emoji would be several megabytes and is not viable.
+
+  Recorded because the first estimate was wrong: counting the chunks covering
+  those six emoji gives three (+19%); counting the chunks covering the
+  pictographic plane gives nine (+48%), because Google chunks by frequency
+  rather than by block. Nine ships, so an emoji the author has not used yet
+  still works.
+
+- **A character no inlined font can draw now fails the build.** Anything still
+  outside coverage — a CJK ideograph, a flag — stops `make pdf` and names the
+  codepoint, instead of silently becoming a rectangle. The test measures a
+  character's advance against a Private Use codepoint's, because that width
+  *is* the `.notdef` width; `document.fonts.check()` answers "is this family
+  available", which is a different question.
+
+- **No ToUnicode entry maps to U+0000 any more.** PDF/UA-1 7.21.7 t2. Four
+  entries in the embedded NotoSansMath subset did, in the queueing-theory
+  deck. Traced with fontTools rather than guessed: gids 4851, 4859, 4861 and
+  4985 have **no cmap entry at all**, are not MATH stretchy variants and are
+  not reachable through GSUB, and their outlines are wide, short and entirely
+  below the baseline. They are fraction bars and underbrace parts, drawn by
+  glyph index because that is how a math renderer picks them. The font gives
+  them no character because they are not characters, so Chromium's subsetter
+  had nothing to write and wrote zero.
+
+  They become U+0020. That is a repair of a producer defect, not a claim about
+  meaning: a fraction bar separates a numerator from a denominator, and a space
+  is what keeps them apart in extracted text. Deleting the entries instead
+  would trade 7.21.7 t2 for 7.21.7 t1 — a used code with no mapping at all —
+  so removal was never an option, only replacement.
+
+- **Two guards were green in CI without exercising anything.** Every gate test
+  asserts a non-zero exit, and "the container could not read the file" is also
+  a non-zero exit. On CI the mounted `tmp_path` files were invisible and the
+  tests passed anyway. Only the one asserting on the *count* caught it — which
+  is exactly why that assertion was written that way. They now use a
+  `pdf_workspace` subdirectory, the mechanism CI demonstrably accepts; the
+  permissions theory for *why* tmp_path differs could not be reproduced
+  locally, so it is not claimed as the cause.
+
 ## 0.27.0
 
 - **A `Do` into a Form XObject that carries tagged content is no longer marked
