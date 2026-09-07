@@ -9,6 +9,61 @@ and the closed epics in `.beads/issues.jsonl` are the readable index.
 How the version gets bumped is written down in
 [AGENTS.md](AGENTS.md#cutting-a-release), not here.
 
+## 0.26.0
+
+- **`data-cols` says how many columns a row has, and the block wraps.**
+  `::: {.columns .cards data-cols=2}` with four children is a 2×2. Supported
+  values are 2, 3 and 4.
+
+  This is the other half of the 0.20.0 trade, not a reversal of it. Before that
+  release `.columns` was `grid-template-columns: 1fr 1fr`, so four children
+  **did** wrap to 2×2 — a layout people want — and three children left an empty
+  cell, which nobody does. Replacing it with `grid-auto-flow: column` killed the
+  empty cell and took the deliberate 2×2 with it. Both shapes are legitimate;
+  the defect was that either one was implicit. Now the author says which.
+
+- **Stacking two `::: columns` blocks was never a workaround, and the width is
+  why.** Column widths are computed **per block** from that block's own child
+  count, so five cards as 3 + 2 gives a row of thirds above a row of halves and
+  nothing lines up — with no warning. Two blocks of two align only because the
+  counts happen to match. Row heights are independent too, so a tall card in the
+  first block does not stretch the second. One grid computes one set of tracks
+  for every row; two grids cannot, at any child count.
+
+- **A short last row stays short.** Five children at `data-cols=3` leaves a gap
+  on the right, and nothing stretches the orphan to hide it. That is not the
+  0.20.0 empty cell returning: there the count was imposed by the stylesheet and
+  the hole was a surprise; here the author asked for three across and the
+  remainder is arithmetic. A test pins it, because "fixing" it is the obvious
+  wrong idea.
+
+- **`data-cols` beats `wide-left`/`wide-right`, decided rather than left to
+  chance.** The selectors have equal specificity, so source order decides it —
+  and source order is a thing someone tidies. Saying how many columns there are
+  is a more fundamental statement than how to bias two of them, and
+  `data-cols=3` with `wide-left` has no meaning at all, so combining them gives
+  equal columns and is documented as useless rather than made to work.
+
+- **`data-cols`, not `cols`, and that spelling was measured.** Pandoc leaves an
+  attribute name it recognises alone and prefixes one it does not with `data-`.
+  So `foo=bar` becomes `data-foo="bar"` while `cols=2` passes through as
+  `cols="2"` — invalid on a `<div>`, since `cols` is only real on `<textarea>`
+  and `<colgroup>`. The shorter spelling is the one that produces invalid HTML,
+  which is the opposite of what the auto-prefixing suggests, and this project
+  runs pa11y over its own pages.
+
+  | breach                                            | tests that fail                                 |
+  | ------------------------------------------------- | ----------------------------------------------- |
+  | remove the `data-cols` rules                      | 6                                               |
+  | move them above `wide-left` so source order flips | 1 — the bias survives as `[622, 388, 622, 388]` |
+
+- **AUTHORING.md gains the two silent syntax traps**, which is what sent this
+  ticket in. `::: {columns}` does not error — it renders `class="{columns}"`,
+  braces included, matching no CSS. And heading attributes go at the **end**
+  (`## Title {.big}`); at the front they become visible text in the heading.
+  Both render without complaint, which is the only reason they are worth a
+  table.
+
 ## 0.25.0
 
 - **A custom `template_env` key may no longer take a derived key's name, and

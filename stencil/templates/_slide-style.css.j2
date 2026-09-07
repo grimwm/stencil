@@ -204,6 +204,46 @@
        squeezes the rest. */
     .columns.wide-left  { grid-template-columns: 1.6fr minmax(0, 1fr); }
     .columns.wide-right { grid-template-columns: minmax(0, 1fr) 1.6fr; }
+
+    /* ::: {.columns data-cols=2}  ->  two per row, wrapping into as many rows
+       as the content needs.
+
+       This is the other half of the 0.20.0 trade. Before that release
+       .columns was `1fr 1fr`, so four children DID wrap to 2x2 -- which is a
+       layout people want -- but three children left an empty cell, which
+       nobody does. Replacing it with grid-auto-flow: column killed the empty
+       cell and took the deliberate 2x2 with it. Both shapes are legitimate;
+       the defect was that either one was implicit. So the author says which.
+
+       WHY NOT STACK TWO ::: columns BLOCKS INSTEAD. Column widths are computed
+       PER BLOCK from that block's own child count, so five cards as 3 + 2
+       gives a row of thirds above a row of halves and nothing lines up. Row
+       heights are independent too, so a tall card in the first block does not
+       stretch the second. One grid computes one set of tracks for every row;
+       stacking cannot recover that at any child count.
+
+       A SHORT LAST ROW IS FINE. Five children at data-cols=3 leaves a gap on
+       the right. That is arithmetic, not the 0.20.0 bug returning -- the
+       author asked for three across, so the remainder is theirs. Nothing here
+       stretches the orphan to hide it.
+
+       data-cols rather than cols= because `cols` is a real HTML attribute name
+       (textarea, colgroup) and pandoc passes it through onto the div
+       untouched, where it is invalid. Measured: pandoc auto-prefixes a name it
+       does NOT recognise (foo=bar becomes data-foo) and leaves a recognised
+       one alone, so the shorter spelling is the one that produces invalid
+       output. This project runs pa11y over its own pages.
+
+       These come after wide-left/wide-right on purpose: the selectors have
+       equal specificity, so source order decides, and data-cols wins. Saying
+       how many columns there are is a more fundamental statement than how to
+       bias two of them, and a data-cols=3 with wide-left has no meaning at
+       all. Combining them is documented as not doing anything useful rather
+       than being made to work. */
+    .columns[data-cols] { grid-auto-flow: row; }
+    .columns[data-cols="2"] { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .columns[data-cols="3"] { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    .columns[data-cols="4"] { grid-template-columns: repeat(4, minmax(0, 1fr)); }
     .columns > * > :first-child { margin-top: 0; }
     .columns > * > :last-child { margin-bottom: 0; }
 
