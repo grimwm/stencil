@@ -490,6 +490,11 @@ def test_with_hidden_actually_expands_to_the_hidden_pdfs(doc_package):
             capture_output=True,
             text=True,
         )
+        # A make that FAILS can still have printed matching recipe lines before
+        # it died, and parsing only stdout would let a broken Makefile pass.
+        assert result.returncode == 0, (
+            f"make -n {' '.join(args)} failed:\n{result.stdout}\n{result.stderr}"
+        )
         return [
             line
             for line in result.stdout.splitlines()

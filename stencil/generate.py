@@ -127,10 +127,20 @@ def check_config_path(package_id: str, where: str, value) -> str:
             f"Package {package_id}: {where} {text!r} contains a shell or Make "
             "metacharacter. These are filenames, not commands."
         )
-    if " " in text:
+    # Any whitespace, not just a space: Make splits a recipe word on tabs too,
+    # and a tab is invisible in a config file.
+    if any(c.isspace() for c in text):
         raise ValueError(
-            f"Package {package_id}: {where} {text!r} contains a space. The "
+            f"Package {package_id}: {where} {text!r} contains whitespace. The "
             "generated Make recipe would split it into two arguments."
+        )
+    # ~ is expanded by the shell, not by Make, so Path() does not see it as
+    # absolute -- `~/x.md` reaches sh and becomes a path in $HOME, outside the
+    # package entirely.
+    if text.startswith("~"):
+        raise ValueError(
+            f"Package {package_id}: {where} {text!r} starts with '~', which "
+            "the shell expands to a path outside the package."
         )
     if Path(text).is_absolute():
         raise ValueError(
@@ -195,6 +205,14 @@ def get_template_context(package_id: str, config: dict) -> dict:
         package_sources = [raw_sources]
     else:
         package_sources = list(raw_sources)
+
+    # Joined into PKG_SOURCE_SPECS, a Make variable that a recipe then expands
+    # and hands to zip or pandoc. Same exposure as docs and slides, so the same
+    # validation -- one helper, not three that drift apart.
+    package_sources = [
+        check_config_path(package_id, "package_sources", src)
+        for src in package_sources
+    ]
 
     if package_sources and package_type == "none":
         raise ValueError(
