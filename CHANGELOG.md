@@ -9,6 +9,58 @@ and the closed epics in `.beads/issues.jsonl` are the readable index.
 How the version gets bumped is written down in
 [AGENTS.md](AGENTS.md#cutting-a-release), not here.
 
+## 0.27.0
+
+- **A `Do` into a Form XObject that carries tagged content is no longer marked
+  as an artifact.** This is a defect 0.21.0 introduced, not one it found.
+  `markArtifacts` counts BDC/EMC in the **page** stream and treats `Do` as a
+  painting operator; `Do` hands off to a stream one level of indirection away
+  that can carry marked-content sequences of its own. Wrapping it put every
+  MCID inside the XObject into an `/Artifact` — veraPDF 7.1 t2, *tagged content
+  shall not be present inside content marked as Artifact*. `poster.pdf` failed
+  1 check, `kanban-vs-scrum.pdf` 9.
+
+- **The trigger is a horizontal rule**, which is why it stayed hidden for three
+  releases. Bootstrap styles `<hr>` with `opacity: .25`; an opacity below 1
+  makes Chromium emit a transparency group; a transparency group is a Form
+  XObject. The six handouts contain no rule anywhere, so 0.21.0 through 0.24.0
+  measured six of six and never saw it. That is the third release running where
+  the fixture's omission *was* the bug — a missing hyperlink in 0.23.0, a
+  missing empty cell in 0.24.0, a missing rule here.
+
+- **Only `/Form` is scanned, and that nearly shipped wrong.** The first version
+  checked every XObject for `BDC`, including `/Image`, whose data is pixels.
+  Searching a photograph's bytes for a three-character token is a coin toss on
+  binary that would eventually declare an image tagged and stop marking a
+  genuinely decorative one as an artifact.
+
+- **`check-pdf` names the files it checks instead of globbing the directory.**
+  `cs425/classroom` carries an 11 MB third-party book, and `for f in *.pdf`
+  failed the build on it. The report was true and unactionable, and an
+  unactionable red is how a gate gets switched off.
+
+  The target already knows exactly what `make pdf` just wrote, so the guard
+  gets sharper rather than merely narrower: *found 0* becomes *expected 6,
+  found 5*, naming the one that is missing. `$0` is spelled out in the compose
+  entrypoint, because `sh -c SCRIPT` puts the first following argument there —
+  without it the first filename would be swallowed and silently go unchecked.
+
+- **A breach that did not hold, reported rather than omitted.** The ticket
+  offered "treat `Do` as not-painting" as the cheap alternative. Applied, it
+  fails **no test here**: no fixture produces a depth-0 `Do` into an *untagged*
+  XObject, and every Form XObject in the classroom corpus carries marked
+  content, so for these documents the two fixes are indistinguishable. The
+  precise one is kept because it names the actual condition — a CSS
+  background-image, or a future Chromium, would still be marked rather than
+  silently reintroducing 7.1 t3.
+
+  | breach                                           | tests that fail   |
+  | ------------------------------------------------ | ----------------- |
+  | ignore the tagged-XObject set (0.21.0 behaviour) | 1, naming `/X8`   |
+  | drop `Do` from `PAINTING_OPERATORS`              | **0** — see above |
+  | let the gate glob the directory again            | 1                 |
+  | give the gate an empty file list                 | 1                 |
+
 ## 0.26.0
 
 - **`data-cols` says how many columns a row has, and the block wraps.**
