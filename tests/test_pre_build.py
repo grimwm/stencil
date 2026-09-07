@@ -184,3 +184,92 @@ def test_run_is_required(demo_config):
     with pytest.raises(ValueError) as caught:
         get_template_context("demo", config)
     assert "run" in str(caught.value)
+
+
+# ---------------------------------------------------------------------------
+# stn-al9: the declarative fields are validated before they reach Make.
+#
+# Raised by CodeRabbit on the 0.29.0 PR and merged before I read the review --
+# I checked the check STATUS and not the review itself. Both findings were
+# reproduced against the real generator before being accepted.
+#
+# SCOPE IT HONESTLY: this is not a privilege boundary. `run` is arbitrary
+# command execution by design, so anyone who can edit .config.yaml can already
+# run anything, and `run` is deliberately NOT validated -- pretending to
+# sanitise a command would invite the belief that a hostile config is
+# contained, which it is not.
+#
+# What makes it worth fixing is that outputs, inputs and name are DECLARATIVE.
+# An author writing a glob does not expect it to execute, and a `..` breaks the
+# manifest and mount assumptions quietly rather than loudly.
+
+
+def context_for(pre_build):
+    from stencil.generate import get_template_context
+
+    return get_template_context(
+        "demo",
+        {"packages": {"demo": {"package_type": "doc", "docs": ["g.md"],
+                               "pre_build": pre_build}}},
+    )
+
+
+def test_an_ordinary_glob_is_accepted():
+    """The validator must not be a wall. Globs are the whole point of outputs."""
+    context = context_for([{"run": "x", "outputs": "figures/*.svg", "inputs": "gen.py"}])
+    assert context["pre_build"][0]["outputs"] == ["figures/*.svg"]
+
+
+def test_a_make_expansion_in_outputs_is_refused():
+    """`$(shell echo INJECTED)` in outputs reached the Makefile verbatim and
+    make expanded it. Reproduced before the fix."""
+    with pytest.raises(ValueError) as caught:
+        context_for([{"run": "x", "outputs": "$(shell echo INJECTED)a/*.txt"}])
+    assert "metacharacter" in str(caught.value)
+
+
+def test_an_absolute_output_is_refused():
+    with pytest.raises(ValueError) as caught:
+        context_for([{"run": "x", "outputs": "/etc/*.conf"}])
+    assert "absolute" in str(caught.value)
+
+
+def test_an_output_that_escapes_the_package_is_refused():
+    with pytest.raises(ValueError) as caught:
+        context_for([{"run": "x", "outputs": "../../out/*.txt"}])
+    assert "escapes" in str(caught.value)
+
+
+def test_inputs_are_validated_the_same_way():
+    """Both fields land in Make text; validating one would be theatre."""
+    with pytest.raises(ValueError):
+        context_for([{"run": "x", "outputs": "a/*", "inputs": "$(shell id)"}])
+
+
+def test_two_steps_with_the_same_name_are_refused():
+    """The silent one.
+
+    Two entries with the same name emit the same target and the same stamp
+    variable. GNU Make keeps the later recipe, so the earlier hook never runs
+    and nothing says so -- a build that reports success having skipped work.
+    """
+    with pytest.raises(ValueError) as caught:
+        context_for([
+            {"name": "dup", "run": "a", "outputs": "a/*"},
+            {"name": "dup", "run": "b", "outputs": "b/*"},
+        ])
+    assert "dup" in str(caught.value)
+    assert "never run" in str(caught.value)
+
+
+def test_a_name_that_is_not_a_valid_make_target_is_refused():
+    with pytest.raises(ValueError) as caught:
+        context_for([{"name": "a b", "run": "x", "outputs": "a/*"}])
+    assert "Make target" in str(caught.value)
+
+
+def test_run_is_not_validated_and_that_is_deliberate():
+    """`run` is the executable field. Sanitising it would suggest containment
+    that does not exist -- the author already controls the whole command."""
+    context = context_for([{"run": "sh -c 'echo $HOME && ls | wc -l'", "outputs": "a/*"}])
+    assert "|" in context["pre_build"][0]["run"]

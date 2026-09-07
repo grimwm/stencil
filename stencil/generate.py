@@ -198,7 +198,47 @@ def get_template_context(package_id: str, config: dict) -> dict:
     # so. A hook that ran unconditionally would be worse than none: matplotlib
     # output is not stable across versions, and rewriting sixteen files on
     # every build buries the real change in thousands of lines of diff.
+    # A pre_build name becomes a Make target AND, upper-cased with - as _, a
+    # Make variable. Anything outside this set produces a Makefile that does
+    # not parse, or a target nobody can invoke.
+    safe_name = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
+
+    # outputs and inputs are interpolated into Make text, where $(...) and
+    # `...` are expanded rather than treated as filenames. They are
+    # DECLARATIVE fields -- an author writing a glob does not expect it to
+    # execute -- so the characters that would make them executable are
+    # refused.
+    #
+    # `run` is deliberately NOT validated. It is the executable field by
+    # design, and pretending to sanitise a command would be worse than not
+    # trying: it invites the belief that a hostile config is contained, which
+    # it is not and cannot be.
+    # Globs are the point -- * ? [ ] stay. What is refused is the set that
+    # makes a filename executable in Make or in the shell recipe it lands in.
+    unsafe_path = re.compile(r"[$`;|&<>\\\n]")
+
+    def check_path(where, value):
+        text = str(value)
+        if unsafe_path.search(text):
+            raise ValueError(
+                f"Package {package_id}: {where} {text!r} contains a shell or "
+                "Make metacharacter. These are filenames, not commands -- "
+                "put the command in 'run'."
+            )
+        if Path(text).is_absolute():
+            raise ValueError(
+                f"Package {package_id}: {where} {text!r} is absolute. Paths "
+                "are relative to the package directory."
+            )
+        if ".." in Path(text).parts:
+            raise ValueError(
+                f"Package {package_id}: {where} {text!r} escapes the package "
+                "directory. Paths are relative to it and must stay inside."
+            )
+        return text
+
     pre_build = []
+    seen_names: set[str] = set()
     for index, entry in enumerate(package.get("pre_build") or []):
         if not isinstance(entry, dict) or not entry.get("run"):
             raise ValueError(
@@ -219,13 +259,35 @@ def get_template_context(package_id: str, config: dict) -> dict:
                 "feature exists to avoid."
             )
 
+        inputs = as_list(entry.get("inputs"))
+        outputs = [check_path(f"pre_build[{index}].outputs", o) for o in outputs]
+        inputs = [check_path(f"pre_build[{index}].inputs", i) for i in inputs]
+
+        name = entry.get("name") or f"pre-build-{index}"
+        if not safe_name.match(str(name)):
+            raise ValueError(
+                f"Package {package_id}: pre_build[{index}] name {name!r} must "
+                "be letters, digits, underscore or dash, starting with a "
+                "letter or digit. It becomes a Make target and variable."
+            )
+        # Two entries with the same name emit the same target and the same
+        # stamp variable; GNU Make keeps the later recipe, so the earlier hook
+        # never runs and nothing says so.
+        if name in seen_names:
+            raise ValueError(
+                f"Package {package_id}: two pre_build steps are named {name!r}. "
+                "They would share a Make target and the first would silently "
+                "never run."
+            )
+        seen_names.add(name)
+
         pre_build.append(
             {
                 "index": index,
                 "run": entry["run"],
                 "outputs": outputs,
-                "inputs": as_list(entry.get("inputs")),
-                "name": entry.get("name") or f"pre-build-{index}",
+                "inputs": inputs,
+                "name": name,
             }
         )
     # Where this package's build products go, relative to the package
