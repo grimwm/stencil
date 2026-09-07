@@ -48,6 +48,11 @@ const puppeteer = require("puppeteer");
       // Distinct top offsets IS the row count. Counting grid tracks would
       // report what was declared; this reports where the boxes landed.
       rows: new Set(kids.map((k) => Math.round(k.getBoundingClientRect().top))).size,
+      // Distinct LEFT offsets is the used column count, for the same reason:
+      // with grid-auto-flow: row the declared template and the boxes that
+      // actually land can disagree, and the boxes are what a reader sees.
+      cols: new Set(kids.map((k) => Math.round(k.getBoundingClientRect().left))).size,
+      widths: kids.map((k) => Math.round(k.getBoundingClientRect().width)),
       background: first.backgroundColor,
       borderLeftWidth: first.borderLeftWidth,
       paddingTop: first.paddingTop,
@@ -131,3 +136,86 @@ def test_each_card_can_carry_its_own_accent(pdf_workspace):
         f"four cards were given four accents and rendered {len(set(accents))} "
         f"distinct colours: {accents}"
     )
+
+
+# ---------------------------------------------------------------------------
+# stn-o5s: say how many columns a row has.
+#
+# The other half of the 0.20.0 trade. Before that release .columns was
+# `1fr 1fr`, so four children DID wrap to 2x2 -- and three left an empty cell.
+# grid-auto-flow: column killed the empty cell and took the deliberate 2x2
+# with it. Both shapes are legitimate; the defect was that either was implicit.
+#
+# Every assertion below reads the RENDERED boxes, not the stylesheet. A grid's
+# used track count is not in the CSS, and with wrapping enabled the declared
+# template and where the boxes land can disagree.
+
+
+@pytest.mark.parametrize(
+    "count,cols,rows",
+    [
+        (4, 2, 2),  # the 2x2 that 0.20.0 took away
+        (6, 3, 2),
+        (8, 4, 2),
+    ],
+)
+def test_data_cols_wraps_into_rows_of_that_width(layout, count, cols, rows):
+    got = layout(f"{{.columns data-cols={cols}}}", count)
+    assert got["children"] == count
+    assert got["cols"] == cols, f"asked for {cols} across, got {got['cols']}"
+    assert got["rows"] == rows, f"expected {rows} rows, got {got['rows']}"
+
+
+def test_a_short_last_row_is_left_short(layout):
+    """Five at three across is 3 + 2, and the gap on the right stays.
+
+    This is NOT the 0.20.0 empty-cell bug returning. There the count was
+    imposed by the stylesheet and the hole was a surprise; here the author
+    asked for three across and the remainder is arithmetic. Nothing stretches
+    the orphan to hide it, and a test says so, because "fixing" this is the
+    obvious wrong idea.
+    """
+    got = layout("{.columns data-cols=3}", 5)
+    assert got["rows"] == 2
+    assert got["cols"] == 3
+    # The two cards in the last row keep their own width rather than growing
+    # to fill it: every card in the grid is the same size.
+    assert len(set(got["widths"])) == 1, got["widths"]
+
+
+@pytest.mark.parametrize("count", [2, 3, 4])
+def test_without_data_cols_nothing_changes(layout, count):
+    """The guard every deck already written depends on.
+
+    0.20.0 exists because a layout moved under slides nobody had touched. The
+    same must not happen again on the way to fixing it.
+    """
+    got = layout("columns", count)
+    assert got["rows"] == 1
+    assert got["cols"] == count
+
+
+def test_data_cols_beats_a_width_bias(layout):
+    """Declared precedence, asserted rather than left to source order.
+
+    `wide-left` biases two tracks; `data-cols` says how many tracks there are.
+    Saying how many is the more fundamental statement, and `data-cols=3` with
+    `wide-left` has no meaning at all -- so data-cols wins and the bias is
+    ignored. Combining them is documented as useless rather than made to work,
+    and this is what pins that decision.
+    """
+    got = layout("{.columns .wide-left data-cols=2}", 4)
+    assert got["rows"] == 2
+    assert got["cols"] == 2
+    assert len(set(got["widths"])) == 1, (
+        f"the width bias survived data-cols: {got['widths']}"
+    )
+
+
+def test_wrapped_columns_can_still_be_cards(layout):
+    """The two features are orthogonal and the STAR slide wants both."""
+    got = layout("{.columns .cards data-cols=2}", 4)
+    assert got["rows"] == 2
+    assert got["cols"] == 2
+    assert got["borderLeftWidth"] == "4px"
+    assert got["paddingTop"] != "0px"

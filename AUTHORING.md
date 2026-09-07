@@ -77,6 +77,36 @@ this guide describes.
 A few pandoc features are *off*, because the pipeline never enables them: a generated table of
 contents (`--toc`) and section numbering (`--number-sections`).
 
+### Where the attributes go, and two ways to get it wrong quietly
+
+Classes and attributes are written in braces — `{#an-id .a-class key=value}` — and **where the
+braces go depends on the block**:
+
+| block      | braces go | example                             |
+| ---------- | --------- | ----------------------------------- |
+| fenced div | first     | `::: {.columns .cards}`             |
+| code block | first     | ```` ```{.mermaid caption="…"} ```` |
+| heading    | **last**  | `## Behavioral Interviews {.big}`   |
+
+Headings are the odd one out because their content runs to the end of the line, so pandoc needs the
+attributes at the end to know where the text stops. A fence has no content on that line at all.
+
+Both mistakes below **render without an error**, which is the only reason they are worth a table:
+
+```markdown
+::: {columns}              ->  class="{columns}"      braces included, matches no CSS
+# {.big} My Heading        ->  the braces become visible text in the heading
+```
+
+A single bare word after the colons is a class, so `::: columns` and `::: {.columns}` are the same
+thing. The dot is only needed once you open the braces — and once you open them, a word without a
+dot is not a class at all.
+
+One more: pandoc leaves an attribute name it recognises alone and prefixes one it does not with
+`data-`. So `foo=bar` becomes `data-foo="bar"`, while `cols=2` stays `cols="2"` — which is invalid
+on a `<div>`, since `cols` is only a real attribute on `<textarea>` and `<colgroup>`. Write
+`data-cols=2` yourself; the shorter spelling is the one that produces invalid HTML.
+
 ## What works where
 
 | Construct                                                  | Document                | Deck                                                      |
@@ -651,11 +681,48 @@ Four fenced divs shape a slide:
 | `::: takeaway` | A boxed conclusion, pinned to the bottom of the slide                   |
 | `::: center`   | Centers the text inside                                                 |
 
-**A columns block is as wide as its contents.** Two children give two columns, three give three,
-four give four. You do not declare the count anywhere; the number of top-level blocks inside the
-fence is the number of columns. (Before 0.20.0 it was always two, so three children left an empty
-cell and four stacked 2×2. If an old deck looks different, that is why, and the new shape is the
-one you meant.)
+**A columns block is one row, as wide as its contents.** Two children give two columns, three give
+three, four give four. You do not declare the count anywhere; the number of top-level blocks inside
+the fence is the number of columns. (Before 0.20.0 it was always two, so three children left an
+empty cell and four stacked 2×2. If an old deck looks different, that is why, and the new shape is
+the one you meant.)
+
+**Add `data-cols` when you want rows instead.** It says how many columns a row has, and the block
+wraps into as many rows as the content needs:
+
+```markdown
+::::: {.columns .cards data-cols=2}
+
+:::: column
+**S — Situation.** Where you were and what was at stake.
+::::
+
+:::: {.column .accent-2}
+**T — Task.** What you specifically owned.
+::::
+
+:::: {.column .accent-3}
+**A — Action.** What you did, in the first person singular.
+::::
+
+:::: {.column .accent-4}
+**R — Result.** The number, if you have one.
+::::
+
+:::::
+```
+
+Four cards, two across, two rows. Supported values are 2, 3 and 4.
+
+Two things worth knowing. **A short last row stays short** — five children at `data-cols=3` leaves a
+gap on the right, because you asked for three across and the remainder is arithmetic; nothing
+stretches the last card to hide it. And **`data-cols` overrides `wide-left`/`wide-right`**, which
+name two biased tracks rather than a count, so combining them just gives you equal columns; pick one.
+
+Do not fake rows by stacking two `::: columns` blocks. Column widths are computed per block from
+that block's own child count, so five cards as 3 + 2 gives a row of thirds above a row of halves and
+nothing lines up. Row heights are independent too. One grid computes one set of tracks for every
+row; two grids cannot.
 
 Add `wide-left` or `wide-right` to bias a **two**-column split about 60/40 — useful when prose sits
 beside a diagram. These name two explicit tracks, so they say two columns and mean it:
