@@ -14,9 +14,14 @@
          cannot match @media screen -- always gets light UA widgets. */
       color-scheme: light;
 
-      --font-serif: 'Crimson Pro', Georgia, 'Times New Roman', serif;
-      --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-      --font-mono: 'JetBrains Mono', 'Fira Code', Consolas, Monaco, monospace;
+      /* 'Noto Emoji' last in every stack. The text faces have no emoji
+         coverage and stencil inlines a closed set, so before this an emoji
+         reached .notdef and printed as an empty box -- measured on cs425's
+         job-search deck, six of them. Last, so it is only ever consulted for
+         a character the text face cannot draw. */
+      --font-serif: 'Crimson Pro', Georgia, 'Times New Roman', 'Noto Emoji', serif;
+      --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Noto Emoji', sans-serif;
+      --font-mono: 'JetBrains Mono', 'Fira Code', Consolas, Monaco, 'Noto Emoji', monospace;
 
       /* Surfaces */
       --surface: #fff;

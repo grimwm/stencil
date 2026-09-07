@@ -93,6 +93,57 @@ FONT_CSS = (
 # would roughly double the font payload for no gain on the course material.
 KEEP_SUBSETS = {"latin", "latin-ext"}
 
+# Noto Emoji, monochrome. The colour face is several megabytes and would land
+# in every generated page; this one is served as ten unicode-range chunks and
+# only the pictographic ones are kept.
+#
+# Measured, and the first measurement was wrong in a way worth recording.
+# Counting the chunks that cover the six emoji in one real deck gives three,
+# 212,740 bytes raw, +19%. Counting the chunks that cover the PICTOGRAPHIC
+# PLANE gives nine, because Google's chunking is by frequency rather than by
+# block and almost every chunk carries something in U+1F300-U+1FAFF. Nine is
+# 493,000 raw, 2,117,225 in fonts.css against 1,422,226 before: +695 KB, +48%.
+#
+# Nine is what ships. Three would hold the payload down and turn every emoji
+# an author has not used yet into a build failure, which is the opposite of
+# what a character should do. The one chunk left out is flags and regional
+# indicators -- a pair of letter-shaped codepoints that composes into a flag,
+# which is a different feature from a pictograph and the one most likely to
+# render as two letters rather than a box.
+#
+# The cost is real and lands on every page, including handouts with no emoji
+# in them. stn-uje is the open ticket about page weight; if that gets solved
+# by loading assets per-document rather than inlining all of them, this is one
+# of the things that should follow.
+#
+# What is NOT covered still fails the build rather than printing a box:
+# html-to-pdf.js refuses to write a PDF containing a character no inlined font
+# can draw. So the gap this leaves is loud, which is the whole point -- before
+# this, an emoji silently became an empty rectangle in a handed-out PDF.
+EMOJI_CSS = (
+    "https://fonts.googleapis.com/css2?family=Noto+Emoji:wght@400&display=swap"
+)
+
+# The planes worth carrying: Miscellaneous Symbols and Pictographs, Emoticons,
+# Transport and Map, Supplemental Symbols and Pictographs, Symbols and
+# Pictographs Extended-A.
+EMOJI_RANGES = ((0x1F300, 0x1FAFF),)
+
+
+def range_covers(declared: str, wanted: tuple[tuple[int, int], ...]) -> bool:
+    """True when a @font-face's unicode-range overlaps a range we want."""
+    for part in declared.split(","):
+        part = part.strip().lstrip("uU+").replace("U+", "")
+        if not part:
+            continue
+        if "-" in part:
+            low, high = (int(x, 16) for x in part.split("-"))
+        else:
+            low = high = int(part, 16)
+        if any(low <= b and a <= high for a, b in wanted):
+            return True
+    return False
+
 
 def fetch(url: str) -> bytes:
     req = urllib.request.Request(url, headers={"User-Agent": UA})
@@ -135,6 +186,21 @@ def vendor_fonts() -> None:
         return f"url(data:font/woff2;base64,{b64})"
 
     css = re.sub(r"url\((https://fonts\.gstatic\.com/[^)]+)\)", replace_url, css)
+
+    emoji = fetch(EMOJI_CSS).decode("utf-8")
+    blocks = re.findall(r"@font-face\s*\{[^}]*\}", emoji)
+    kept_emoji = []
+    for block in blocks:
+        declared = re.search(r"unicode-range:\s*([^;]+);", block)
+        if declared and range_covers(declared.group(1), EMOJI_RANGES):
+            kept_emoji.append(block)
+    print(f"  Noto Emoji: keeping {len(kept_emoji)} of {len(blocks)} chunks")
+    emoji_css = "\n".join(kept_emoji)
+    emoji_css = re.sub(
+        r"url\((https://fonts\.gstatic\.com/[^)]+)\)", replace_url, emoji_css
+    )
+
+    css = css + "\n" + emoji_css + "\n"
     (OUT / "fonts.css").write_text(css)
     print(f"  fonts.css written ({(OUT / 'fonts.css').stat().st_size} bytes)")
 

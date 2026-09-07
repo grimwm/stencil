@@ -192,6 +192,61 @@ function wrapListBodies(structTreeRoot, context) {
 // Recovering it from the content stream would mean decoding subset-font glyph
 // codes back through each /ToUnicode CMap; the browser still has the words.
 
+// Characters the page uses that no inlined font can draw.
+//
+// stencil inlines its webfonts so a generated page is self-contained and
+// `make pdf` reaches the network for nothing. The cost of that is a closed
+// set of glyphs: Noto Serif has no emoji coverage and there is nothing behind
+// it to fall back to, so Chromium draws .notdef -- an empty box -- and writes
+// a glyph with no Unicode mapping. Measured on cs425's job-search deck: six
+// emoji, four checks of veraPDF 7.21.7 t1 and four of 7.21.8 t1.
+//
+// The reader getting a box where the author wrote a picture is the part that
+// matters; the checker only noticed second. Both are decidable here, before
+// the file is written, so this fails the build instead.
+//
+// The test is a width comparison rather than document.fonts.check(), which
+// answers "is this family available" and not "does it have this glyph". A
+// character with no glyph is drawn as .notdef, so it measures exactly as wide
+// as a codepoint guaranteed to be missing everywhere.
+async function undrawableCharacters(page) {
+  return page.evaluate(() => {
+    const text = document.body ? document.body.innerText || "" : "";
+    const chars = new Set();
+    for (const ch of text) {
+      const code = ch.codePointAt(0);
+      // Control characters and ordinary whitespace have no glyph by design.
+      if (code < 0x20 || code === 0x7f) continue;
+      if (/\s/.test(ch)) continue;
+      // A variation selector is a modifier, not a character to draw.
+      if (code >= 0xfe00 && code <= 0xfe0f) continue;
+      if (code === 0x200d) continue;
+      chars.add(ch);
+    }
+    if (!chars.size) return [];
+
+    const canvas = document.createElement("canvas");
+    const context = canvas.getContext("2d");
+    const family = getComputedStyle(document.body).fontFamily;
+    context.font = `32px ${family}`;
+
+    // U+10FFFD is in a Private Use plane: nothing ships a glyph for it, so its
+    // width IS the .notdef width for this font stack.
+    const notdef = context.measureText("\u{10FFFD}").width;
+
+    const missing = [];
+    for (const ch of chars) {
+      if (context.measureText(ch).width === notdef) {
+        missing.push({
+          char: ch,
+          code: ch.codePointAt(0).toString(16).toUpperCase().padStart(4, "0"),
+        });
+      }
+    }
+    return missing;
+  });
+}
+
 // Anchors, in document order, with the words a reader sees. Run under print
 // emulation and filtered to anchors that actually lay out, so the list matches
 // what Chromium is about to write annotations for rather than what the screen
@@ -601,6 +656,81 @@ function tagEmptyTableCells(pdf, domTables) {
   return { inserted, skipped, aligned: true };
 }
 
+// PDF/UA-1 7.21.7 t2: every Unicode value in a ToUnicode CMap must be greater
+// than zero and not U+FEFF or U+FFFE.
+//
+// Measured on cs425's kanban-and-sdd deck: four entries in the embedded
+// NotoSansMath subset mapped to U+0000. Traced with fontTools -- gids 4851,
+// 4859, 4861 and 4985 have NO cmap entry in the font, are not MATH stretchy
+// variants and are not reachable through GSUB. Their outlines are wide, short
+// and sit entirely below the baseline: they are fraction bars and underbrace
+// parts, drawn by glyph index because that is how a math renderer picks them.
+// The font gives them no character because they ARE not characters, so
+// Chromium's subsetter had nothing to write and wrote zero.
+//
+// U+0020 is what they become. That is a repair of a producer defect, not a
+// claim about meaning: a fraction bar separates a numerator from a
+// denominator, and a space is what keeps them apart in extracted text.
+// Deleting the entries instead would trade 7.21.7 t2 for 7.21.7 t1 -- a used
+// code with no mapping at all -- so removal is not an option, only
+// replacement.
+const BAD_UNICODE = /^(0000|FEFF|FFFE)$/i;
+
+function repairToUnicode(pdf) {
+  const context = pdf.context;
+  let repaired = 0;
+  const seen = new Set();
+
+  for (const page of pdf.getPages()) {
+    const resources = context.lookup(page.node.get(PDFName.of("Resources")));
+    if (!(resources instanceof PDFDict)) continue;
+    const fonts = context.lookup(resources.get(PDFName.of("Font")));
+    if (!(fonts instanceof PDFDict)) continue;
+
+    for (const key of fonts.keys()) {
+      const font = context.lookup(fonts.get(key));
+      if (!(font instanceof PDFDict)) continue;
+      const stream = context.lookup(font.get(PDFName.of("ToUnicode")));
+      if (!(stream instanceof PDFRawStream)) continue;
+      // One font object is referenced from every page that uses it, so without
+      // this the same CMap would be rewritten once per page and the repair
+      // count would be a page count.
+      if (seen.has(stream)) continue;
+      seen.add(stream);
+
+      let cmap;
+      try {
+        cmap = Buffer.from(decodePDFRawStream(stream).decode()).toString(
+          "latin1"
+        );
+      } catch (error) {
+        continue;
+      }
+
+      let changed = 0;
+      const fixed = cmap.replace(
+        /<([0-9A-Fa-f]+)>\s*<([0-9A-Fa-f]*)>/g,
+        (whole, src, dst) => {
+          if (dst !== "" && !BAD_UNICODE.test(dst)) return whole;
+          changed += 1;
+          return "<" + src + "> <0020>";
+        }
+      );
+      if (!changed) continue;
+
+      // A fresh stream, for the same reason the content streams get one: a
+      // PDFRawStream owns its Length and Filter.
+      font.set(
+        PDFName.of("ToUnicode"),
+        context.register(context.stream(fixed))
+      );
+      repaired += changed;
+    }
+  }
+
+  return repaired;
+}
+
 function xmpFor(title) {
   // pdfuaid:part is the identification PDF/UA-1 asks for. dc:title is carried
   // alongside it because the title is the one piece of metadata a reader
@@ -893,6 +1023,7 @@ async function addPdfUaStructure(path, page) {
 
   const wrapped = wrapListBodies(structTreeRoot, context);
   const links = describeLinkAnnotations(pdf, page.links || []);
+  const unicodes = repairToUnicode(pdf);
   const cells = tagEmptyTableCells(pdf, page.tables || []);
   const artifacts = await markPageArtifacts(pdf);
 
@@ -903,7 +1034,14 @@ async function addPdfUaStructure(path, page) {
   catalog.set(PDFName.of("Metadata"), context.register(xmp));
 
   fs.writeFileSync(path, await pdf.save({ useObjectStreams: false }));
-  return { mapped: Array.from(nonStandard).sort(), wrapped, links, cells, artifacts };
+  return {
+    mapped: Array.from(nonStandard).sort(),
+    wrapped,
+    links,
+    cells,
+    unicodes,
+    artifacts,
+  };
 }
 
 async function main() {
@@ -973,6 +1111,23 @@ async function main() {
     // Before printing, while the DOM is still there to read. page.pdf()
     // renders in print media, and this reads it in print media too, so a link
     // the print stylesheet hides is absent from both lists rather than one.
+    // Before printing, and fatal: a box in a handed-out PDF is not something
+    // to warn about and continue past. Same call --fail-if-warnings makes on
+    // a mistyped citation key.
+    const undrawable = await undrawableCharacters(page);
+    if (undrawable.length) {
+      const listed = undrawable
+        .map((c) => `U+${c.code} ${c.char}`)
+        .join(", ");
+      throw new Error(
+        `${input}: ${undrawable.length} character(s) that no inlined font ` +
+          `can draw, which print as an empty box: ${listed}. ` +
+          "stencil inlines a closed set of faces so a page is self-contained, " +
+          "and emoji are the usual way to reach outside it. Remove them, or " +
+          "vendor a face that covers them."
+      );
+    }
+
     const domLinks = await collectLinkText(page);
     const domTables = await collectTableCells(page);
 
@@ -1003,7 +1158,7 @@ async function main() {
 
 main()
   .then((facts) => addPdfUaStructure(output, facts))
-  .then(({ mapped, wrapped, links, cells, artifacts }) => {
+  .then(({ mapped, wrapped, links, cells, unicodes, artifacts }) => {
     const notes = [];
     if (mapped.length) notes.push(`role map: ${mapped.join(", ")} -> Span`);
     if (wrapped) notes.push(`${wrapped} list items wrapped in LBody`);
@@ -1014,6 +1169,7 @@ main()
       );
     }
     if (cells.inserted) notes.push(`${cells.inserted} empty table cell(s) tagged`);
+    if (unicodes) notes.push(`${unicodes} ToUnicode entr(y/ies) repaired`);
     if (artifacts) notes.push(`${artifacts} content stream(s) artifact-marked`);
     console.log(`Wrote ${output}` + (notes.length ? ` (${notes.join("; ")})` : ""));
     if (cells.skipped) {

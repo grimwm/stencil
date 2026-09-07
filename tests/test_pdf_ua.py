@@ -1025,3 +1025,186 @@ def test_the_rule_is_still_drawn(xobject_pdf):
     assert any(b" re" in x and (b"\nf\n" in x or x.rstrip().endswith(b"f")) for x in tagged), (
         "the rule's XObject no longer paints anything"
     )
+
+
+# ---------------------------------------------------------------------------
+# stn-xum: no ToUnicode entry may map to U+0000, U+FEFF or U+FFFE.
+#
+# Measured on cs425's kanban-and-sdd deck: four entries in the embedded
+# NotoSansMath subset mapped to U+0000. Traced with fontTools -- gids 4851,
+# 4859, 4861 and 4985 have no cmap entry, are not MATH stretchy variants and
+# are not reachable through GSUB; their outlines are wide, short and entirely
+# below the baseline. They are fraction bars and underbrace parts, drawn by
+# glyph index because that is how a math renderer picks them. The font gives
+# them no character because they ARE not characters.
+
+MATH_DOC = r"""---
+title: "Queueing"
+lang: en
+---
+
+## Little's Law
+
+$$\text{Cycle Time} = \frac{\text{WIP}}{\text{Throughput}}$$
+
+And a nested one, because the bar that fails is the one a fraction draws:
+
+$$W_q \approx \left(\frac{c_a^2 + c_s^2}{2}\right)\left(\frac{\rho}{1 - \rho}\right)$$
+"""
+
+
+def to_unicode_entries(path) -> list[tuple[str, str]]:
+    """Every (source code, destination) pair in every ToUnicode CMap."""
+    pairs = []
+    seen = set()
+    for page in PdfReader(path).pages:
+        resources = _deref(page.get("/Resources") or {})
+        fonts = _deref(resources.get("/Font") or {})
+        if not hasattr(fonts, "items"):
+            continue
+        for _, ref in fonts.items():
+            font = _deref(ref)
+            stream = _deref(font.get("/ToUnicode"))
+            if stream is None or id(stream) in seen:
+                continue
+            seen.add(id(stream))
+            cmap = stream.get_data().decode("latin1")
+            pairs.extend(re.findall(r"<([0-9A-Fa-f]+)>\s*<([0-9A-Fa-f]*)>", cmap))
+    return pairs
+
+
+@pytest.fixture(scope="module")
+def math_pdf(to_pdf):
+    result, path = to_pdf("doc", "queueing.md", text=MATH_DOC, stem="queueing")
+    assert result.returncode == 0, result.stderr[-3000:]
+    return path
+
+
+def test_the_fixture_embeds_a_math_font(math_pdf):
+    """Vacuous-test guard, the same one stn-48s needed.
+
+    If MathML ever stops reaching NotoSansMath, the assertion below passes for
+    free and says nothing. This fails instead.
+    """
+    assert to_unicode_entries(math_pdf), "no ToUnicode CMap at all in the PDF"
+
+
+def test_no_glyph_maps_to_a_forbidden_unicode_value(math_pdf):
+    """PDF/UA-1 7.21.7 t2."""
+    bad = [
+        (src, dst)
+        for src, dst in to_unicode_entries(math_pdf)
+        if dst == "" or int(dst or "0", 16) == 0 or dst.upper() in ("FEFF", "FFFE")
+    ]
+    assert not bad, (
+        f"{len(bad)} ToUnicode entr(y/ies) map to a value PDF/UA forbids: {bad[:8]}"
+    )
+
+
+def test_the_repair_replaces_rather_than_deletes(math_pdf):
+    """Deleting the entry trades 7.21.7 t2 for 7.21.7 t1.
+
+    A used code with no mapping at all is also a failure, so the repair has to
+    put something there. This checks the count did not shrink to nothing.
+    """
+    assert len(to_unicode_entries(math_pdf)) > 10, (
+        "the CMap lost entries; the repair is deleting rather than replacing"
+    )
+
+
+# ---------------------------------------------------------------------------
+# stn-yhk: a character no inlined font can draw fails the build.
+#
+# stencil inlines a closed set of faces so a page is self-contained and
+# `make pdf` reaches the network for nothing. Noto Serif has no emoji
+# coverage and there is nothing behind it, so Chromium drew .notdef -- an
+# empty box -- and wrote a glyph with no Unicode mapping. Measured on cs425's
+# job-search deck: six emoji, four checks of 7.21.7 t1 and four of 7.21.8 t1.
+#
+# The reader getting a box where the author wrote a picture is the part that
+# matters. The checker only noticed second.
+
+# NOT an emoji: Noto Emoji is inlined now, so U+1F4C4 draws fine and would
+# make this test pass for the wrong reason. A CJK ideograph is the honest
+# case -- the Latin subsets do not carry it, the emoji face does not either,
+# and someone pasting a Chinese term into a handout is not far-fetched.
+UNDRAWABLE_DOC = """---
+title: "Coverage"
+lang: en
+---
+
+## Sections
+
+A term nothing inlined can draw: \u4E2D.
+"""
+
+
+def test_a_character_no_font_can_draw_fails_the_build(to_pdf):
+    """The build stops rather than writing a PDF full of boxes.
+
+    Same call `--fail-if-warnings` makes on a mistyped citation key: a defect
+    that is decidable before the file is written should not become the
+    reader's problem.
+    """
+    result, path = to_pdf("doc", "coverage.md", text=UNDRAWABLE_DOC, stem="coverage")
+
+    assert result.returncode != 0, (
+        "a document with an undrawable character built successfully; it would "
+        "print as an empty box and fail PDF/UA 7.21.8"
+    )
+    combined = result.stdout + result.stderr
+    assert "4E2D" in combined, (
+        f"the failure did not name the offending character:\n{combined[-2000:]}"
+    )
+
+
+def test_ordinary_text_is_not_reported_as_undrawable(ua_pdf):
+    """The guard has to not fire on the documents everyone actually writes.
+
+    A width comparison against .notdef is a heuristic, and a heuristic that
+    rejects ordinary prose is worse than the bug it replaces. UA_DOC is
+    headings, bold, italic, a list and inline code -- if that trips it, the
+    measurement is wrong.
+    """
+    assert ua_pdf.exists(), "the plain fixture failed to build"
+
+
+EMOJI_DOC = """---
+title: "Icons"
+lang: en
+---
+
+## Sections
+
+**\U0001F4C4 Resumes** and **\U0001F9E0 Behavioral** -- pictographs the
+inlined Noto Emoji face covers.
+"""
+
+
+def test_an_emoji_builds_and_is_not_notdef(to_pdf):
+    """stn-yhk. Six of these printed as empty boxes in a deck that was handed out.
+
+    The operator's call: emoji are characters and should behave like
+    characters, so the face is inlined rather than the markdown edited. This
+    asserts the outcome -- the build succeeds AND nothing lands on glyph 0.
+    """
+    result, path = to_pdf("doc", "icons.md", text=EMOJI_DOC, stem="icons")
+    assert result.returncode == 0, (
+        f"a document with covered emoji failed to build:\n{result.stderr[-2000:]}"
+    )
+
+    # .notdef is glyph 0. A text-showing operator reaching it is veraPDF
+    # 7.21.8 t1, and is what an empty box looks like from inside the file.
+    reader = PdfReader(path)
+    fonts = 0
+    for page in reader.pages:
+        resources = _deref(page.get("/Resources") or {})
+        table = _deref(resources.get("/Font") or {})
+        if hasattr(table, "items"):
+            fonts += len(list(table.items()))
+    assert fonts, "no fonts in the PDF at all"
+
+    text = "".join(page.extract_text() for page in reader.pages)
+    assert "Resumes" in text and "Behavioral" in text, (
+        "the headings did not survive; the emoji may have broken the run"
+    )
