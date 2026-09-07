@@ -781,6 +781,9 @@ def generate_package(
             {"src": "mermaid-figure-filter.lua.j2"},
             {"src": "figure-name-filter.lua.j2"},
             {"src": "embed-images.lua.j2"},
+            # Decides whether the highlighter rides along; see
+            # _CODE_BUNDLE_AFTER_HIDDEN in pipeline.py for why it runs last.
+            {"src": "code-bundle-filter.lua.j2"},
             # Drives the `pdf` compose service. Emitted for every package that
             # renders markdown, so `make pdf` needs no configuration to exist.
             {"src": "html-to-pdf.js.j2"},
@@ -892,6 +895,7 @@ def get_generated_files(config: dict) -> list[str]:
         "mermaid-figure-filter.lua",
         "figure-name-filter.lua",
         "embed-images.lua",
+        "code-bundle-filter.lua",
         "html-to-pdf.js",
         "Dockerfile.browser",
     ]

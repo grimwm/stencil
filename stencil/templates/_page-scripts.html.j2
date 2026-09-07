@@ -6,6 +6,19 @@
   <!-- Bootstrap JS Bundle -->
   <script>{{ assets.bootstrap_js }}</script>
 
+  {# The bundle and its four language packs are 141,445 bytes, and most
+     handouts contain no code -- code-bundle-filter.lua sets has-code for the
+     ones that do.
+
+     THE CALL IS INSIDE THE GATE, not outside it, and that is the whole lesson
+     of the mermaid bundle one block down. Gating the library while leaving
+     `hljs.highlightAll()` behind leaves a ReferenceError in a page that
+     otherwise looks finished. html-to-pdf.js listens for pageerror and refuses
+     to write the PDF, so `make pdf` fails -- but `make doc` does not, and it
+     would ship the broken page. tests/test_code_bundle.py converts a
+     code-free document to PDF for exactly that reason: it is the only check
+     that runs the script rather than reading it. #}
+$if(has-code)$
   <!-- Highlight.js -->
   <script>{{ assets.highlight_js }}</script>
   <script>{{ assets.highlight_sql }}</script>
@@ -13,6 +26,7 @@
   <script>{{ assets.highlight_javascript }}</script>
   <script>{{ assets.highlight_bash }}</script>
   <script>hljs.highlightAll();</script>
+$endif$
 
   {# The bundle is 3.5 MB and most documents draw nothing, so it is inlined only
      when mermaid-figure-filter.lua found a diagram. The driver below stays

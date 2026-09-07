@@ -240,6 +240,19 @@ _FIGURE_NAME_AFTER_MERMAID = (
     "/Figure with no /Alt, which PDF/UA rejects and no HTML checker reports."
 )
 
+_CODE_BUNDLE_AFTER_HIDDEN = (
+    "Must follow hidden-filter, which is the only ordering constraint it has.\n"
+    "The flag decides whether the 141 KB highlighter rides along, and a code\n"
+    "block inside a `::: {.hidden}` div is not on the page unless the build\n"
+    "asked for it -- run this first and `make doc` carries the bundle for a\n"
+    "listing only `make doc WITH=hidden` ever shows.\n"
+    "\n"
+    "It does NOT need to follow mermaid-figure-filter. That filter wraps a\n"
+    "mermaid CodeBlock in a Figure rather than consuming it, so the block is\n"
+    "there either way; the exclusion is by class, which is true before and\n"
+    "after. Placed last because nothing else wants it earlier."
+)
+
 _FRONTMATTER_FIRST = (
     "Metadata only, and first: it decides what the header rows are and\n"
     "resolves show_date into the date the byline asks for, so every later\n"
@@ -288,6 +301,7 @@ def annotated_argv(kind: str) -> list[tuple[str, str | None]]:
     ]
     if kind == "slide":
         argv.append(("--lua-filter=slide-sections.lua", None))
+    argv.append(("--lua-filter=code-bundle-filter.lua", _CODE_BUNDLE_AFTER_HIDDEN))
     argv.append(("--mathml", None))
     return argv
 

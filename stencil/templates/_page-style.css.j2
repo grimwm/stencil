@@ -141,6 +141,29 @@
       font-weight: 800;
     }
 
+    /* Bootstrap's reboot sets `dt { font-weight: 700 }`, and 700 is the one
+       weight on the body serif whose rendering the 0.31.0 face merge would
+       otherwise move.
+
+       Before the merge, Crimson Pro shipped as discrete 400/600/800 faces, so
+       CSS font-matching rounded a request for 700 up to the 800 face. After
+       it, one face declares `font-weight: 400 800` and 700 is an exact match
+       on a variable axis, so a definition term would render at a real 700 --
+       two thirds of a step lighter than it does today, and nothing would say
+       so.
+
+       Neither corpus that uses stencil contains a definition list, so this
+       pins behaviour nobody is currently exercising. That is the point: it
+       makes today's rendering explicit rather than emergent from a rounding
+       rule, so the first definition list anyone writes looks like the bold
+       everywhere else on the page. Bootstrap's other 700 utilities --
+       .fw-bold, .badge, .alert-link, .nav-underline -- reach the serif only
+       through hand-written HTML, which is outside the markdown dialect
+       AUTHORING.md describes; those are named in the CHANGELOG instead. */
+    dt {
+      font-weight: 800;
+    }
+
     .container {
       max-width: 60rem;
       padding-top: 2rem;
