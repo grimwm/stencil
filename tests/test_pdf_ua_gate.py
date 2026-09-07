@@ -407,7 +407,7 @@ def test_every_checked_filename_carries_the_output_suffix(doc_package):
     makefile = (doc_package / "Makefile").read_text()
     line = next(
         stripped
-        for stripped in (l.strip() for l in makefile.splitlines())
+        for stripped in (line.strip() for line in makefile.splitlines())
         if stripped.startswith("$(DC) run --rm check-pdf")
     )
 
@@ -462,4 +462,56 @@ def test_the_deck_fixture_is_actually_a_deck(conformant_deck):
     assert float(box.width) > float(box.height), (
         f"the fixture is not landscape ({box.width} x {box.height}); "
         "it may have been rendered as a document rather than a deck"
+    )
+
+
+def test_with_hidden_actually_expands_to_the_hidden_pdfs(doc_package):
+    """0.28.1 asserted on Makefile TEXT and never expanded the variable.
+
+    A regression setting OUTPUT_SUFFIX empty leaves both target lines equal and
+    both of that release's assertions passing -- which is precisely the
+    criticism that release made of itself ("the rule being present and the rule
+    working are different claims") and then did not apply to its own test.
+
+    `make -n` expands variables and prints the recipe without running it, so
+    this is bounded: no container, no build, and it measures the expansion
+    rather than the template.
+    """
+    import shutil
+    import subprocess
+
+    if shutil.which("make") is None:
+        pytest.skip("make is not installed")
+
+    def recipe(*args):
+        result = subprocess.run(
+            ["make", "--no-print-directory", "-n", "check-pdf", *args],
+            cwd=doc_package,
+            capture_output=True,
+            text=True,
+        )
+        # A make that FAILS can still have printed matching recipe lines before
+        # it died, and parsing only stdout would let a broken Makefile pass.
+        assert result.returncode == 0, (
+            f"make -n {' '.join(args)} failed:\n{result.stdout}\n{result.stderr}"
+        )
+        return [
+            line
+            for line in result.stdout.splitlines()
+            if "run --rm check-pdf" in line
+        ]
+
+    plain = recipe()
+    hidden = recipe("with=hidden")
+    assert plain and hidden, (plain, hidden)
+
+    assert plain != hidden, (
+        "with=hidden expanded to the same command as a plain build; "
+        f"OUTPUT_SUFFIX is not reaching check-pdf.\n{plain}\n{hidden}"
+    )
+    assert all("-hidden.pdf" in line for line in hidden), (
+        f"with=hidden did not name the -hidden PDFs:\n{hidden}"
+    )
+    assert not any("-hidden.pdf" in line for line in plain), (
+        f"a plain build named the -hidden PDFs:\n{plain}"
     )

@@ -273,3 +273,77 @@ def test_run_is_not_validated_and_that_is_deliberate():
     that does not exist -- the author already controls the whole command."""
     context = context_for([{"run": "sh -c 'echo $HOME && ls | wc -l'", "outputs": "a/*"}])
     assert "|" in context["pre_build"][0]["run"]
+
+
+def test_docs_and_slides_are_validated_too():
+    """stn-zmf. They reach the same Make recipes pre_build's paths do.
+
+    Same scope argument as the pre_build fields: not a privilege boundary,
+    because `run` is arbitrary execution by design. What this prevents is a
+    filename quietly doing something other than naming a file.
+    """
+    from stencil.generate import get_template_context
+
+    def build(package):
+        return get_template_context("demo", {"packages": {"demo": package}})
+
+    assert build({"package_type": "doc", "docs": ["sub/nested.md"]})["docs"] == [
+        "sub/nested.md"
+    ], "a legitimate nested path was refused"
+
+    for bad, why in [
+        ("guide; touch /tmp/pwned; #.md", "metacharacter"),
+        ("my guide.md", "space"),
+        ("/etc/passwd.md", "absolute"),
+        ("../../escape.md", "escapes"),
+    ]:
+        with pytest.raises(ValueError) as caught:
+            build({"package_type": "doc", "docs": [bad]})
+        assert why in str(caught.value), (bad, str(caught.value))
+
+    with pytest.raises(ValueError):
+        build({"package_type": "doc", "slides": ["../../escape.md"]})
+
+
+def test_whitespace_and_tilde_and_package_sources_are_covered():
+    """Three gaps CodeRabbit found in the validator added one PR earlier.
+
+    All three are the same class the helper was written for, and all three
+    slipped through the first version of it:
+
+      a tab   Make splits a recipe word on tabs as well as spaces, and a tab
+              is invisible in a config file.
+      ~/x     the shell expands ~, not Make, so Path() does not see it as
+              absolute -- it reaches sh and lands in $HOME.
+      sources package_sources is joined into PKG_SOURCE_SPECS, a Make variable
+              a recipe expands and hands to zip or pandoc. Same exposure as
+              docs and slides, and it was not validated at all.
+    """
+    from stencil.generate import check_config_path, get_template_context
+
+    for bad, why in [("a\tb.md", "whitespace"), ("~/escape.md", "'~'")]:
+        with pytest.raises(ValueError) as caught:
+            check_config_path("demo", "docs", bad)
+        assert why in str(caught.value), (bad, str(caught.value))
+
+    with pytest.raises(ValueError) as caught:
+        get_template_context(
+            "demo",
+            {"packages": {"demo": {
+                "package_type": "zip",
+                "package_name": "x.zip",
+                "package_sources": ["../escape"],
+            }}},
+        )
+    assert "escapes" in str(caught.value)
+
+    # And the ordinary case still works, or the validator is just a wall.
+    context = get_template_context(
+        "demo",
+        {"packages": {"demo": {
+            "package_type": "zip",
+            "package_name": "x.zip",
+            "package_sources": ["htdocs"],
+        }}},
+    )
+    assert context["package_sources"] == ["htdocs"]

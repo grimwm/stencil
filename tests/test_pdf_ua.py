@@ -1208,3 +1208,43 @@ def test_an_emoji_builds_and_is_not_notdef(to_pdf):
     assert "Resumes" in text and "Behavioral" in text, (
         "the headings did not survive; the emoji may have broken the run"
     )
+
+
+def test_two_names_for_one_xobject_both_count_as_tagged():
+    """stn-zmf. The recursion guard was also being used as a verdict.
+
+    A resource dictionary may map two names to the same Form XObject. The
+    first alias added the stream to `seen` and recorded its name; the second
+    hit the guard and returned WITHOUT recording its name -- so a `Do` on the
+    second alias was wrapped in /Artifact, putting tagged content inside an
+    artifact. That is the 7.1 t2 failure 0.27.0 set out to fix, reintroduced
+    through the back door.
+
+    Asserted on the generated JavaScript rather than on a built PDF, because
+    Chromium does not emit an aliased XObject in any fixture available here --
+    so a PDF-level test would pass whether or not the bug were present. Stating
+    that plainly rather than implying the stronger check.
+    """
+    from stencil import pipeline  # noqa: F401  (kept for import symmetry)
+    import pathlib
+
+    whole = pathlib.Path("stencil/templates/html-to-pdf.js.j2").read_text()
+
+    # Scoped to the one function. repairToUnicode has its own unrelated `seen`
+    # guard over ToUnicode streams, and searching the whole file found that one
+    # instead -- a reminder that a text assertion measures whatever it happens
+    # to match.
+    start = whole.index("function taggedXObjectNames(")
+    end = whole.index("\n}", start)
+    source = whole[start:end]
+
+    assert "verdicts" in source, "the per-stream verdict cache is gone"
+    assert "if (verdicts.has(stream))" in source, (
+        "a name that reaches an already-decided stream no longer consults the "
+        "cache, so an alias would silently lose the verdict"
+    )
+    # The verdict cache must be consulted BEFORE the recursion guard, or an
+    # alias is skipped before its verdict can be applied.
+    assert source.index("if (verdicts.has(stream))") < source.index(
+        "if (seen.has(stream)) continue;"
+    ), "the recursion guard runs first, so an alias loses the verdict"
