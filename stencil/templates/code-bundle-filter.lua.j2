@@ -1,0 +1,73 @@
+-- Report whether this document has a listing for highlight.js to highlight,
+-- as the `has-code` metadata flag. _page-head.html.j2 and _page-scripts.html.j2
+-- inline the highlighter only when it is set.
+--
+-- Same shape as mermaid-figure-filter.lua's `has-mermaid`, and for the same
+-- reason: the bundle plus its four language packs is 141,445 bytes, it was
+-- inlined into every page unconditionally, and four of the six handouts in
+-- cs425 -- including the deck the page-weight ticket was filed about -- contain
+-- no code at all.
+--
+-- THE ASYMMETRY IS THE OPPOSITE WAY ROUND FROM MERMAID, which is why the
+-- detection below can be cheap. A missed diagram renders as nothing; a missed
+-- listing renders as a listing, correctly, in the monospace face, without
+-- syntax colouring. So over-matching costs 141 KB and under-matching costs
+-- colour, and both are recoverable by looking at the page.
+
+local has_code = false
+
+-- Only a CodeBlock. `hljs.highlightAll()` highlights `pre code`, and pandoc
+-- writes inline `Code` as a bare <code> outside any <pre>, so keying on inline
+-- code would set the flag for nearly every document ever written and gate
+-- nothing.
+--
+-- Mermaid blocks are excluded, and this is load-bearing rather than tidy:
+-- mermaid-figure-filter.lua wraps its CodeBlock in a Figure, it does not
+-- consume it, so the block survives into the page as
+-- <pre class="mermaid"><code class="language-mermaid">. Counting it would set
+-- has-code on every deck that draws a diagram -- kanban-and-sdd and
+-- design-patterns among them -- and those pages would carry the highlighter
+-- forever for markup the mermaid driver deletes from the DOM before anyone
+-- sees it.
+function CodeBlock(block)
+  if not block.classes:includes('mermaid') then
+    has_code = true
+  end
+end
+
+-- Raw HTML never becomes a CodeBlock, so a hand-written listing arrives here
+-- instead. The substring test over-matches deliberately, exactly as the mermaid
+-- filter's does, and by the asymmetry above it is the cheaper mistake.
+-- Lowercased before the search: HTML tag names are case-insensitive, and
+-- `<PRE><CODE>` is a listing the browser and hljs both recognise. The plain
+-- find is kept rather than a pattern match because `<pre` has no magic
+-- characters and a plain search cannot be surprised by one.
+local function raw_html_has_pre(element)
+  return element.format:match('^html')
+    and element.text:lower():find('<pre', 1, true)
+end
+
+function RawBlock(block)
+  if raw_html_has_pre(block) then
+    has_code = true
+  end
+end
+
+-- Raw HTML inside a paragraph is a RawInline and never reaches RawBlock.
+function RawInline(inline)
+  if raw_html_has_pre(inline) then
+    has_code = true
+  end
+end
+
+-- Pandoc runs after every block has been walked, which is what makes the flag
+-- above trustworthy at this point.
+--
+-- Set to a boolean rather than a string: pandoc's $if(x)$ is true for ANY
+-- non-empty value, so `false` would read as true and gate nothing.
+function Pandoc(doc)
+  if has_code then
+    doc.meta['has-code'] = true
+  end
+  return doc
+end

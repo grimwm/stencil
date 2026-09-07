@@ -114,6 +114,98 @@ How the version gets bumped is written down in
   build stanza, mounts and argument wiring. That needs `docker compose` in the
   container tier, which is a larger decision than this fix.
 
+- **The same font file was inlined into every page up to four times.** Google
+  Fonts serves a *variable* font -- `fvar`, `gvar` and `avar` are present in
+  every face stencil vendors -- and returns THE SAME FILE for every weight of a
+  family. So `wght@0,400;0,600;0,800` fetches one file three times, and the
+  stylesheet built from it carries that file three times, once per
+  `font-weight` descriptor.
+
+  Measured on the vendored `fonts.css`: **31 `@font-face` blocks holding 17
+  distinct files, 1,576,444 raw woff2 bytes of which 706,644 are duplicates.**
+  Crimson Pro's upright face is in there three times over and Inter's four.
+  That is 947,218 bytes of base64 on every generated page, before any question
+  of what the page uses.
+
+  It also means 0.17.0's bold fix did not cost the 236 KB it is recorded as
+  costing. Adding `0,800` and `1,800` to the request added no glyph and no
+  file — it added a third and fourth copy of bytes the page already carried.
+  The fix was free and nobody knew.
+
+  `assets.merge_duplicate_faces` collapses them on the way into a page. The
+  committed `fonts.css` is untouched, so it still says what was actually
+  fetched, and re-vendoring does not rewrite two megabytes of base64 that did
+  not change.
+
+- **What the merged `font-weight: 400 800` changes, stated rather than
+  glossed.** A `font-weight` descriptor on a variable face pins the `wght`
+  axis — that is the only reason three identical files render as three
+  different weights today — so one block declaring the span those weights cover
+  renders each of *them* identically. Pinning the axis at 600 and instantiating
+  600 out of a range are the same operation on the same file.
+
+  What moves is the weights in *between*. With discrete faces at 400/600/800, a
+  request for 700 finds no face and CSS font-matching rounds it up to 800;
+  inside a `400 800` range, 700 is an exact match on a continuous axis.
+  Measured across every family, the complete set of weights this moves is
+  **Crimson Pro 500 and 700 upright, 500/600/700 italic** — precisely the ones
+  no face ever declared. `tests/test_fonts.py` asserts that set as data, so
+  widening it fails the suite.
+
+  Exactly one of those is reachable from plain markdown: Bootstrap's reboot
+  sets `dt { font-weight: 700 }`, so a definition term would have gone from
+  the 800 face to a real 700. `_page-style.css.j2` now pins `dt` to 800, which
+  is what it renders as today. Bootstrap's other 700 utilities — `.fw-bold`,
+  `.badge`, `.alert-link`, `.nav-underline` — reach the body serif only through
+  hand-written HTML, which is outside the dialect AUTHORING.md describes; on
+  those, and only those, bold prose in the serif now renders at 700 rather
+  than 800.
+
+- **The syntax highlighter rides along only on documents that have code.**
+  `highlight.min.js` and its four language packs are 141,445 bytes, and they
+  were inlined into every page whether or not it held a listing. Same treatment
+  as the mermaid bundle in 0.14.0: `code-bundle-filter.lua` sets `has-code`,
+  and `_page-head.html.j2` and `_page-scripts.html.j2` inline the stylesheets,
+  the bundle and the `hljs.highlightAll()` call together under it.
+
+  Together, not separately. Gating the library and leaving the call behind is a
+  `ReferenceError` in a page that otherwise looks finished — `make pdf` would
+  fail, because `html-to-pdf.js` refuses to write on a page error, but
+  `make doc` would ship it. `tests/test_code_bundle.py` converts a code-free
+  document to PDF for that reason: it is the only check that runs the script
+  rather than reading it.
+
+- **A mermaid diagram is not a listing, and getting that wrong would have
+  undone the change on the biggest decks.** `mermaid-figure-filter.lua` wraps
+  its `CodeBlock` in a Figure rather than consuming it, so the block reaches
+  the page as `<pre class="mermaid"><code class="language-mermaid">` — which is
+  exactly what the mermaid driver looks for. A filter counting every
+  `CodeBlock` would set `has-code` on every deck that draws a diagram. Measured
+  on cs425: every code fence in `design-patterns.md` and `kanban-and-sdd.md` is
+  a mermaid fence, so both decks would have carried the highlighter forever for
+  markup the driver deletes from the DOM before a reader sees it.
+
+  Inline `` `code` `` does not count either: `hljs.highlightAll()` highlights
+  `pre code`, and pandoc writes inline code as a bare `<code>`.
+
+- **Measured on real documents, before and after, through the same
+  `generate_package` + pandoc path `make doc` uses.** The before column
+  reproduces the committed cs425 HTML byte for byte.
+
+  | document                                                | before    | after     | saved  |
+  | ------------------------------------------------------- | --------- | --------- | ------ |
+  | `classroom/job-search.md` (deck, no code, has emoji)    | 2,667,850 | 1,576,738 | −40.9% |
+  | `classroom/cs425-syllabus.md` (document, no code)       | 2,661,804 | 1,570,692 | −41.0% |
+  | `classroom/design-patterns.md` (deck, 8 mermaid fences) | 6,253,915 | 5,162,803 | −17.4% |
+
+  `@font-face` blocks per page: 32 → 17. Font payload: 2,116,885 → 1,169,667.
+
+- **Nothing was dropped to get there.** Every face stencil vendored before it
+  still ships, latin-ext included, and every character any of it could draw it
+  can still draw. `stn-uje` proposed subsetting the faces to the glyphs a page
+  actually uses, which would take the font payload lower still; that is not in
+  this release, and no coverage was removed in its place.
+
 - 0.29.0 through 0.30.2 shipped without entries here. Git is the record of them.
 
 ## 0.28.2

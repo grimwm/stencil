@@ -71,13 +71,19 @@
   <!-- Bootstrap 5 -->
   <style>{{ assets.bootstrap_css }}</style>
 
-  <!-- Highlight.js for code syntax highlighting -->
+  <!-- Highlight.js for code syntax highlighting, on the documents that have
+       code. code-bundle-filter.lua sets has-code; the bundle itself is gated
+       the same way in _page-scripts.html.j2, and the two must stay together --
+       the stylesheet alone would be dead weight and the bundle alone would
+       highlight into colours nothing defines. -->
+$if(has-code)$
   <style>{{ assets.highlight_css }}</style>
   <!-- The dark counterpart, scoped in assets.py to :root[data-theme="dark"]
        and wrapped here in @media screen. Same containment rule as every other
        dark declaration: print cannot match the block, so a printed listing
        keeps the light theme with nothing to undo. -->
   <style>@media screen { {{ assets.highlight_css_dark }} }</style>
+$endif$
 
   <!-- Crimson Pro (serif) + Inter (sans) + JetBrains Mono; latin + latin-ext only -->
   <style>{{ assets.fonts_css }}</style>
