@@ -101,6 +101,10 @@
       - -c
       - |
 {{ verapdf_script | replace('$', '$$') | indent(8, first=True) }}
+      # $$0 for the script itself, so the filenames `make check-pdf` appends
+      # land in "$$@". Without it the first filename would be swallowed as $$0
+      # and silently go unchecked.
+      - check-pdf
     restart: "no"
 
   # Shares the pdf service's image: both drive Chromium from Node, and building

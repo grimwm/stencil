@@ -648,18 +648,100 @@ function xmpFor(title) {
 
 const PAINTING_OPERATORS = /\b(?:re|f\*?|F|S|s|B\*?|b\*?|n|W\*?|Do|sh|Tj|TJ|'|")\s*$/;
 
-function markArtifacts(source) {
+// Names of the page's Form XObjects whose own content stream carries marked
+// content, resolved transitively because an XObject can invoke another.
+//
+// THIS IS WHAT 0.21.0 COULD NOT SEE. markArtifacts counts BDC/EMC in the page
+// stream, and a `Do` hands off to a stream one level of indirection away that
+// has marked-content sequences of its own. Wrapping that `Do` in /Artifact
+// puts every MCID inside the XObject into an artifact -- veraPDF 7.1 t2,
+// "tagged content shall not be present inside content marked as Artifact".
+//
+// Measured on the CS 425 classroom package: poster.pdf's single Form XObject
+// is a 1px rule Chromium put in a transparency group and tagged /NonStruct
+// with an MCID. Nine more in kanban-vs-scrum.pdf. The handouts draw nothing
+// through an XObject, which is why six of six passed and this stayed hidden.
+function taggedXObjectNames(resources, context, seen) {
+  seen = seen || new Set();
+  const names = new Set();
+
+  resources = context.lookup(resources);
+  if (!(resources instanceof PDFDict)) return names;
+  const xobjects = context.lookup(resources.get(PDFName.of("XObject")));
+  if (!(xobjects instanceof PDFDict)) return names;
+
+  for (const key of xobjects.keys()) {
+    const stream = context.lookup(xobjects.get(key));
+    if (!(stream instanceof PDFRawStream)) continue;
+
+    // Only /Form. An /Image XObject has no content stream -- its data is
+    // pixels -- and scanning those bytes for "BDC" is a coin toss on binary
+    // that would eventually declare a photograph tagged and stop marking a
+    // genuinely decorative image as an artifact.
+    const subtype = stream.dict.get(PDFName.of("Subtype"));
+    if (!(subtype instanceof PDFName) || subtype.asString() !== "/Form") {
+      continue;
+    }
+
+    // A cycle would otherwise not terminate. An XObject already being
+    // examined higher up the chain is treated as clear here; whatever it
+    // carries is accounted for at the level that owns it.
+    if (seen.has(stream)) continue;
+    seen.add(stream);
+
+    let body;
+    try {
+      // decodePDFRawStream for the same reason the page stream uses it: the
+      // raw bytes are Flate-compressed, so searching them for "BDC" finds
+      // nothing and would report every XObject as safe to wrap.
+      body = Buffer.from(decodePDFRawStream(stream).decode()).toString("latin1");
+    } catch (error) {
+      // An XObject that cannot be decoded is one we cannot clear, so it counts
+      // as carrying marked content. Refusing to wrap risks a 7.1 t3; wrapping
+      // it wrongly is a certain 7.1 t2.
+      names.add(key.asString());
+      continue;
+    }
+
+    if (/\bBDC\b|\bBMC\b/.test(body)) {
+      names.add(key.asString());
+      continue;
+    }
+
+    // An XObject that invokes another inherits its verdict, and the nested
+    // one is named in the OUTER one's own resources.
+    const nested = taggedXObjectNames(
+      stream.dict.get(PDFName.of("Resources")),
+      context,
+      seen
+    );
+    if (nested.size) names.add(key.asString());
+  }
+
+  return names;
+}
+
+// `/X8 Do` -- the name the operator invokes, or null when the line is not a Do.
+const XOBJECT_INVOCATION = /(\/[^\s/]+)\s+Do\s*$/;
+
+function markArtifacts(source, taggedXObjects) {
+  const tagged = taggedXObjects || new Set();
   const lines = source.split("\n");
   const out = [];
   let depth = 0;
   let run = [];
   let runPaints = false;
+  let runCarriesTaggedXObject = false;
 
   const flush = () => {
     if (!run.length) return;
     // A run with no painting operator is graphics state -- colour, matrix, gs
     // -- and marking it would claim there is content where there is none.
-    if (runPaints) {
+    //
+    // A run that paints a tagged XObject is left alone for the opposite
+    // reason: there is content, and it is already marked, one level down
+    // where the depth counter above cannot see it.
+    if (runPaints && !runCarriesTaggedXObject) {
       out.push("/Artifact BMC");
       out.push(...run);
       out.push("EMC");
@@ -668,6 +750,7 @@ function markArtifacts(source) {
     }
     run = [];
     runPaints = false;
+    runCarriesTaggedXObject = false;
   };
 
   for (const line of lines) {
@@ -700,6 +783,14 @@ function markArtifacts(source) {
       continue;
     }
     run.push(line);
+    // A Do into an XObject that carries its own marked content disqualifies
+    // the whole run. Not just this line: the run is what gets bracketed, so
+    // one such Do anywhere in it would put that XObject's MCIDs inside the
+    // /Artifact.
+    const invoked = XOBJECT_INVOCATION.exec(t);
+    if (invoked && tagged.has(invoked[1])) {
+      runCarriesTaggedXObject = true;
+    }
     if (PAINTING_OPERATORS.test(t)) runPaints = true;
   }
   flush();
@@ -713,6 +804,11 @@ async function markPageArtifacts(pdf) {
   for (const page of pdf.getPages()) {
     const contents = page.node.Contents();
     if (!contents) continue;
+
+    const tagged = taggedXObjectNames(
+      page.node.get(PDFName.of("Resources")),
+      context
+    );
 
     // Contents is one stream or an array of them; both are legal and Chromium
     // emits one. Resolved through the context because either can be a
@@ -737,7 +833,7 @@ async function markPageArtifacts(pdf) {
       const before = Buffer.from(decodePDFRawStream(stream).decode()).toString(
         "latin1"
       );
-      const after = markArtifacts(before);
+      const after = markArtifacts(before, tagged);
       if (after === before) {
         rewritten.push(stream);
         continue;

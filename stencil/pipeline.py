@@ -56,24 +56,37 @@ VERAPDF_BIN = "/opt/verapdf/verapdf"
 # getContentsString() no-op that 0.21.0 nearly shipped. Nothing to check is a
 # build error here, not a pass.
 #
-# Each file is named on its own invocation rather than handed over as a glob,
-# so the count of results is the count of files.
+# THE FILES ARE NAMED, NOT GLOBBED. A package directory is also just a
+# directory, and people put things in it: cs425/classroom carries an 11 MB
+# third-party book, and `for f in *.pdf` failed the build on it. The report was
+# not wrong -- that PDF is not conformant -- but it was not actionable, and an
+# unactionable red is how a gate gets switched off.
+#
+# Naming them also makes the guard say more. `make pdf` writes a known list, so
+# the check can tell "you gave me nothing" from "you gave me six and one of
+# them is missing", and name the one that is missing.
 VERAPDF_SCRIPT = f"""\
+expected=0
 found=0
 failed=0
-for f in *.pdf; do
-  [ -f "$f" ] || continue
+for f in "$@"; do
+  expected=$((expected + 1))
+  if [ ! -f "$f" ]; then
+    echo "check-pdf expected $f and it is not there." >&2
+    failed=1
+    continue
+  fi
   found=$((found + 1))
   echo "Checking $f (PDF/UA-1)..."
   {VERAPDF_BIN} --flavour ua1 --format text "$f" || failed=1
 done
-if [ "$found" -eq 0 ]; then
-  echo "check-pdf found no PDF to check in $(pwd)." >&2
+if [ "$expected" -eq 0 ]; then
+  echo "check-pdf was given no file to check." >&2
   echo "Run 'make pdf' first. veraPDF exits 0 on an empty file list, so this" >&2
   echo "would otherwise have reported success having checked nothing." >&2
   exit 1
 fi
-echo "Checked $found PDF(s) against PDF/UA-1."
+echo "Checked $found of $expected PDF(s) against PDF/UA-1."
 exit $failed
 """
 
@@ -322,6 +335,7 @@ def html_to_pdf(
 def verapdf(
     *,
     workdir: Path,
+    files: list[str],
     runtime: str | None = None,
     timeout: float | None = None,
 ) -> subprocess.CompletedProcess:
@@ -348,6 +362,10 @@ def verapdf(
             VERAPDF_IMAGE,
             "-c",
             VERAPDF_SCRIPT,
+            # $0 for the script; the files land in "$@" exactly as the compose
+            # service passes them.
+            "check-pdf",
+            *files,
         ],
         capture_output=True,
         text=True,
