@@ -165,6 +165,7 @@ def test_a_file_that_was_never_written_is_named(pdf_workspace):
     is missing" -- it just checks five and reports success. The list is what
     `make pdf` just wrote, so a gap in it is a build failure worth a name.
     """
+    here = scratch(pdf_workspace, "gate-missing")
     (here / "there.pdf").write_bytes(
         b"%PDF-1.4\n1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n"
         b"2 0 obj<</Type/Pages/Kids[3 0 R]/Count 1>>endobj\n"
@@ -194,6 +195,7 @@ def test_a_pdf_nobody_asked_about_is_not_opened(pdf_workspace):
     code, because an implementation that checked it anyway and happened to
     pass would look identical from the outside.
     """
+    here = scratch(pdf_workspace, "gate-foreign")
     conformant = here / "ours.pdf"
     conformant.write_bytes(
         b"%PDF-1.4\n1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n"
@@ -224,6 +226,7 @@ def test_a_non_conformant_pdf_fails_the_gate(pdf_workspace):
     because a gate that answers PASS to everything is indistinguishable from
     one that works until the day it is needed.
     """
+    here = scratch(pdf_workspace, "gate-bad")
     untagged = (
         b"%PDF-1.4\n"
         b"1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n"
