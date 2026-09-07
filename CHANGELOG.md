@@ -9,6 +9,75 @@ and the closed epics in `.beads/issues.jsonl` are the readable index.
 How the version gets bumped is written down in
 [AGENTS.md](AGENTS.md#cutting-a-release), not here.
 
+## 0.31.0
+
+- **Nothing a generated package installs was pinned.** `Dockerfile.browser`
+  ran `npm install --global puppeteer pa11y pdf-lib` with no version
+  constraint, `FROM node:lts-alpine` floated across Node majors and Alpine
+  releases, and `format-md` installed prettier the same way. Three tools, none
+  of them stated, all of them deciding what a handout looks like.
+
+  The ticket that found it, `stn-s5b`, makes the argument better than a
+  changelog can: 0.13.0 pins `tagged: true` on `page.pdf()` *precisely* because
+  an accessibility property that is only a default is one a version bump can
+  remove silently. The pin guards the option; the floating install guarded
+  nothing about the runtime that honours it. Against a Puppeteer predating the
+  option the pin is a silent no-op — and `test_the_pdf_is_tagged` still passes,
+  because the default is tagged.
+
+  Exact versions, from `stencil/pipeline.py`, where `PANDOC_IMAGE` and
+  `VERAPDF_IMAGE` already live. Exact rather than `^`, because `tagged` is the
+  kind of option a *minor* release adds or drops, and a caret satisfies "the
+  same major" without satisfying the argument the pin was made for.
+
+- **Measured before pinning, not after.** On a `--no-cache` rebuild of the
+  image exactly as it shipped, 2026-09-07: node v24.20.0, Alpine 3.24.1,
+  chromium 152.0.7977.82-r0, puppeteer 25.10.0, pa11y 10.0.0, pdf-lib 1.17.1.
+
+  pa11y 10.0.0 had been released ten days earlier and had floated in
+  unnoticed — a major version bump nobody chose. Worse, **no test in this
+  repository had ever executed pa11y**: `make check-access` is a compose
+  service, and the suite reads HTML and PDFs. Pinning it as found would have
+  frozen a version that had never been run here, so it was run first, against
+  both generated theme configs on a rendered page, and that run is now a test.
+
+- **One Node image, named once.** Three files reached for it — the browser
+  Dockerfile, the `format-md` service, and the `ensure_image` line that
+  pre-pulls it. Three copies of a floating name is three chances for
+  `make format-md` to pull one image and run another, which reads as a slow
+  first build rather than as a defect.
+
+- **Chromium is deliberately NOT pinned, and the reasoning is in the
+  Dockerfile.** Both apk spellings were measured. Alpine holds one version of a
+  package per branch and drops it when superseded, so a pin is a countdown
+  rather than a pin: `chromium=151.0.7716.0-r0` — the version this image
+  installed one release ago — already fails with `unable to select packages`,
+  and `chromium=~152`, which does hold the major, resolves today and fails the
+  same way the week Alpine moves to 153. Either converts
+  silent drift into a hard build failure with no escape hatch: the Makefile and
+  the compose file build the image with no build argument, and `make gen`
+  rewrites both.
+
+  A handout nobody can build is worse than one whose page breaks moved — and
+  where the page breaks land is measured directly, on every pull request, by
+  `tests/test_pdf.py` and the PDF/UA suite. What *is* pinnable is the Alpine
+  branch Chromium comes from, which is the base image.
+
+- **New guards**, in `tests/test_pins.py`. The rendered scaffolding assertions
+  are a property rather than a list — every `npm install` in every generated
+  file must name an exact version — so a fourth package added to some future
+  template fails here without anyone remembering to add a case. One of them
+  passed vacuously when first written: a deny-list of `{latest, lts}` does not
+  match `lts-alpine`, so the check now requires a digit in the tag.
+
+  The container tier asserts the three claims that are genuinely different: the
+  image *holds* the versions the Dockerfile *names*; there is exactly **one**
+  puppeteer in the tree, because pa11y depends on puppeteer and a pin outside
+  its range silently gives `check-access` a different browser than `make pdf`;
+  and pa11y runs.
+
+- 0.29.0 through 0.30.2 shipped without entries here. Git is the record of them.
+
 ## 0.28.2
 
 - **veraPDF now sees a deck.** `stn-l68`'s acceptance asked for a PDF/UA check

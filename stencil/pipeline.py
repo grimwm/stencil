@@ -35,6 +35,66 @@ PANDOC_IMAGE = "docker.io/pandoc/core:3.10.0.0"
 BROWSER_DOCKERFILE = "Dockerfile.browser"
 BROWSER_IMAGE_TAG = "localhost/stencil_browser:test"
 
+# Every Node in a generated package: the browser image's base, the format-md
+# service, and the ensure_image line that pre-pulls it. One constant, because
+# three copies of a floating name is three chances for `make format-md` to pull
+# one image and run another -- a defect that reads as a slow first build.
+#
+# Pinned for the reason PANDOC_IMAGE is, and one more. `lts` moves across Node
+# major releases, and pa11y declares `engines: ^22.13.0 || >=24`, so an LTS
+# rollover can make the image simply refuse to build. `alpine` moves across
+# Alpine releases, and the Alpine branch is what decides which Chromium
+# `apk add chromium` installs and which font packages exist -- and the fonts
+# are already documented, three lines into Dockerfile.browser.j2, as the thing
+# that moves every page break.
+#
+# To bump: edit this line, rebuild the browser image, and run the container
+# tier. Read what moved in the PDF geometry and the PDF/UA results.
+NODE_IMAGE = "docker.io/library/node:24.20.0-alpine3.24"
+
+# What the browser image installs. Exact, not `^`: stn-s5b was filed because
+# html-to-pdf.js pins `tagged: true` on page.pdf() to stop a version bump
+# silently removing an accessibility property, and `tagged` is exactly the kind
+# of option a MINOR release adds or drops. A caret satisfies "the same major"
+# and not the argument the pin was made for.
+#
+# Measured on a --no-cache rebuild, 2026-09-07: node v24.20.0, Alpine 3.24.1,
+# chromium 152.0.7977.82-r0, and these three. pa11y 10.0.0 had been released
+# ten days earlier and had floated in unnoticed; it was run against both
+# generated theme configs before being pinned to, rather than pinned to on the
+# strength of npm having served it that morning.
+#
+# puppeteer and pa11y are coupled: pa11y DEPENDS on puppeteer, npm dedupes the
+# two onto one copy only while the pinned puppeteer satisfies pa11y's declared
+# range, and a tree with two copies means `make check-access` drives a
+# different browser than `make pdf`. tests/test_pins.py asserts there is one.
+#
+# WHAT THIS DOES NOT PIN: the transitive tree. An exact version fixes these
+# three and the exact puppeteer-core puppeteer itself declares; everything
+# below that still resolves within a range at build time. `npm audit` over the
+# resolved tree reported no known advisory at any severity on the day these
+# were chosen, which is a measurement of that day and not a property of the
+# pin. Closing the gap properly means a committed lockfile and `npm ci` --
+# stencil already vendors its page assets exactly that way, in
+# scripts/vendor_page_assets.py -- and is tracked as stn-5hv.
+#
+# WHEN BUMPING: pa11y 10.0.0 was ten days old when it was pinned to, which is
+# inside the window where a compromised release is usually still being found.
+# Read the advisories for all three before moving a pin, not only the release
+# notes.
+BROWSER_NPM_PINS = {
+    "pa11y": "10.0.0",
+    "pdf-lib": "1.17.1",
+    "puppeteer": "25.10.0",
+}
+
+# The formatter, pinned for the same reason with a wider blast radius: an
+# unpinned prettier decides how every markdown file in a package is rewritten.
+FORMAT_NPM_PINS = {
+    "@awmottaz/prettier-plugin-void-html": "2.2.1",
+    "prettier": "3.9.6",
+}
+
 # PDF/UA-1 conformance checking. Pinned, because veraPDF's rule set is the
 # thing being asserted against: an unpinned tag lets a build go red or green
 # on someone else's release rather than on a change here.
@@ -127,6 +187,16 @@ _FRONTMATTER_FIRST = (
 )
 
 KINDS = ("doc", "slide")
+
+
+def npm_specs(pins: dict[str, str]) -> list[str]:
+    """``{"pa11y": "10.0.0"}`` -> ``["pa11y@10.0.0"]``, for an install line.
+
+    Sorted, so the rendered scaffolding does not change because a dict was
+    edited in a different order.
+    """
+    return [f"{name}@{version}" for name, version in sorted(pins.items())]
+
 
 _TEMPLATE = {"doc": "html-template.html", "slide": "slide-template.html"}
 

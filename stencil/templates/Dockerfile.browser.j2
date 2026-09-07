@@ -3,7 +3,7 @@
    every single invocation, paid once per file. Building it instead lets the
    container engine cache the layers, so the cost lands on the first run and
    never again. #}
-FROM docker.io/library/node:lts-alpine
+FROM {{ node_image }}
 
 # Puppeteer's bundled Chromium download has no musl build, and pa11y drives the
 # same browser anyway, so both use the distro package.
@@ -16,6 +16,42 @@ ENV NPM_CONFIG_UPDATE_NOTIFIER=false
 ENV NODE_PATH=/opt/tools/lib/node_modules
 ENV PATH=/opt/tools/bin:$PATH
 
+# CHROMIUM IS DELIBERATELY NOT PINNED, and the reasoning is worth keeping here
+# rather than in a commit message, because the obvious "fix" makes things worse.
+#
+# Alpine's repository holds exactly ONE version of a package per branch and
+# drops it the moment it is superseded. A pin is therefore not a pin; it is a
+# countdown. Measured on this image's own base:
+#
+#     $ apk add --no-cache chromium=151.0.7716.0-r0
+#     ERROR: unable to select packages:
+#       chromium-152.0.7977.82-r0:
+#         breaks: world[chromium=151.0.7716.0-r0]
+#
+# That is the version this image installed one release ago, already unusable.
+# The fuzzy spelling `chromium=~152` does hold the major and does resolve today
+# -- and fails exactly that way the week Alpine moves to 153.
+#
+# Either one converts silent drift into a hard build failure with no escape
+# hatch on the consumer's side: the Makefile and the compose file build this
+# image with no build argument, and stencil rewrites both on the next
+# `make gen`, so a course repository would be stuck until a stencil release
+# landed. A handout nobody can build is worse than one whose page breaks moved
+# -- and where the page breaks land is measured directly, on every pull
+# request, by the container tier in tests/test_pdf.py and the PDF/UA suite.
+#
+# What stencil CAN pin is the Alpine branch this installs from, which is the
+# base image above.
+#
+# The asymmetry -- Node pinned exactly, Chromium floating -- is the right way
+# round for a second reason. Chromium runs here with --no-sandbox (it cannot
+# use its own sandbox inside an unprivileged container; see the pa11y config
+# below and html-to-pdf.js), and it is the process that actually parses and
+# renders the content. Leaving it on the distro package means every fresh build
+# picks up Alpine's security patches for it. Node is pinned and therefore does
+# not, but Node here only drives local tooling over locally generated,
+# self-contained HTML.
+#
 # font-noto covers characters outside the latin/latin-ext faces the page
 # inlines. With no real font installed, Chromium lays out at fallback metrics
 # and every page break moves.
@@ -23,7 +59,12 @@ RUN apk add --no-cache chromium font-noto ttf-dejavu
 
 # pdf-lib is used after printing, to add the role map and XMP metadata that
 # PDF/UA-1 requires and Chromium does not write. See html-to-pdf.js.
-RUN npm install --global --prefix /opt/tools puppeteer pa11y pdf-lib
+#
+# Exact versions, from stencil/pipeline.py, where the reasoning and the dated
+# measurement they were taken from live. Unpinned, this line decided which
+# Chromium driver honoured `tagged: true` and which engine `make check-access`
+# ran, and a rebuild could change both without appearing in any diff (stn-s5b).
+RUN npm install --global --prefix /opt/tools {{ browser_npm_specs | join(' ') }}
 
 # One pa11y config per theme, each driving the control before measuring.
 # chromeLaunchConfig is in both: Chromium cannot use its own sandbox inside

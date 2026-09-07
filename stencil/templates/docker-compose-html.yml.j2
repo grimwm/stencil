@@ -1,5 +1,10 @@
+  # The image and the two packages are pinned in stencil/pipeline.py, alongside
+  # the browser image's. An unpinned prettier is the widest blast radius of the
+  # three floating installs stn-s5b found: it rewrites every markdown file in
+  # the package, so a major landing between two runs reformats a course's whole
+  # source tree and buries the actual edit.
   format-md:
-    image: docker.io/library/node:lts-alpine
+    image: {{ node_image }}
     volumes:
       - .:/workspace:z
 {% if has_package_output_dir %}
@@ -16,7 +21,7 @@
       - -c
       - |
         echo "Formatting markdown files..."
-        npm install --prefix /tmp/fmt prettier @awmottaz/prettier-plugin-void-html && \
+        npm install --prefix /tmp/fmt {{ format_npm_specs | join(' ') }} && \
         /tmp/fmt/node_modules/.bin/prettier \
           --plugin /tmp/fmt/node_modules/@awmottaz/prettier-plugin-void-html/prettier-plugin-void-html.js \
           --prose-wrap always --print-width 100 --write "**/*.md"
