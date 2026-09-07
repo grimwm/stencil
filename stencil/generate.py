@@ -12,6 +12,7 @@ Usage:
 """
 
 import argparse
+import os
 import re
 import shutil
 import stat
@@ -227,6 +228,29 @@ def get_template_context(package_id: str, config: dict) -> dict:
                 "name": entry.get("name") or f"pre-build-{index}",
             }
         )
+    # Where this package's build products go, relative to the package
+    # directory. Declared relative to the .config.yaml the way `dir` is, and
+    # turned into a package-relative path here because every generated path
+    # is package-relative.
+    raw_output = package.get("output_dir")
+    if raw_output:
+        # The package directory is <top-level output_dir>/<dir>, so the path
+        # back out to a config-relative output directory has to climb BOTH.
+        # Getting this wrong resolves `build/classroom` to
+        # `<output_dir>/build/classroom` -- which a string assertion on the
+        # Makefile cannot see, and a real build lands in the wrong place.
+        package_root = Path(config.get("output_dir") or ".") / (
+            package.get("dir") or package_id
+        )
+        try:
+            package_output_dir = os.path.relpath(Path(raw_output), package_root)
+        except ValueError as error:
+            raise ValueError(
+                f"Package {package_id}: output_dir {raw_output!r} cannot be "
+                f"expressed relative to the package directory {package_root}"
+            ) from error
+    else:
+        package_output_dir = ""
 
     # Normalize sql_import to a list of import configs (target, database, file)
     raw_sql_import = package.get("sql_import")
@@ -285,6 +309,16 @@ def get_template_context(package_id: str, config: dict) -> dict:
         "has_mysql": has_mysql,
         "has_services": has_services,
         # Explicit features
+        # Per-package output_dir: where BUILD PRODUCTS go, as a path relative
+        # to the package directory. `dir` says where the package's sources and
+        # scaffolding live; this says where its .html and .pdf land. The two
+        # are orthogonal -- one is an input location, the other an output one.
+        #
+        # Empty string when unset, which the Makefile turns into "." and the
+        # compose file into no second mount, so a package that does not set it
+        # is byte-identical to before.
+        "package_output_dir": package_output_dir,
+        "has_package_output_dir": bool(package_output_dir),
         "sql_imports": sql_imports,
         "pre_build": pre_build,
         "has_pre_build": bool(pre_build),
@@ -1042,9 +1076,17 @@ def main():
         list_packages(config)
         return
 
-    # Resolve output_dir relative to CWD (defaults to CWD if omitted)
+    # output_dir is resolved relative to THE CONFIG FILE, not to the working
+    # directory. It used to be CWD-relative, which made it the only path in a
+    # config that was: templates_dir and every `brand: file://` resolve against
+    # the config. Same config, different shell, different output directory.
+    #
+    # Changed rather than kept, because a per-package output_dir was being
+    # added and two keys of the same name resolving against different bases is
+    # a trap worth more than backwards compatibility with a behaviour nothing
+    # used -- checked across cs234 and cs425: no config sets it.
     output_dir_raw = config.get("output_dir")
-    output_base = Path(output_dir_raw).resolve() if output_dir_raw else Path.cwd()
+    output_base = (config_dir / output_dir_raw).resolve() if output_dir_raw else config_dir
 
     if args.command == "clean":
         if not args.all and not args.pkg:

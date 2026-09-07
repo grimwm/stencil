@@ -42,13 +42,17 @@ CONTRACT = {
     "Makefile-doc.j2": {
         "docs",
         "has_docs",
+        "has_package_output_dir",
         "has_pages",
         "has_pre_build",
         "has_slides",
+        "package_output_dir",
         "pandoc_image",
         "pre_build",
         "slides",
     },
+    # OUT_HOST is a make variable defined in Makefile-doc.j2, not a context
+    # key, so clean-pkg reads nothing new from the context.
     "Makefile-pkg.j2": {
         "docs",
         "has_package_sources",
@@ -71,6 +75,8 @@ CONTRACT = {
         "pandoc_argv_doc",
         "pandoc_argv_slide",
         "pandoc_image",
+        "has_package_output_dir",
+        "package_output_dir",
         "verapdf_image",
         "verapdf_script",
     },

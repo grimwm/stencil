@@ -74,4 +74,4 @@ pkg: format-md ## Build {{ package_name }} from {{ package_sources | join(' ') }
 
 {% endif %}
 clean-pkg: ## Remove generated files
-	rm -f {% if package_type == "zip" %}$(PKG) {% endif %}{% if has_package_sources %}{{ package_stem }}.html {{ package_stem }}-*.html {{ package_stem }}.pdf {{ package_stem }}-*.pdf {% endif %}{% for md in docs + slides %}{{ md | replace('.md', '.html') }} {{ md | replace('.md', '-*.html') }} {{ md | replace('.md', '.pdf') }} {{ md | replace('.md', '-*.pdf') }} {% endfor %}
+	rm -f {% if package_type == "zip" %}$(PKG) {% endif %}{% if has_package_sources %}$(OUT_HOST)/{{ package_stem }}.html $(OUT_HOST)/{{ package_stem }}-*.html $(OUT_HOST)/{{ package_stem }}.pdf $(OUT_HOST)/{{ package_stem }}-*.pdf {% endif %}{% for md in docs + slides %}$(OUT_HOST)/{{ md | replace('.md', '.html') }} $(OUT_HOST)/{{ md | replace('.md', '-*.html') }} $(OUT_HOST)/{{ md | replace('.md', '.pdf') }} $(OUT_HOST)/{{ md | replace('.md', '-*.pdf') }} {% endfor %}
