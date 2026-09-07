@@ -206,3 +206,97 @@ def test_an_unset_key_still_triggers_the_default_filter(generate_package, tmp_pa
         package_id="plain",
     )
     assert (package / "entry").read_text().strip() == "index.html"
+
+
+# ---------------------------------------------------------------------------
+# stn-lcz: a custom key may not take a derived key's name.
+#
+# Raised by a review bot against verapdf_image/verapdf_script in 0.22.0 and
+# true of every derived key: a package's template_env was merged with
+# context.update, so it overwrote pandoc_image, package_type, docs and assets
+# alike. The comment three lines above that merge claimed "setdefault
+# throughout, so a config cannot shadow a derived key" -- true of the two
+# passes above it, false of the line beneath it.
+#
+# Measured before changing the behaviour: across cs234 and cs425, 17 distinct
+# template_env keys are in use and NONE collides with a derived key. So
+# raising costs no existing config anything, and it is the same call
+# StrictUndefined makes elsewhere -- fail at generation time rather than in
+# whatever the template rendered.
+
+
+def context_for(template_env: dict | None = None, config_env: dict | None = None):
+    package = {"package_type": "doc", "docs": ["a.md"]}
+    if template_env is not None:
+        package["template_env"] = template_env
+    config = {"packages": {"demo": package}}
+    if config_env is not None:
+        config["template_env"] = config_env
+    return get_template_context("demo", config)
+
+
+def test_a_custom_key_still_reaches_the_context():
+    """The feature itself, so the guard cannot be mistaken for it working."""
+    context = context_for({"front_controller": "index.php"})
+    assert context["front_controller"] == "index.php"
+
+
+def test_a_package_may_not_shadow_a_derived_key():
+    with pytest.raises(ValueError) as caught:
+        context_for({"pandoc_image": "somebody/else:latest"})
+    assert "pandoc_image" in str(caught.value)
+
+
+def test_a_config_may_not_shadow_a_derived_key_either():
+    """Both levels, or the rule is a suggestion. This one already could not
+    shadow -- setdefault silently dropped it -- so the change here is that it
+    says so instead of ignoring you."""
+    with pytest.raises(ValueError) as caught:
+        context_for(config_env={"package_type": "zip"})
+    assert "package_type" in str(caught.value)
+
+
+def test_the_error_names_every_collision_not_just_the_first():
+    """A config with two mistakes should need one round trip, not two."""
+    with pytest.raises(ValueError) as caught:
+        context_for({"pandoc_image": "x", "assets": "y", "harmless": "z"})
+    message = str(caught.value)
+    assert "assets" in message and "pandoc_image" in message
+    assert "harmless" not in message
+
+
+def test_a_package_value_still_beats_the_config_wide_default():
+    """The behaviour the update() is FOR, which a careless fix would break by
+    turning that line into a setdefault as well."""
+    context = context_for(
+        {"has_playwright": True}, config_env={"has_playwright": False}
+    )
+    assert context["has_playwright"] is True
+
+
+def test_the_keys_the_real_consumers_use_are_all_still_accepted():
+    """Measured from cs234 and cs425 rather than imagined. If a future derived
+    key takes one of these names, this fails here instead of in a course
+    repository the next time someone runs make gen."""
+    in_use = {
+        "assignment_id": "hs4",
+        "assignment_name": "hs6",
+        "assignment_title": "HS4",
+        "assignment_total_points": 20,
+        "base_database": "world",
+        "content_index": "index.php",
+        "db_dialect": "mysql",
+        "deps_script": False,
+        "docroot_subdir": "active",
+        "front_controller": True,
+        "has_db_grading": True,
+        "has_install_scripts": True,
+        "has_playwright": False,
+        "has_vscode": True,
+        "needs_world_database": False,
+        "problems": 3,
+        "testing": True,
+    }
+    context = context_for(in_use)
+    for key, value in in_use.items():
+        assert context[key] == value

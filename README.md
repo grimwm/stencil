@@ -98,16 +98,16 @@ Each key under `packages` is a package ID passed to the CLI.
 
 **Optional:**
 
-| Field             | Default            | Description                                                                                                                                       |
-| ----------------- | ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `name`            | package ID         | Display name shown by `list`.                                                                                                                     |
-| `dir`             | package ID         | Output subdirectory under `output_dir`.                                                                                                           |
-| `docs`            | `[]`               | Markdown files to convert to HTML documents.                                                                                                      |
-| `slides`          | `[]`               | Markdown files to convert to HTML slide decks.                                                                                                    |
-| `services`        | `[]`               | Docker Compose services (`web`, `mysql`).                                                                                                         |
-| `package_sources` | `[htdocs]` for zip | What `pkg` puts into `package_name`: a glob expands sorted, a directory means every file under it, recursively, anything else is used as written. |
-| `sql_import`      |                    | SQL import config(s): `{target, database, file}` dict or list                                                                                     |
-| `template_env`    | `{}`               | Custom variables merged into template context.                                                                                                    |
+| Field             | Default            | Description                                                                                                                                             |
+| ----------------- | ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `name`            | package ID         | Display name shown by `list`.                                                                                                                           |
+| `dir`             | package ID         | Output subdirectory under `output_dir`.                                                                                                                 |
+| `docs`            | `[]`               | Markdown files to convert to HTML documents.                                                                                                            |
+| `slides`          | `[]`               | Markdown files to convert to HTML slide decks.                                                                                                          |
+| `services`        | `[]`               | Docker Compose services (`web`, `mysql`).                                                                                                               |
+| `package_sources` | `[htdocs]` for zip | What `pkg` puts into `package_name`: a glob expands sorted, a directory means every file under it, recursively, anything else is used as written.       |
+| `sql_import`      |                    | SQL import config(s): `{target, database, file}` dict or list                                                                                           |
+| `template_env`    | `{}`               | Custom variables merged into template context. May not reuse a context-variable name from the table below; a collision raises rather than shadowing it. |
 
 ### Package types
 
