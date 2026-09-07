@@ -188,6 +188,46 @@ def get_template_context(package_id: str, config: dict) -> dict:
             "a markdown file belongs to exactly one of them"
         )
 
+    # Normalize pre_build to a list of {run, outputs, inputs} with list-valued
+    # outputs and inputs, so the template never has to ask what shape it got.
+    #
+    # A hook is a DEPENDENCY, not a prelude. It exists because cs425 generates
+    # sixteen SVGs from a matplotlib script that nothing in the build knew
+    # about, so `make doc` built documents from stale figures and never said
+    # so. A hook that ran unconditionally would be worse than none: matplotlib
+    # output is not stable across versions, and rewriting sixteen files on
+    # every build buries the real change in thousands of lines of diff.
+    pre_build = []
+    for index, entry in enumerate(package.get("pre_build") or []):
+        if not isinstance(entry, dict) or not entry.get("run"):
+            raise ValueError(
+                f"Package {package_id}: pre_build[{index}] needs a 'run' command"
+            )
+
+        def as_list(value):
+            if value is None:
+                return []
+            return list(value) if isinstance(value, list) else [value]
+
+        outputs = as_list(entry.get("outputs"))
+        if not outputs:
+            raise ValueError(
+                f"Package {package_id}: pre_build[{index}] needs 'outputs'. "
+                "Without them the step has nothing to be stale against and "
+                "would run on every build, which is the behaviour this "
+                "feature exists to avoid."
+            )
+
+        pre_build.append(
+            {
+                "index": index,
+                "run": entry["run"],
+                "outputs": outputs,
+                "inputs": as_list(entry.get("inputs")),
+                "name": entry.get("name") or f"pre-build-{index}",
+            }
+        )
+
     # Normalize sql_import to a list of import configs (target, database, file)
     raw_sql_import = package.get("sql_import")
     if raw_sql_import is None:
@@ -246,6 +286,8 @@ def get_template_context(package_id: str, config: dict) -> dict:
         "has_services": has_services,
         # Explicit features
         "sql_imports": sql_imports,
+        "pre_build": pre_build,
+        "has_pre_build": bool(pre_build),
         # The pandoc invocation, from stencil/pipeline.py rather than spelled
         # out in the compose template, so a test can assert on the same argv
         # the generated package builds with.

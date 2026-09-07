@@ -36,12 +36,17 @@ CONTRACT = {
     # `name` left this set when the course metadata flag did: the package name
     # was being injected as a document's course, which it never was -- see
     # AUTHORING.md. It is a --list label again, and no template reads it.
+    # pre_build/has_pre_build arrived with stn-gln. A consumer whose own
+    # Makefile.j2 includes this partial gets the hook rules for free; one that
+    # copied the partial does not, and StrictUndefined is what says so.
     "Makefile-doc.j2": {
         "docs",
         "has_docs",
         "has_pages",
+        "has_pre_build",
         "has_slides",
         "pandoc_image",
+        "pre_build",
         "slides",
     },
     "Makefile-pkg.j2": {
