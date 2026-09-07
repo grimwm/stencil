@@ -73,12 +73,53 @@ def scope_css(css: str, scope: str) -> str:
 
 
 _FACE = re.compile(r"@font-face\s*\{[^}]*\}")
-_WEIGHT = re.compile(r"(font-weight:\s*)([^;]*)(;)")
+_WEIGHT = re.compile(r"(font-weight\s*:\s*)([^;}]*)([;}])")
 
 
-def _declaration(block: str, name: str) -> str | None:
-    found = re.search(rf"{name}:\s*([^;]*);", block)
-    return found.group(1).strip() if found else None
+def _face_identity(block: str) -> str:
+    """The block with its ``font-weight`` value blanked.
+
+    THIS IS THE MERGE KEY, and it is the whole block rather than a tuple of
+    parsed declarations on purpose. Two faces are interchangeable exactly when
+    they are identical apart from the weight they pin, so comparing the text
+    that remains after blanking the weight IS the question, with nothing left
+    to forget to include -- ``src``, ``unicode-range``, ``font-display``,
+    ``format()``, an ``ascent-override`` somebody adds in five years.
+
+    The parsed-declaration version of this was wrong in a way that no test
+    could see. A per-declaration regex has to stop somewhere, and stopping at
+    the first `;` truncates EVERY src to `url(data:font/woff2` -- the semicolon
+    is inside `data:font/woff2;base64,`. So the payload, the one field the
+    merge is named for, compared equal across all 31 blocks and the grouping
+    was being held together by unicode-range alone. It produced the right
+    answer on the vendored file and would have silently deleted a genuinely
+    distinct face the first time a family shipped as static rather than
+    variable weights.
+    """
+    return _WEIGHT.sub(r"\g<1>\g<3>", block)
+
+
+def _weights_of(block: str) -> list[int]:
+    """The weights a ``font-weight`` descriptor covers.
+
+    Accepts the range form as well as a single value, so this function can be
+    run over its own output -- ``wght@100..900`` also makes Google emit
+    ``font-weight: 100 900`` directly.
+    """
+    found = _WEIGHT.search(block)
+    if not found:
+        raise ValueError(
+            f"@font-face has no font-weight, so it cannot be merged: {block[:160]!r}"
+        )
+    value = found.group(2).strip()
+    try:
+        return [int(part) for part in value.split()]
+    except ValueError:
+        raise ValueError(
+            f"font-weight {value!r} is not one or two numbers. Keywords like "
+            f"`bold` and `normal` are legal CSS but cannot be merged into a "
+            f"range: {block[:160]!r}"
+        ) from None
 
 
 def merge_duplicate_faces(css: str) -> str:
@@ -128,44 +169,29 @@ def merge_duplicate_faces(css: str) -> str:
     consideration for a course handout; it is written down so the next person
     weighing a CSS Fonts 4 feature has the comparison rather than the guess.
     """
-    groups: dict[tuple[str, ...], list[int]] = {}
-    order: list[tuple[str, ...]] = []
-    keys: list[tuple[str, ...]] = []
+    groups: dict[str, list[int]] = {}
+    order: list[str] = []
+    keys: list[str] = []
     for block in _FACE.findall(css):
-        weight = _declaration(block, "font-weight")
-        src = _declaration(block, "src")
-        if weight is None or src is None:
-            raise ValueError(
-                f"@font-face without a font-weight or src cannot be merged: "
-                f"{block[:120]!r}"
-            )
-        key = (
-            _declaration(block, "font-family") or "",
-            _declaration(block, "font-style") or "normal",
-            # font-display is part of the identity, not an afterthought: two
-            # faces sharing a payload but not a loading strategy are not
-            # interchangeable, and a future vendor bump that changes one would
-            # otherwise apply that change to its siblings silently.
-            _declaration(block, "font-display") or "auto",
-            _declaration(block, "unicode-range") or "",
-            src,
-        )
+        key = _face_identity(block)
         if key not in groups:
             groups[key] = []
             order.append(key)
-        groups[key].append(int(weight))
+        groups[key].extend(_weights_of(block))
         keys.append(key)
 
-    emitted: set[tuple[str, ...]] = set()
+    emitted: set[str] = set()
     blocks = iter(keys)
 
     def replace(match: re.Match[str]) -> str:
+        # findall and sub scan the same string with the same compiled pattern,
+        # so this iterator stays in step with the matches by construction.
         key = next(blocks)
         if key in emitted:
             return ""
         emitted.add(key)
         weights = groups[key]
-        if len(weights) == 1:
+        if min(weights) == max(weights):
             return match.group(0)
         span = f"{min(weights)} {max(weights)}"
         return _WEIGHT.sub(rf"\g<1>{span}\g<3>", match.group(0), count=1)
@@ -204,7 +230,9 @@ def load() -> dict[str, str]:
             f"page assets not vendored: {', '.join(missing)}; "
             f"run python3 scripts/vendor_page_assets.py"
         )
-    loaded = {key: _read(name) for key, name in _FILES.items()}
+    loaded = {
+        key: _read(name) for key, name in _FILES.items() if key != "fonts_css"
+    }
     # Merged on the way out rather than in the committed file. Re-vendoring to
     # apply it would rewrite two megabytes of base64 that did not change, and
     # the committed fonts.css should keep saying what was actually fetched.

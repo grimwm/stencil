@@ -152,3 +152,10 @@ def test_a_page_with_a_listing_still_converts_to_pdf(to_pdf):
     result, pdf = to_pdf("doc", "withhljs.md", text=document(CODE), timeout=90)
     assert result.returncode == 0, result.stderr[-2000:]
     assert pdf.is_file() and pdf.stat().st_size > 0
+
+
+def test_an_uppercase_raw_listing_counts(render):
+    """HTML tag names are case-insensitive and hljs matches `pre code` however
+    it was typed, so a hand-written `<PRE><CODE>` is a listing. The filter
+    lowercases before searching; without that this renders uncoloured."""
+    assert BUNDLE in html_of(render, "<PRE><CODE>hand written</CODE></PRE>\n")

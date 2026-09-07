@@ -38,8 +38,13 @@ end
 -- Raw HTML never becomes a CodeBlock, so a hand-written listing arrives here
 -- instead. The substring test over-matches deliberately, exactly as the mermaid
 -- filter's does, and by the asymmetry above it is the cheaper mistake.
+-- Lowercased before the search: HTML tag names are case-insensitive, and
+-- `<PRE><CODE>` is a listing the browser and hljs both recognise. The plain
+-- find is kept rather than a pattern match because `<pre` has no magic
+-- characters and a plain search cannot be surprised by one.
 local function raw_html_has_pre(element)
-  return element.format:match('^html') and element.text:find('<pre', 1, true)
+  return element.format:match('^html')
+    and element.text:lower():find('<pre', 1, true)
 end
 
 function RawBlock(block)
