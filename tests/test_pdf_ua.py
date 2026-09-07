@@ -891,3 +891,137 @@ def test_tagging_a_blank_cell_puts_nothing_in_the_text_layer(table_pdf):
     # The board's short rows read exactly as they did before any of this.
     assert "T4 T8" in text.replace("\n", " ")
     assert "Review 2" in text.replace("\n", " ")
+
+
+# ---------------------------------------------------------------------------
+# stn-48s: a Do into a tagged Form XObject must not be wrapped as an artifact.
+#
+# 0.21.0's markArtifacts counts BDC/EMC in the PAGE stream and treats Do as a
+# painting operator. A Do hands off to a stream one level of indirection away
+# that can carry marked-content sequences of its own, so wrapping it put every
+# MCID inside that XObject into an /Artifact -- veraPDF 7.1 t2, "tagged
+# content shall not be present inside content marked as Artifact".
+#
+# The trigger is ordinary: Bootstrap styles <hr> with opacity .25, an opacity
+# below 1 makes Chromium emit a transparency group, and a transparency group
+# is a Form XObject. Measured on the CS 425 classroom package -- poster.pdf
+# had one, kanban-vs-scrum.pdf nine. The handouts have no rule anywhere, which
+# is why six of six passed and this stayed hidden for three releases.
+
+XOBJECT_DOC = """---
+title: "Rules"
+lang: en
+---
+
+## Before
+
+A paragraph above the rule.
+
+------------------------------------------------------------------------
+
+## After
+
+A paragraph below it, so the rule is between two tagged blocks rather
+than trailing at the end of the page.
+"""
+
+
+def form_xobjects(path) -> list[bytes]:
+    """Every Form XObject's decoded content stream, across all pages."""
+    out = []
+    for page in PdfReader(path).pages:
+        resources = _deref(page.get("/Resources") or {})
+        xobjects = _deref(resources.get("/XObject") or {})
+        if not hasattr(xobjects, "items"):
+            continue
+        for _, ref in xobjects.items():
+            stream = _deref(ref)
+            if str(stream.get("/Subtype")) != "/Form":
+                continue
+            try:
+                out.append(stream.get_data())
+            except Exception:
+                continue
+    return out
+
+
+@pytest.fixture(scope="module")
+def xobject_pdf(to_pdf):
+    result, path = to_pdf("doc", "rules.md", text=XOBJECT_DOC, stem="rules")
+    assert result.returncode == 0, result.stderr[-3000:]
+    return path
+
+
+def test_the_fixture_actually_produces_a_tagged_form_xobject(xobject_pdf):
+    """The fixture has to reproduce the CONDITION or the test below is vacuous.
+
+    This is the assertion that was missing for three releases: not "does the
+    fix work" but "does the document under test contain the thing at all".
+    If Chromium ever stops emitting a transparency group for an opacity rule,
+    this fails and says so, rather than the next test passing for free.
+    """
+    tagged = [x for x in form_xobjects(xobject_pdf) if b"BDC" in x or b"BMC" in x]
+    assert tagged, (
+        "no Form XObject carrying marked content -- the fixture no longer "
+        "reproduces stn-48s and the guard below proves nothing"
+    )
+
+
+def test_no_tagged_content_sits_inside_an_artifact(xobject_pdf):
+    """veraPDF 7.1 t2, checked against the file rather than against the rule.
+
+    Walks the page stream and, for every /Artifact BMC ... EMC region, resolves
+    each `/Name Do` inside it and fails if that XObject carries an MCID.
+    """
+    reader = PdfReader(xobject_pdf)
+    offenders = []
+
+    for page in reader.pages:
+        resources = _deref(page.get("/Resources") or {})
+        xobjects = _deref(resources.get("/XObject") or {})
+        stream = page.get_contents()
+        if stream is None:
+            continue
+        body = stream.get_data().decode("latin1")
+
+        inside = False
+        for line in body.split("\n"):
+            text = line.strip()
+            if text.startswith("/Artifact") and text.endswith("BMC"):
+                inside = True
+                continue
+            if text == "EMC" or text.endswith(" EMC"):
+                inside = False
+                continue
+            if not inside or not text.endswith("Do"):
+                continue
+            name = text.split()[0]
+            if not hasattr(xobjects, "get"):
+                continue
+            invoked = _deref(xobjects.get(name))
+            if invoked is None:
+                continue
+            try:
+                data = invoked.get_data()
+            except Exception:
+                continue
+            if b"BDC" in data or b"BMC" in data:
+                offenders.append(name)
+
+    assert not offenders, (
+        f"{len(offenders)} tagged Form XObject(s) wrapped in /Artifact: "
+        f"{sorted(set(offenders))}. Every MCID inside them is now tagged "
+        "content inside an artifact (7.1 t2)."
+    )
+
+
+def test_the_rule_is_still_drawn(xobject_pdf):
+    """Not wrapping it must not mean dropping it.
+
+    The whole failure mode of this area is a change that satisfies a checker
+    by removing something, so the painting operators have to still be there.
+    """
+    tagged = [x for x in form_xobjects(xobject_pdf) if b"BDC" in x or b"BMC" in x]
+    assert any(b" re" in x and (b"\nf\n" in x or x.rstrip().endswith(b"f")) for x in tagged), (
+        "the rule's XObject no longer paints anything"
+    )

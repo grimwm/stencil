@@ -48,6 +48,13 @@ Prose with **bold**, *italic* and [a hyperlink](https://example.com/guide).
 |--------|-------|------|
 | Draft  | Ada   | 3    |
 | Review | Grace |      |
+
+------------------------------------------------------------------------
+
+A paragraph after a horizontal rule. Bootstrap styles `hr` with an opacity
+below 1, so Chromium emits a transparency group -- a Form XObject carrying
+its own marked content. stn-48s is what happened when the artifact marking
+wrapped the `Do` that paints it.
 """
 
 
