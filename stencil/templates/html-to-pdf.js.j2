@@ -384,6 +384,223 @@ function describeLinkAnnotations(pdf, domLinks) {
   };
 }
 
+// PDF/UA-1 7.2 t43: "Table rows shall have the same number of columns (taking
+// into account column spans)". Chromium gives an empty <td> a layout box and
+// tags only cells that have content, so the cell vanishes from the structure
+// tree and its row comes up short by exactly the number of blanks in it.
+//
+// Measured on the CS 425 corpus, kanban-game.pdf table 0: rows=[5, 5, 4, 4, 2]
+// against a source table that is five cells wide in every row. THE MARKDOWN IS
+// NOT RAGGED; the tag tree is. A kanban column with two cards has three empty
+// slots, and those slots are the figure.
+//
+// TWO CANDIDATE FIXES WERE MEASURED. THE CSS ONE DOES NOT WORK.
+//
+//   td:empty::before { content: "\00a0" }   rows unchanged: [5, 5, 4, 4, 2]
+//   td:empty::before { content: "x" }       rows unchanged: [5, 5, 4, 4, 2],
+//                                           and an "x" in every blank cell of
+//                                           the extracted text layer
+//
+// So Chromium does not tag CSS-generated content in a cell at all, and the
+// obvious cheap fix does not even make the checker go quiet. The second line
+// is why no variant of it should be reached for either: a generated character
+// visible enough to be tagged is visible enough to be copied. (The
+// non-breaking space, measured, reaches neither the tag tree nor the text
+// layer -- it is inert in both directions.)
+//
+// Measured asymmetry worth knowing: an empty <th> IS tagged, an empty <td> is
+// not. Nothing below depends on that -- the alignment works it out per row --
+// but it is why a blank corner header was never part of this failure.
+//
+// So the repair is structural, like the /LBody wrapping above it, and it says
+// nothing new about the document: a cell the author wrote and left blank IS a
+// cell. WHICH column it belongs to is the part the tag tree cannot supply,
+// which is why the DOM's own row-and-cell layout is read before printing --
+// appending the missing cells at the end of a short row would put the kanban
+// board's blanks in the wrong columns and satisfy the checker while lying to
+// the reader.
+
+// Every table's cells, in document order, as the DOM has them.
+async function collectTableCells(page) {
+  return page.evaluate(() => {
+    return Array.from(document.querySelectorAll("table")).map((table) =>
+      Array.from(table.rows).map((row) =>
+        Array.from(row.cells).map((cell) => ({
+          header: cell.tagName === "TH",
+          // An image-only cell has no text and is emphatically not blank, so
+          // an element child counts as content. Getting this wrong cannot
+          // corrupt anything: the per-row alignment below refuses to touch a
+          // row whose tagged cells it cannot account for.
+          blank: cell.childElementCount === 0 && !cell.textContent.trim(),
+        }))
+      )
+    );
+  });
+}
+
+// Every /Table in the structure tree, with its rows and each row's tagged
+// cells. A stack rather than a single "current table", so a table nested in a
+// cell does not silently steal the outer table's rows.
+function collectTableStructure(structTreeRoot, context) {
+  const tables = [];
+  const seen = new Set();
+
+  const visit = (ref, table, row) => {
+    const node = context.lookup(ref);
+    if (!node) return;
+
+    if (node instanceof PDFArray) {
+      for (let i = 0; i < node.size(); i += 1) visit(node.get(i), table, row);
+      return;
+    }
+    if (!(node instanceof PDFDict)) return;
+    if (seen.has(node)) return;
+    seen.add(node);
+
+    const structure = node.get(PDFName.of("S"));
+    const name = structure instanceof PDFName ? structure.asString() : "";
+
+    let nextTable = table;
+    let nextRow = row;
+    if (name === "/Table") {
+      nextTable = { rows: [] };
+      nextRow = null;
+      tables.push(nextTable);
+    } else if (name === "/TR" && nextTable) {
+      nextRow = { node, ref, cells: [] };
+      nextTable.rows.push(nextRow);
+    } else if ((name === "/TD" || name === "/TH") && nextRow) {
+      nextRow.cells.push({ node, ref });
+    }
+
+    visit(node.get(PDFName.of("K")), nextTable, nextRow);
+  };
+
+  visit(structTreeRoot.get(PDFName.of("K")), null, null);
+  return tables;
+}
+
+// The scope an inserted header cell should carry, taken from a sibling in the
+// same row rather than assumed. PDF/UA wants /Scope on a /TH and Chromium
+// infers it from the table's shape, so copying the neighbour's answer is the
+// only way to avoid contradicting it.
+function scopeOfRow(row, context) {
+  for (const cell of row.cells) {
+    const attrs = context.lookup(cell.node.get(PDFName.of("A")));
+    const dicts =
+      attrs instanceof PDFArray
+        ? attrs.asArray().map((entry) => context.lookup(entry))
+        : [attrs];
+    for (const dict of dicts) {
+      if (!(dict instanceof PDFDict)) continue;
+      const scope = dict.get(PDFName.of("Scope"));
+      if (scope instanceof PDFName) return scope.asString().replace(/^\//, "");
+    }
+  }
+  return "Column";
+}
+
+function tagEmptyTableCells(pdf, domTables) {
+  const context = pdf.context;
+  const structTreeRoot = context.lookup(
+    pdf.catalog.get(PDFName.of("StructTreeRoot"))
+  );
+  if (!(structTreeRoot instanceof PDFDict)) return { inserted: 0, skipped: 0 };
+
+  const structTables = collectTableStructure(structTreeRoot, context);
+  // The two lists are the same tables counted two ways. If they disagree,
+  // every index after the disagreement means a different table in each, so
+  // nothing is touched -- a row of blanks put in the wrong columns is worse
+  // than a row that is short.
+  if (structTables.length !== domTables.length) {
+    return { inserted: 0, skipped: structTables.length, aligned: false };
+  }
+
+  let inserted = 0;
+  let skipped = 0;
+
+  structTables.forEach((structTable, tableIndex) => {
+    const domRows = domTables[tableIndex];
+    if (structTable.rows.length !== domRows.length) {
+      skipped += structTable.rows.length;
+      return;
+    }
+
+    structTable.rows.forEach((structRow, rowIndex) => {
+      const domCells = domRows[rowIndex];
+      const tagged = structRow.cells;
+      if (tagged.length === domCells.length) return;
+      if (tagged.length > domCells.length) {
+        skipped += 1;
+        return;
+      }
+
+      // Walk the two lists together. A cell with content must have been
+      // tagged; a blank one was tagged only if there are more tagged cells
+      // left than there are remaining cells with content to account for them.
+      // Deriving it this way rather than from "Chromium does not tag an empty
+      // td" means a browser that changes its mind about which blanks it tags
+      // is handled rather than mis-aligned.
+      const remainingWithContent = [];
+      let running = 0;
+      for (let i = domCells.length - 1; i >= 0; i -= 1) {
+        if (!domCells[i].blank) running += 1;
+        remainingWithContent[i] = running;
+      }
+
+      const kids = [];
+      const pending = [];
+      let taken = 0;
+      let usable = true;
+
+      for (let i = 0; i < domCells.length && usable; i += 1) {
+        const domCell = domCells[i];
+        const taggedLeft = tagged.length - taken;
+        if (!domCell.blank || taggedLeft > remainingWithContent[i]) {
+          if (taggedLeft <= 0) {
+            usable = false;
+            break;
+          }
+          kids.push(tagged[taken].ref);
+          taken += 1;
+        } else {
+          pending.push({ index: kids.length, domCell });
+          kids.push(null);
+        }
+      }
+
+      // Every tagged cell has to be accounted for, or the row is not
+      // understood and is left exactly as it was.
+      if (!usable || taken !== tagged.length) {
+        skipped += 1;
+        return;
+      }
+
+      const scope = scopeOfRow(structRow, context);
+      for (const slot of pending) {
+        const cell = context.obj({
+          Type: "StructElem",
+          S: slot.domCell.header ? "TH" : "TD",
+        });
+        const ref = context.register(cell);
+        cell.set(PDFName.of("P"), structRow.ref);
+        if (slot.domCell.header) {
+          cell.set(PDFName.of("A"), context.obj({ O: "Table", Scope: scope }));
+        }
+        // No /K at all. The cell is empty, and an empty /K array or an
+        // /ActualText would each claim something about content that is not
+        // there -- the point of the element is that the cell EXISTS.
+        kids[slot.index] = ref;
+        inserted += 1;
+      }
+
+      structRow.node.set(PDFName.of("K"), context.obj(kids));
+    });
+  });
+
+  return { inserted, skipped, aligned: true };
+}
+
 function xmpFor(title) {
   // pdfuaid:part is the identification PDF/UA-1 asks for. dc:title is carried
   // alongside it because the title is the one piece of metadata a reader
@@ -544,7 +761,7 @@ async function markPageArtifacts(pdf) {
   return wrapped;
 }
 
-async function addPdfUaStructure(path, domLinks) {
+async function addPdfUaStructure(path, page) {
   const pdf = await PDFDocument.load(fs.readFileSync(path));
   const context = pdf.context;
   const catalog = pdf.catalog;
@@ -579,7 +796,8 @@ async function addPdfUaStructure(path, domLinks) {
   structTreeRoot.set(PDFName.of("RoleMap"), roleMap);
 
   const wrapped = wrapListBodies(structTreeRoot, context);
-  const links = describeLinkAnnotations(pdf, domLinks || []);
+  const links = describeLinkAnnotations(pdf, page.links || []);
+  const cells = tagEmptyTableCells(pdf, page.tables || []);
   const artifacts = await markPageArtifacts(pdf);
 
   const xmp = context.stream(xmpFor(pdf.getTitle()), {
@@ -589,7 +807,7 @@ async function addPdfUaStructure(path, domLinks) {
   catalog.set(PDFName.of("Metadata"), context.register(xmp));
 
   fs.writeFileSync(path, await pdf.save({ useObjectStreams: false }));
-  return { mapped: Array.from(nonStandard).sort(), wrapped, links, artifacts };
+  return { mapped: Array.from(nonStandard).sort(), wrapped, links, cells, artifacts };
 }
 
 async function main() {
@@ -660,6 +878,7 @@ async function main() {
     // renders in print media, and this reads it in print media too, so a link
     // the print stylesheet hides is absent from both lists rather than one.
     const domLinks = await collectLinkText(page);
+    const domTables = await collectTableCells(page);
 
     await page.pdf({
       path: output,
@@ -680,15 +899,15 @@ async function main() {
       tagged: true,
     });
 
-    return domLinks;
+    return { links: domLinks, tables: domTables };
   } finally {
     await browser.close();
   }
 }
 
 main()
-  .then((domLinks) => addPdfUaStructure(output, domLinks))
-  .then(({ mapped, wrapped, links, artifacts }) => {
+  .then((facts) => addPdfUaStructure(output, facts))
+  .then(({ mapped, wrapped, links, cells, artifacts }) => {
     const notes = [];
     if (mapped.length) notes.push(`role map: ${mapped.join(", ")} -> Span`);
     if (wrapped) notes.push(`${wrapped} list items wrapped in LBody`);
@@ -698,8 +917,18 @@ main()
           (links.fromUri ? ` (${links.fromUri} by URI)` : "")
       );
     }
+    if (cells.inserted) notes.push(`${cells.inserted} empty table cell(s) tagged`);
     if (artifacts) notes.push(`${artifacts} content stream(s) artifact-marked`);
     console.log(`Wrote ${output}` + (notes.length ? ` (${notes.join("; ")})` : ""));
+    if (cells.skipped) {
+      // Loud, because a skipped row is a row that will still fail 7.2 t43 and
+      // the reason is a shape this code did not recognise -- which is worth
+      // hearing about while it is one table rather than a whole corpus.
+      console.error(
+        `${output}: ${cells.skipped} table row(s) could not be matched to the ` +
+          "page's own tables and were left untouched."
+      );
+    }
     if (!links.aligned) {
       // Not fatal -- every link still carries a description -- but the good
       // ones came from the URI instead of the words, and that is worth saying

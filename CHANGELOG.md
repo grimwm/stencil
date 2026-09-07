@@ -9,6 +9,62 @@ and the closed epics in `.beads/issues.jsonl` are the readable index.
 How the version gets bumped is written down in
 [AGENTS.md](AGENTS.md#cutting-a-release), not here.
 
+## 0.24.0
+
+- **An empty table cell is now tagged, so a table with a blank in it can
+  pass.** PDF/UA-1 7.2 t43 requires every row of a table to span the same
+  number of columns. Chromium gives an empty `<td>` a layout box and tags only
+  cells that have content, so the cell vanishes from the structure tree and its
+  row comes up short by exactly the number of blanks in it.
+
+  The source table is not ragged; the tag tree is. Measured on
+  `kanban-game.pdf`, table 0 came out `rows=[5, 5, 4, 4, 2]` from a table that
+  is five cells wide in every row. A kanban column with two cards has three
+  empty slots, and those slots are the figure — the markdown is not what needs
+  fixing.
+
+- **What this measured.** CS 425 corpus, veraPDF 1.30.2 `--flavour ua1`, six
+  handouts:
+
+  |                 | 0.22.0       | 0.23.0       | 0.24.0     |
+  | --------------- | ------------ | ------------ | ---------- |
+  | conformant      | 1 of 6       | 4 of 6       | **6 of 6** |
+  | `kanban-game`   | FAIL 7.2 t43 | FAIL 7.2 t43 | PASS       |
+  | `sprint-report` | FAIL 7.2 t43 | FAIL 7.2 t43 | PASS       |
+
+- **The CSS answer was measured and does not work.** `td:empty::before` is the
+  obvious one-liner and it was tried both ways before the post-process was
+  written:
+
+  |                    | tagged rows                 | text layer                 |
+  | ------------------ | --------------------------- | -------------------------- |
+  | `content: "\00a0"` | unchanged `[5, 5, 4, 4, 2]` | unchanged                  |
+  | `content: "x"`     | unchanged `[5, 5, 4, 4, 2]` | an `x` in every blank cell |
+
+  Chromium does not tag CSS-generated content in a cell at all. So it fails on
+  the first column, not the second — and the second column is why no variant of
+  it should be reached for either: generated content visible enough to be
+  tagged is visible enough to be copied out of the table.
+
+- **Which column a blank belongs to is the part that matters, and the tag tree
+  cannot supply it.** Appending the missing cells to the end of a short row
+  satisfies 7.2 t43 and puts the kanban board's blanks under the wrong
+  headings. So the DOM's own row-and-cell layout is read before printing and
+  the cells are inserted at their own index; the fixture has a table whose hole
+  is in the *middle* column, which is the case appending gets wrong.
+
+- **A row whose cells cannot be accounted for is left exactly as it was.** The
+  two lists are the same tables counted two ways; every tagged cell has to be
+  matched to a cell the page actually has, and a row that does not add up is
+  skipped and reported on stderr rather than guessed at. A blank put in the
+  wrong column is worse than a row that is short.
+
+- **Measured asymmetries, now pinned by tests.** An empty `<th>` *is* tagged
+  and an empty `<td>` is not; a wholly blank row still produces a `/TR`, with
+  nothing under it; a cell holding only a picture has no text and is emphatically
+  not blank. All three are in the fixture, and `tests/test_pdf_ua_gate.py`'s
+  veraPDF document gained an empty cell so the checker itself sees the case.
+
 ## 0.23.0
 
 - **Every link in a generated PDF now carries an alternate description.**
