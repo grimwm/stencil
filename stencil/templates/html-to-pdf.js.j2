@@ -791,8 +791,17 @@ const PAINTING_OPERATORS = /\b(?:re|f\*?|F|S|s|B\*?|b\*?|n|W\*?|Do|sh|Tj|TJ|'|")
 // is a 1px rule Chromium put in a transparency group and tagged /NonStruct
 // with an MCID. Nine more in kanban-vs-scrum.pdf. The handouts draw nothing
 // through an XObject, which is why six of six passed and this stayed hidden.
-function taggedXObjectNames(resources, context, seen) {
+// `seen` stops infinite recursion; `verdicts` remembers what each stream WAS.
+//
+// One set cannot do both jobs, and conflating them was a bug. A resource
+// dictionary may map two names to the same Form XObject: the first alias added
+// the stream to `seen` and recorded its name, and the second hit the guard and
+// returned without recording ITS name. A Do on the second alias was then
+// wrapped in /Artifact, putting tagged content inside an artifact -- exactly
+// the 7.1 t2 failure 0.27.0 set out to fix.
+function taggedXObjectNames(resources, context, seen, verdicts) {
   seen = seen || new Set();
+  verdicts = verdicts || new Map();
   const names = new Set();
 
   resources = context.lookup(resources);
@@ -813,9 +822,14 @@ function taggedXObjectNames(resources, context, seen) {
       continue;
     }
 
+    // A verdict already reached applies to EVERY name pointing at this
+    // stream, not only the first one to reach it.
+    if (verdicts.has(stream)) {
+      if (verdicts.get(stream)) names.add(key.asString());
+      continue;
+    }
     // A cycle would otherwise not terminate. An XObject already being
-    // examined higher up the chain is treated as clear here; whatever it
-    // carries is accounted for at the level that owns it.
+    // examined higher up the chain is left to the level that owns it.
     if (seen.has(stream)) continue;
     seen.add(stream);
 
@@ -829,11 +843,13 @@ function taggedXObjectNames(resources, context, seen) {
       // An XObject that cannot be decoded is one we cannot clear, so it counts
       // as carrying marked content. Refusing to wrap risks a 7.1 t3; wrapping
       // it wrongly is a certain 7.1 t2.
+      verdicts.set(stream, true);
       names.add(key.asString());
       continue;
     }
 
     if (/\bBDC\b|\bBMC\b/.test(body)) {
+      verdicts.set(stream, true);
       names.add(key.asString());
       continue;
     }
@@ -843,8 +859,10 @@ function taggedXObjectNames(resources, context, seen) {
     const nested = taggedXObjectNames(
       stream.dict.get(PDFName.of("Resources")),
       context,
-      seen
+      seen,
+      verdicts
     );
+    verdicts.set(stream, nested.size > 0);
     if (nested.size) names.add(key.asString());
   }
 

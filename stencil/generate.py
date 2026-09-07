@@ -104,6 +104,47 @@ def brand_image_path(value: str | None) -> str | None:
     return value if Path(value).suffix.lower() in BRAND_IMAGE_SUFFIXES else None
 
 
+# A path a generated Makefile interpolates must not be able to act like a
+# command. docs, slides, pre_build.outputs and pre_build.inputs are all
+# DECLARATIVE -- an author writing a filename does not expect it to execute --
+# and all four land in Make text that /bin/sh then parses.
+#
+# NOT A PRIVILEGE BOUNDARY, and worth saying plainly: pre_build's `run` is
+# arbitrary command execution by design, so anyone who can edit .config.yaml
+# can already run anything. What this prevents is a filename quietly doing
+# something other than naming a file -- a space splitting one argument into
+# two, a `;` running a second command, a `..` escaping the package.
+#
+# Globs stay: * ? [ ] are the point of an outputs pattern.
+_UNSAFE_IN_PATH = re.compile(r"[$`;|&<>\\\n]")
+
+
+def check_config_path(package_id: str, where: str, value) -> str:
+    """Refuse a configured path that would not behave like a filename."""
+    text = str(value)
+    if _UNSAFE_IN_PATH.search(text):
+        raise ValueError(
+            f"Package {package_id}: {where} {text!r} contains a shell or Make "
+            "metacharacter. These are filenames, not commands."
+        )
+    if " " in text:
+        raise ValueError(
+            f"Package {package_id}: {where} {text!r} contains a space. The "
+            "generated Make recipe would split it into two arguments."
+        )
+    if Path(text).is_absolute():
+        raise ValueError(
+            f"Package {package_id}: {where} {text!r} is absolute. Paths are "
+            "relative to the package directory."
+        )
+    if ".." in Path(text).parts:
+        raise ValueError(
+            f"Package {package_id}: {where} {text!r} escapes the package "
+            "directory. Paths are relative to it and must stay inside."
+        )
+    return text
+
+
 def get_template_context(package_id: str, config: dict) -> dict:
     """Build the template context for a package."""
     package = config.get("packages", {}).get(package_id)
@@ -176,11 +217,18 @@ def get_template_context(package_id: str, config: dict) -> dict:
             )
 
     # docs list for doc-type packages (markdown files to convert to HTML)
-    docs = package.get("docs", [])
+    # Validated for the same reason pre_build's paths are: they reach a Make
+    # recipe that /bin/sh parses. A space in a filename silently becomes two
+    # arguments and builds the wrong thing.
+    docs = [
+        check_config_path(package_id, "docs", d) for d in package.get("docs", [])
+    ]
 
     # slides list: markdown rendered as a slide deck instead of a flowing document.
     # Same pipeline, different pandoc template plus the slide-sections filter.
-    slides = package.get("slides", [])
+    slides = [
+        check_config_path(package_id, "slides", d) for d in package.get("slides", [])
+    ]
 
     both = sorted(set(docs) & set(slides))
     if both:
@@ -203,39 +251,8 @@ def get_template_context(package_id: str, config: dict) -> dict:
     # not parse, or a target nobody can invoke.
     safe_name = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
 
-    # outputs and inputs are interpolated into Make text, where $(...) and
-    # `...` are expanded rather than treated as filenames. They are
-    # DECLARATIVE fields -- an author writing a glob does not expect it to
-    # execute -- so the characters that would make them executable are
-    # refused.
-    #
-    # `run` is deliberately NOT validated. It is the executable field by
-    # design, and pretending to sanitise a command would be worse than not
-    # trying: it invites the belief that a hostile config is contained, which
-    # it is not and cannot be.
-    # Globs are the point -- * ? [ ] stay. What is refused is the set that
-    # makes a filename executable in Make or in the shell recipe it lands in.
-    unsafe_path = re.compile(r"[$`;|&<>\\\n]")
-
     def check_path(where, value):
-        text = str(value)
-        if unsafe_path.search(text):
-            raise ValueError(
-                f"Package {package_id}: {where} {text!r} contains a shell or "
-                "Make metacharacter. These are filenames, not commands -- "
-                "put the command in 'run'."
-            )
-        if Path(text).is_absolute():
-            raise ValueError(
-                f"Package {package_id}: {where} {text!r} is absolute. Paths "
-                "are relative to the package directory."
-            )
-        if ".." in Path(text).parts:
-            raise ValueError(
-                f"Package {package_id}: {where} {text!r} escapes the package "
-                "directory. Paths are relative to it and must stay inside."
-            )
-        return text
+        return check_config_path(package_id, where, value)
 
     pre_build = []
     seen_names: set[str] = set()

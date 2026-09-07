@@ -273,3 +273,33 @@ def test_run_is_not_validated_and_that_is_deliberate():
     that does not exist -- the author already controls the whole command."""
     context = context_for([{"run": "sh -c 'echo $HOME && ls | wc -l'", "outputs": "a/*"}])
     assert "|" in context["pre_build"][0]["run"]
+
+
+def test_docs_and_slides_are_validated_too():
+    """stn-zmf. They reach the same Make recipes pre_build's paths do.
+
+    Same scope argument as the pre_build fields: not a privilege boundary,
+    because `run` is arbitrary execution by design. What this prevents is a
+    filename quietly doing something other than naming a file.
+    """
+    from stencil.generate import get_template_context
+
+    def build(package):
+        return get_template_context("demo", {"packages": {"demo": package}})
+
+    assert build({"package_type": "doc", "docs": ["sub/nested.md"]})["docs"] == [
+        "sub/nested.md"
+    ], "a legitimate nested path was refused"
+
+    for bad, why in [
+        ("guide; touch /tmp/pwned; #.md", "metacharacter"),
+        ("my guide.md", "space"),
+        ("/etc/passwd.md", "absolute"),
+        ("../../escape.md", "escapes"),
+    ]:
+        with pytest.raises(ValueError) as caught:
+            build({"package_type": "doc", "docs": [bad]})
+        assert why in str(caught.value), (bad, str(caught.value))
+
+    with pytest.raises(ValueError):
+        build({"package_type": "doc", "slides": ["../../escape.md"]})
