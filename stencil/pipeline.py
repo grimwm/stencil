@@ -50,6 +50,14 @@ BROWSER_IMAGE_TAG = "localhost/stencil_browser:test"
 #
 # To bump: edit this line, rebuild the browser image, and run the container
 # tier. Read what moved in the PDF geometry and the PDF/UA results.
+#
+# A TAG, NOT A DIGEST -- deliberately, and not because a digest would be worse.
+# A registry tag is mutable and `@sha256:...` is not, so a digest is strictly
+# stronger here. It is left off because the same is true of PANDOC_IMAGE and
+# VERAPDF_IMAGE, and pinning one of the three by digest buys defence in depth
+# for a third of the surface while making the convention inconsistent for
+# whoever bumps the next one. Raised by review; moving all three together is
+# stn-5hv, with the lockfile.
 NODE_IMAGE = "docker.io/library/node:24.20.0-alpine3.24"
 
 # What the browser image installs. Exact, not `^`: stn-s5b was filed because
