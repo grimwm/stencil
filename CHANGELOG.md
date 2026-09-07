@@ -92,6 +92,28 @@ How the version gets bumped is written down in
   Measured against the six real cs425 handouts as well as the fixtures, on
   pa11y 10.0.0, both themes: no issues.
 
+- **And running it found that `check-access` was broken.** For a package with an
+  `output_dir` it could not pass at all: the service's loop searched `/out`
+  while the URL it handed the browser was built from `/workspace`, so every page
+  came back `net::ERR_FILE_NOT_FOUND at file:///workspace//out/document.html`.
+
+  Shipped in 0.30.0, and invisible to every test here, because they all read the
+  compose file's *text*: one asserted the loop line, another asserted the
+  counting, and both were true of a script that could not work. Two individually
+  plausible lines that only disagree when run.
+
+  The script now lives in `stencil/pipeline.py` as `CHECK_ACCESS_SCRIPT`,
+  exactly as `VERAPDF_SCRIPT` already did, so a test runs the same text the
+  compose file ships. The directory arrives as `$1`, absolute in both layouts,
+  and the `file://` URL is built from it — one path rather than two that have to
+  agree. `pipeline.check_access()` runs it the way `pipeline.verapdf()` runs
+  check-pdf's. Proven against its own breach: put the old URL back and
+  `test_the_script_passes_over_an_output_directory` fails. `stn-8j4`.
+
+  Still only asserted as text: the compose *service* around the script — its
+  build stanza, mounts and argument wiring. That needs `docker compose` in the
+  container tier, which is a larger decision than this fix.
+
 - 0.29.0 through 0.30.2 shipped without entries here. Git is the record of them.
 
 ## 0.28.2

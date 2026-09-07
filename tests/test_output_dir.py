@@ -22,6 +22,7 @@ Two things the ticket said to settle deliberately, settled here:
 from __future__ import annotations
 
 import pytest
+import yaml
 
 
 
@@ -108,10 +109,25 @@ def test_the_generated_compose_file_is_valid_yaml(elsewhere):
             )
 
 
+def check_access_directory(text: str) -> str:
+    """The directory the generated check-access service is told to search.
+
+    Read off the parsed service rather than grepped out of the script, because
+    stn-s5b moved the script into pipeline.py and the directory became its
+    argument. Asserting the argument is also the stronger assertion: the script
+    builds its file:// URL from this one path, so there is no second place for
+    it to disagree with -- which is exactly how check-access came to search
+    /out while asking Chromium for file:///workspace//out/... and could not
+    pass at all for a package with an output_dir.
+    """
+    service = yaml.safe_load(text)["services"]["check-access"]
+    return service["entrypoint"][-1]
+
+
 def test_check_access_looks_in_the_output_directory(elsewhere):
     """The silent one. It loops over a glob, and a glob that matches nothing
     leaves $failed at 0 -- which exits 0 and reads exactly like passing."""
-    assert "for f in /out/*.html" in compose(elsewhere)
+    assert check_access_directory(compose(elsewhere)) == "/out"
 
 
 def test_check_access_fails_when_it_checks_nothing(elsewhere):
@@ -148,7 +164,7 @@ def test_a_package_without_output_dir_is_unchanged(doc_package):
     assert "OUT := ." in text
     assert "OUT_HOST := ." in text
     assert ":/out:z" not in compose(package), "an unused second mount was added"
-    assert "for f in ./*.html" in compose(package)
+    assert check_access_directory(compose(package)) == "/workspace"
 
 
 def test_output_dir_is_resolved_against_the_config_not_the_cwd(tmp_path, demo_config):

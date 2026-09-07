@@ -39,6 +39,7 @@ quietly measuring the default theme twice and reporting green.
 from __future__ import annotations
 
 import json
+import shutil
 
 import pytest
 
@@ -128,3 +129,96 @@ def test_a_generated_page_passes_wcag_2_1_aa(accessibility, rendered, theme):
         f"{rendered} fails WCAG 2.1 AA in the {theme} theme:\n  "
         + "\n  ".join(accessibility[key])
     )
+
+
+# ---------------------------------------------------------------------------
+# the service's own script, run rather than read
+#
+# The cases above drive pa11y the way check-access does. That is not the same
+# claim as "check-access works": a broken loop, glob, skip-list or URL lives in
+# the script, and every test in this repository read that script's TEXT.
+#
+# It was broken. Inlined in the compose file, the loop searched /out while the
+# URL was built from /workspace, so for a package with an output_dir every page
+# came back ERR_FILE_NOT_FOUND and check-access could not pass at all. It
+# shipped in 0.30.0. Reading the compose file could not have found it -- both
+# halves were individually plausible, and only running them together shows they
+# disagree.
+
+
+@pytest.fixture(scope="session")
+def one_page(pdf_workspace, tmp_path_factory):
+    """A directory holding exactly one rendered page.
+
+    A directory of its own rather than the shared workspace, which by the time
+    this runs holds every page the rest of the container tier rendered. The
+    script checks EVERY html file it finds, so pointing it at the shared
+    workspace would make these cases pass or fail on whatever some other test
+    happened to render -- and the generated pages are self-contained, so one
+    copied file is a complete page.
+    """
+    built = pipeline.render(
+        "doc", "document.md", "document.html", workdir=pdf_workspace
+    )
+    assert built.returncode == 0, f"pandoc failed\n{built.stderr}"
+
+    directory = tmp_path_factory.mktemp("one-page")
+    shutil.copy2(pdf_workspace / "document.html", directory / "document.html")
+    return directory
+
+
+def test_the_script_passes_over_products_beside_their_sources(one_page):
+    """The default layout: no output_dir, products land in the package."""
+    result = pipeline.check_access(
+        workdir=one_page, directory="/workspace", timeout=900
+    )
+    assert result.returncode == 0, (
+        f"check-access failed\nstdout: {result.stdout[-3000:]}\n"
+        f"stderr: {result.stderr[-3000:]}"
+    )
+    assert "at WCAG 2.1 AA, light and dark" in result.stdout
+
+
+def test_the_script_passes_over_an_output_directory(one_page, tmp_path_factory):
+    """THE ONE THAT WAS BROKEN, and the reason this file runs the script rather
+    than reading it.
+
+    A package with an output_dir gets its products on a second mount at /out,
+    because a sibling directory is `..` away and `..` escapes a bind mount.
+    Inlined in the compose file, the loop searched /out while the URL was built
+    from /workspace, so every page came back
+
+        Error: net::ERR_FILE_NOT_FOUND at file:///workspace//out/document.html
+
+    and check-access could not pass at all for such a package. It shipped in
+    0.30.0 behind two individually plausible lines that only disagree when run.
+    """
+    result = pipeline.check_access(
+        workdir=tmp_path_factory.mktemp("sources"),
+        directory="/out",
+        out_dir=one_page,
+        timeout=900,
+    )
+    assert "ERR_FILE_NOT_FOUND" not in result.stdout + result.stderr, (
+        "the script found HTML and then asked the browser for a path that does "
+        "not exist -- the loop and the URL disagree about where the page is"
+    )
+    assert result.returncode == 0, (
+        f"check-access failed over /out\nstdout: {result.stdout[-3000:]}\n"
+        f"stderr: {result.stderr[-3000:]}"
+    )
+    assert "at WCAG 2.1 AA, light and dark" in result.stdout
+
+
+def test_the_script_fails_when_it_finds_nothing(tmp_path_factory):
+    """The silent one, and the reason the count exists. A glob that matches
+    nothing leaves the loop body unrun and $failed at 0, which exits 0 and reads
+    exactly like success -- so moving the output somewhere the loop does not
+    look would report a clean bill of health having opened no file."""
+    result = pipeline.check_access(
+        workdir=tmp_path_factory.mktemp("empty"), directory="/workspace", timeout=300
+    )
+    assert result.returncode != 0, (
+        "check-access reported success having checked nothing:\n" + result.stdout
+    )
+    assert "found no HTML to check" in result.stdout + result.stderr

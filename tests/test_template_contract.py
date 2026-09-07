@@ -83,6 +83,7 @@ CONTRACT = {
     # reformats every markdown file in the package with whatever prettier npm
     # served that morning.
     "docker-compose-html.yml.j2": {
+        "check_access_script",
         "format_npm_specs",
         "has_slides",
         "node_image",

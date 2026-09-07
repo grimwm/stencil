@@ -44,13 +44,17 @@ ENV PATH=/opt/tools/bin:$PATH
 # base image above.
 #
 # The asymmetry -- Node pinned exactly, Chromium floating -- is the right way
-# round for a second reason. Chromium runs here with --no-sandbox (it cannot
-# use its own sandbox inside an unprivileged container; see the pa11y config
-# below and html-to-pdf.js), and it is the process that actually parses and
-# renders the content. Leaving it on the distro package means every fresh build
-# picks up Alpine's security patches for it. Node is pinned and therefore does
-# not, but Node here only drives local tooling over locally generated,
-# self-contained HTML.
+# round for a second reason. Chromium runs here with --no-sandbox, and it is
+# the process that actually parses and renders the content, so leaving it on
+# the distro package means every fresh build picks up Alpine's patches for it.
+# Node is pinned and therefore does not, but Node here only drives local
+# tooling over locally generated, self-contained HTML.
+#
+# Measured, because the reason usually given for --no-sandbox is the wrong one:
+# this image sets no USER and neither service sets a compose `user`, so
+# `id` inside it reports uid=0(root). Chromium refuses to enable its own
+# sandbox as root. It is not that an unprivileged container cannot sandbox --
+# it is that nothing here is unprivileged.
 #
 # font-noto covers characters outside the latin/latin-ext faces the page
 # inlines. With no real font installed, Chromium lays out at fallback metrics
@@ -67,8 +71,9 @@ RUN apk add --no-cache chromium font-noto ttf-dejavu
 RUN npm install --global --prefix /opt/tools {{ browser_npm_specs | join(' ') }}
 
 # One pa11y config per theme, each driving the control before measuring.
-# chromeLaunchConfig is in both: Chromium cannot use its own sandbox inside
-# an unprivileged container.
+# chromeLaunchConfig is in both: this image runs as root -- it sets no USER and
+# no service sets a compose `user` -- and Chromium refuses to enable its own
+# sandbox as root.
 #
 # pa11y has no --run-before; it has `actions`, which is better here anyway --
 # clicking the real segment exercises the same path a reader does rather than

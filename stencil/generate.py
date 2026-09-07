@@ -430,6 +430,10 @@ def get_template_context(package_id: str, config: dict) -> dict:
         # this file renders rather than on a copy of it.
         "verapdf_image": pipeline.VERAPDF_IMAGE,
         "verapdf_script": pipeline.VERAPDF_SCRIPT,
+        # Same rule again for check-access, and for the same reason it was
+        # needed: inlined in the compose file, its loop and its file:// URL
+        # disagreed about where the HTML was and nothing ran it to find out.
+        "check_access_script": pipeline.CHECK_ACCESS_SCRIPT,
         # And again for everything the scaffolding installs at build time. The
         # Dockerfile, the format-md service and the Makefile's ensure_image line
         # all name the same Node image, and both npm installs name an exact
