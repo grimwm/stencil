@@ -9,6 +9,40 @@ and the closed epics in `.beads/issues.jsonl` are the readable index.
 How the version gets bumped is written down in
 [AGENTS.md](AGENTS.md#cutting-a-release), not here.
 
+## 0.28.2
+
+- **veraPDF now sees a deck.** `stn-l68`'s acceptance asked for a PDF/UA check
+  against a generated handout *and a generated deck*. Every one of the twelve
+  PDF/UA tests built a `doc`; **not one built a slide**, so the deck path had
+  never been in front of the checker in CI.
+
+  That is a whole template path unmeasured — `slide-template.html` rather than
+  `html-template.html`, `slide-sections.lua` grouping blocks into cards, a
+  generated title slide nobody wrote, the toolbar, present mode. The classroom
+  decks pass when measured by hand, so this found no defect. It is here so the
+  next change to any of those files cannot quietly stop being conformant.
+
+  The same fixture-omission pattern cost four releases in a row — a missing
+  hyperlink, a missing empty cell, a missing rule, a missing emoji. A missing
+  whole *document kind* was the largest instance of it left.
+
+- **The fixture is checked for being a deck at all.** If `slide` ever renders
+  through the document template, the conformance assertion would still pass
+  and stop meaning anything, so page geometry is asserted separately: a deck is
+  landscape, a document is portrait.
+
+  | breach                    | result                           |
+  | ------------------------- | -------------------------------- |
+  | drop the artifact marking | deck test fails                  |
+  | drop the ToUnicode repair | **deck test passes** — see below |
+
+  The second row is reported rather than hidden. The deck fixture carries no
+  maths, so it cannot exercise the ToUnicode repair; the document fixture does,
+  and that is where that guard lives. Padding the deck with a formula would
+  duplicate coverage rather than add any, since the font machinery is shared.
+
+- No behaviour change. Tests only.
+
 ## 0.28.1
 
 - **The guard `stn-5ea` asked for, which 0.27.0 shipped without.** That ticket

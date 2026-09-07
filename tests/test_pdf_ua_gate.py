@@ -58,6 +58,80 @@ wrapped the `Do` that paints it.
 """
 
 
+# A DECK, not a document. stn-l68's acceptance asks for both, and until this
+# every one of the twelve PDF/UA tests built a `doc` -- veraPDF had never seen
+# a slide in CI.
+#
+# That is a whole template path unmeasured: slide-template.html rather than
+# html-template.html, slide-sections.lua grouping blocks into cards, a
+# GENERATED title slide nobody wrote, the toolbar, and the present-mode
+# machinery. The classroom decks pass when measured by hand, so this is not
+# expected to find a defect -- it is here so that the next change to any of
+# those files cannot quietly stop being conformant.
+#
+# The same fixture-omission pattern cost four releases in a row: a missing
+# hyperlink, a missing empty cell, a missing rule, a missing emoji. A missing
+# WHOLE DOCUMENT KIND is the largest instance of it left.
+GATE_DECK = """---
+title: "Deck Conformance"
+subtitle: "Every deck-only construct in one file"
+author: Ada Lovelace
+date: 2026-09-07
+lang: en
+---
+
+## Columns and cards
+
+::::: {.columns .cards data-cols=2}
+
+:::: column
+**Discover.** A card in a wrapped grid, which is 0.26.0's data-cols.
+::::
+
+:::: {.column .accent-2}
+**Apply.** A second card carrying its own accent colour.
+::::
+
+:::::
+
+## A lead-in and a takeaway
+
+::: lead-in
+The one thing to remember, set larger with an accent rule.
+:::
+
+- a list item with **bold**
+- one with [a link](https://example.com/deck)
+
+::: takeaway
+Pinned to the bottom of the slide regardless of what is above it.
+:::
+
+## A table with a hole in it
+
+| Column | Owner | Days |
+|--------|-------|------|
+| To Do  | Ada   | 3    |
+| Done   |       |      |
+"""
+
+
+@pytest.fixture(scope="module")
+def conformant_deck(to_pdf, pdf_workspace):
+    """A deck built the way `make pdf` builds one, alone in a directory."""
+    result, path = to_pdf(
+        "slide", "gate-deck.md", text=GATE_DECK, stem="gate-deck", timeout=300
+    )
+    assert result.returncode == 0, f"the deck build failed\n{result.stderr[-3000:]}"
+
+    checked = pdf_workspace / "gate-deck-check"
+    checked.mkdir(exist_ok=True)
+    for stale in checked.iterdir():
+        stale.unlink()
+    (checked / "gate-deck.pdf").write_bytes(path.read_bytes())
+    return checked
+
+
 @pytest.fixture(scope="module")
 def conformant_pdf(to_pdf, pdf_workspace):
     """One PDF, built the way `make pdf` builds one, alone in a directory.
@@ -343,4 +417,49 @@ def test_every_checked_filename_carries_the_output_suffix(doc_package):
     assert not bare, (
         f"{len(bare)} filename(s) without $(OUTPUT_SUFFIX): {bare}. "
         "With WITH=hidden these name files the build did not write."
+    )
+
+
+@integration
+def test_a_generated_deck_conforms_to_pdf_ua_1(conformant_deck):
+    """stn-l68's other half. A deck is a separate template path end to end.
+
+    Not a redundant copy of the document test: slide-template.html,
+    slide-sections.lua, the generated title slide and the toolbar are all
+    unique to this path, and none of them had ever been put in front of
+    veraPDF.
+    """
+    result = pipeline.verapdf(
+        workdir=conformant_deck, files=["gate-deck.pdf"], timeout=300
+    )
+
+    assert "PASS" in result.stdout, (
+        "veraPDF did not report PASS for a deck this build produced:\n"
+        f"{result.stdout}\n{result.stderr[-3000:]}"
+    )
+    assert "FAIL" not in result.stdout, (
+        f"veraPDF reported a PDF/UA-1 failure on a deck:\n{result.stdout}"
+    )
+    assert result.returncode == 0, (
+        f"the gate rejected a conformant deck:\n{result.stdout}\n"
+        f"{result.stderr[-2000:]}"
+    )
+
+
+@integration
+def test_the_deck_fixture_is_actually_a_deck(conformant_deck):
+    """Vacuous-test guard.
+
+    If `slide` ever renders through the document template the test above still
+    passes and stops meaning anything. A deck's pages are landscape; a
+    document's are portrait, so page geometry tells them apart without
+    depending on any styling detail.
+    """
+    from pypdf import PdfReader
+
+    page = PdfReader(conformant_deck / "gate-deck.pdf").pages[0]
+    box = page.mediabox
+    assert float(box.width) > float(box.height), (
+        f"the fixture is not landscape ({box.width} x {box.height}); "
+        "it may have been rendered as a document rather than a deck"
     )
