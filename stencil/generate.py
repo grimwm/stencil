@@ -263,6 +263,38 @@ def get_template_context(package_id: str, config: dict) -> dict:
         "assets": assets.load(),
     }
 
+    # Everything above is DERIVED -- computed from the package config, or handed
+    # over by pipeline.py. Everything below is CUSTOM, supplied by whoever wrote
+    # the config. Snapshotting the boundary here is what lets the two be told
+    # apart further down; there is no other marker distinguishing them once they
+    # are in one flat dict.
+    derived_keys = set(context)
+
+    def reject_derived(where: str, env: dict) -> None:
+        """A custom key may not take the name of a derived one.
+
+        Not a style rule. `template_env: {pandoc_image: ...}` would replace the
+        image every generated service runs, and package_type, docs and assets
+        are shadowable the same way -- so a typo that happens to collide
+        silently rewires the build rather than being ignored.
+
+        Raising rather than dropping it, because a config that does this today
+        is asking for something and would otherwise stop getting it without
+        being told. That is the same call StrictUndefined makes elsewhere in
+        this file: fail at generation time, not in whatever the template
+        rendered.
+        """
+        clashes = sorted(set(env) & derived_keys)
+        if not clashes:
+            return
+        raise ValueError(
+            f"{where} template_env may not redefine "
+            f"{'these derived context keys' if len(clashes) > 1 else 'the derived context key'}: "
+            f"{', '.join(clashes)}. "
+            "Derived keys come from the package config and from stencil itself; "
+            "pick a different name for the custom one."
+        )
+
     # Config-level template_env declares which custom keys these templates may
     # read and supplies the value for packages that do not set one. A
     # project can point several configs at one templates directory, where a
@@ -271,6 +303,7 @@ def get_template_context(package_id: str, config: dict) -> dict:
     # shared template impossible to serve from more than one config.
     config_env = config.get("template_env")
     if isinstance(config_env, dict):
+        reject_derived("config-level", config_env)
         for key, value in config_env.items():
             context.setdefault(key, value)
 
@@ -281,13 +314,21 @@ def get_template_context(package_id: str, config: dict) -> dict:
     # template writing `{{ front_controller | default('index.html') }}` against
     # a key defaulted to False puts the literal "False" where a filename
     # belonged, which is how that was found.
-    # setdefault throughout, so a config cannot shadow a derived key.
     for key in declared_template_env_keys(config):
         context.setdefault(key, Undefined())
 
-    # Custom template vars: merge into top-level context so `when` conditions and templates can access them directly
+    # Custom template vars: merge into top-level context so `when` conditions
+    # and templates can access them directly.
+    #
+    # This is an update rather than a setdefault ON PURPOSE and unlike the two
+    # passes above: a package's own value has to beat the config-wide default,
+    # which is the entire point of declaring one. What it must NOT beat is a
+    # derived key, and until 0.25.0 it did -- the comment here claimed
+    # "setdefault throughout, so a config cannot shadow a derived key", which
+    # was true of the passes above and false of this line directly beneath it.
     template_env = package.get("template_env", {})
     if isinstance(template_env, dict):
+        reject_derived(f"package {package_id!r}", template_env)
         context.update(template_env)
     # Also keep as nested dict for backward compatibility
     context["template_env"] = template_env if isinstance(template_env, dict) else {}

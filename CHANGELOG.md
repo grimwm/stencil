@@ -9,6 +9,54 @@ and the closed epics in `.beads/issues.jsonl` are the readable index.
 How the version gets bumped is written down in
 [AGENTS.md](AGENTS.md#cutting-a-release), not here.
 
+## 0.25.0
+
+- **A custom `template_env` key may no longer take a derived key's name, and
+  says so instead of silently rewiring the build.** A package's `template_env`
+  was merged with `context.update`, so it overwrote whatever it collided with:
+  `pandoc_image`, `package_type`, `docs`, `assets`, and as of 0.22.0
+  `verapdf_image` and `verapdf_script`. A typo that happened to match a derived
+  name replaced the image every generated service runs.
+
+  The comment three lines above that merge read *"setdefault throughout, so a
+  config cannot shadow a derived key."* It was true of the two passes above it
+  and false of the line directly beneath it, which is the kind of wrong that
+  survives review: the code says what it should do, one line down.
+
+- **Raising rather than dropping, and measured before deciding.** Silently
+  ignoring a collision is the safe-looking option and it is worse — a config
+  doing this today is asking for something and would stop getting it without
+  being told. Across cs234 and cs425 there are **17 distinct `template_env`
+  keys in use and none collides with a derived key**, so raising costs no
+  existing config anything. Those 17 names are now a test: if a future derived
+  key takes one of them, it fails here rather than in a course repository the
+  next time someone runs `make gen`.
+
+  This is the call `StrictUndefined` already makes elsewhere in the same file —
+  fail at generation time, not in whatever the template rendered.
+
+- **Both levels, or the rule is a suggestion.** Config-level `template_env`
+  already could not shadow, because `setdefault` quietly dropped it; it now
+  reports the collision instead of ignoring you. The error names every
+  colliding key at once rather than the first, so a config with two mistakes
+  needs one round trip.
+
+- **The package-level merge stays an `update`, deliberately.** The obvious fix
+  — make it a `setdefault` like the two passes above — is wrong and is guarded
+  against: a package's own value must beat the config-wide default, which is
+  the entire reason for declaring one. Applied as a breach, it fails four
+  tests, including every one of the 17 real consumer keys.
+
+  | breach                                                  | tests that fail |
+  | ------------------------------------------------------- | --------------- |
+  | revert the package merge to a bare `context.update`     | 2               |
+  | drop only the config-level check                        | 1               |
+  | "fix" it by making the package merge a `setdefault` too | 4               |
+
+  Found by a review bot on the 0.22.0 PR, which proposed rejecting collisions
+  for the two new `verapdf_*` keys specifically. That would have left every
+  other derived key shadowable and encoded the inconsistency as deliberate.
+
 ## 0.24.0
 
 - **An empty table cell is now tagged, so a table with a blank in it can
