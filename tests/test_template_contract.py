@@ -39,6 +39,12 @@ CONTRACT = {
     # pre_build/has_pre_build arrived with stn-gln. A consumer whose own
     # Makefile.j2 includes this partial gets the hook rules for free; one that
     # copied the partial does not, and StrictUndefined is what says so.
+    # node_image arrived with stn-s5b. format-md's ensure_image line used to
+    # name docker.io/library/node:lts-alpine literally, in one of three files
+    # that reach for the same image; a consumer whose own Makefile.j2 includes
+    # this partial now pre-pulls the pinned one, and one that copied the partial
+    # goes on pulling `lts` and running the pin -- which reads as a slow first
+    # build rather than as a defect. StrictUndefined is what says so.
     "Makefile-doc.j2": {
         "docs",
         "has_docs",
@@ -46,6 +52,7 @@ CONTRACT = {
         "has_pages",
         "has_pre_build",
         "has_slides",
+        "node_image",
         "package_output_dir",
         "pandoc_image",
         "pre_build",
@@ -69,8 +76,17 @@ CONTRACT = {
     # docker-compose.yml.j2 includes this partial gets the new service for
     # free, but a consumer that copied the partial instead of including it
     # will not, and StrictUndefined is what tells them so.
+    # node_image and format_npm_specs arrived with stn-s5b, and are the same
+    # kind of addition: the format-md service used to name an unpinned image and
+    # install two unpinned packages, both spelled out here. A consumer including
+    # this partial gets the pins; one that copied it keeps a service that
+    # reformats every markdown file in the package with whatever prettier npm
+    # served that morning.
     "docker-compose-html.yml.j2": {
+        "check_access_script",
+        "format_npm_specs",
         "has_slides",
+        "node_image",
         "package_id",
         "pandoc_argv_doc",
         "pandoc_argv_slide",

@@ -1,5 +1,5 @@
 format-md: ## Format markdown files
-	$(call ensure_image,docker.io/library/node:lts-alpine,format-md)
+	$(call ensure_image,{{ node_image }},format-md)
 	$(DC) run --rm format-md
 
 {% if has_pages %}

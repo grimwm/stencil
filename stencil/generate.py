@@ -430,6 +430,20 @@ def get_template_context(package_id: str, config: dict) -> dict:
         # this file renders rather than on a copy of it.
         "verapdf_image": pipeline.VERAPDF_IMAGE,
         "verapdf_script": pipeline.VERAPDF_SCRIPT,
+        # Same rule again for check-access, and for the same reason it was
+        # needed: inlined in the compose file, its loop and its file:// URL
+        # disagreed about where the HTML was and nothing ran it to find out.
+        "check_access_script": pipeline.CHECK_ACCESS_SCRIPT,
+        # And again for everything the scaffolding installs at build time. The
+        # Dockerfile, the format-md service and the Makefile's ensure_image line
+        # all name the same Node image, and both npm installs name an exact
+        # version -- from here, so that bumping one is one edit and a test can
+        # assert on the constant rather than on a copy of it. See stn-s5b, and
+        # the comments at pipeline.NODE_IMAGE for why Chromium is not among
+        # them.
+        "node_image": pipeline.NODE_IMAGE,
+        "browser_npm_specs": pipeline.npm_specs(pipeline.BROWSER_NPM_PINS),
+        "format_npm_specs": pipeline.npm_specs(pipeline.FORMAT_NPM_PINS),
         # CSS, JS and webfonts inlined into the pandoc templates. Loaded here
         # rather than fetched at page load, so a handout is self-contained and
         # make pdf does not depend on the network.

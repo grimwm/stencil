@@ -1,5 +1,10 @@
+  # The image and the two packages are pinned in stencil/pipeline.py, alongside
+  # the browser image's. An unpinned prettier is the widest blast radius of the
+  # three floating installs stn-s5b found: it rewrites every markdown file in
+  # the package, so a major landing between two runs reformats a course's whole
+  # source tree and buries the actual edit.
   format-md:
-    image: docker.io/library/node:lts-alpine
+    image: {{ node_image }}
     volumes:
       - .:/workspace:z
 {% if has_package_output_dir %}
@@ -16,7 +21,7 @@
       - -c
       - |
         echo "Formatting markdown files..."
-        npm install --prefix /tmp/fmt prettier @awmottaz/prettier-plugin-void-html && \
+        npm install --prefix /tmp/fmt {{ format_npm_specs | join(' ') }} && \
         /tmp/fmt/node_modules/.bin/prettier \
           --plugin /tmp/fmt/node_modules/@awmottaz/prettier-plugin-void-html/prettier-plugin-void-html.js \
           --prose-wrap always --print-width 100 --write "**/*.md"
@@ -153,44 +158,25 @@
       - {{ package_output_dir }}:/out:z
 {% endif %}
     working_dir: /workspace
+    # The script comes from stencil/pipeline.py for the reason check-pdf's
+    # does: a test runs the same text this file ships rather than a re-typed
+    # approximation. It had to, in the end -- inlined here, the loop searched
+    # /out and built its URL from /workspace, so check-access could not pass
+    # at all for a package with an output_dir, and every test read this file's
+    # text rather than running it.
+    #
+    # Every $ is doubled on the way in; compose substitutes $VAR in a service
+    # definition before the shell sees it. The escaping happens here rather
+    # than in the constant so the constant stays runnable directly through sh.
     entrypoint:
       - sh
       - -c
       - |
-        failed=0
-        checked=0
-        for f in {% if has_package_output_dir %}/out{% else %}.{% endif %}/*.html; do
-          [ -f "$$f" ] || continue
-          # Basename, because $$f now carries a directory prefix. Comparing the
-          # full path would stop skipping the templates and pa11y would report
-          # on stencil's own scaffolding.
-          case "$$(basename "$$f")" in html-template.html|slide-template.html) continue ;; esac
-          # Both themes, each forced by clicking the control -- so these are
-          # rendered pages rather than claims about them, and neither pass is
-          # left to resolve `system` into whatever the runner happens to
-          # report. A light pass that inherited a dark runner would measure
-          # dark twice and still go green.
-          checked=$$((checked + 1))
-          echo "Checking $$f (light)..."
-          pa11y --config /opt/pa11y-light.json --standard WCAG2AA \
-            "file:///workspace/$$f" || failed=1
-          echo "Checking $$f (dark)..."
-          pa11y --config /opt/pa11y-dark.json --standard WCAG2AA \
-            "file:///workspace/$$f" || failed=1
-        done
-        # Zero files checked is a build error, not a pass. The loop is over a
-        # glob, and a glob that matches nothing leaves the loop body unrun and
-        # $$failed at 0 -- which exits 0 and reads exactly like success. That
-        # is the same silent pass veraPDF has when handed no files, and moving
-        # the output somewhere this loop does not look is precisely how it
-        # would happen.
-        if [ "$$checked" -eq 0 ]; then
-          echo "check-access found no HTML to check." >&2
-          echo "Run 'make doc' first. A glob that matches nothing exits 0," >&2
-          echo "so this would otherwise have reported success having checked" >&2
-          echo "nothing at all." >&2
-          exit 1
-        fi
-        echo "Checked $$checked HTML file(s) at WCAG 2.1 AA, light and dark."
-        exit $$failed
+{{ check_access_script | replace('$', '$$') | indent(8, first=True) }}
+      # $$0 for the script itself, then the directory to search as $$1. It is
+      # absolute in both layouts, and the file:// URL is built from it, so
+      # there is one path here rather than two that have to agree.
+      - check-access
+      - {% if has_package_output_dir %}/out{% else %}/workspace{% endif %}
+
     restart: "no"

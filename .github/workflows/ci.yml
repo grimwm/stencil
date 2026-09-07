@@ -56,6 +56,14 @@ jobs:
         run: |
           docker pull "$(python -c 'from stencil import pipeline; print(pipeline.PANDOC_IMAGE)')"
 
+      # Same reasoning, one layer down: the browser image is BUILT during the
+      # suite, and its FROM is the first thing that build reaches the registry
+      # for. Pulled here so a registry hiccup fails as a pull rather than as
+      # `could not build the browser image` with a network error buried in it.
+      - name: Pull the browser image's base
+        run: |
+          docker pull "$(python -c 'from stencil import pipeline; print(pipeline.NODE_IMAGE)')"
+
       - run: pytest -v
 
   lint:

@@ -359,6 +359,35 @@ fonts are inlined into the HTML at `stencil gen` time — so a typical handout n
 network request — but the refusal still catches a page that has been edited to fetch
 something that is not there.
 
+### Every version the scaffolding installs lives in `pipeline.py` — Chromium does not
+
+`PANDOC_IMAGE`, `VERAPDF_IMAGE`, `NODE_IMAGE`, `BROWSER_NPM_PINS` and `FORMAT_NPM_PINS`
+are the complete set of versions a generated package builds with. They are exact, they are
+rendered into the templates from there rather than spelled out in them, and bumping one is
+one edit followed by a run of the container tier. `tests/test_pins.py` fails if any
+`npm install` in any generated file names a package without a version, so a new tool added
+to a template cannot arrive unpinned.
+
+The one thing not pinned is Chromium, and that is a decision rather than an oversight —
+`stn-s5b`, with the measurements, in `Dockerfile.browser.j2`'s comment. Alpine keeps one
+version of a package per branch and drops it when superseded, so a pin there is a
+countdown rather than a pin: both `chromium=<exact>` and the fuzzy `chromium=~<major>`
+turn into a hard `unable to select packages` build failure on a schedule, and neither the
+Makefile nor the compose file gives a consumer a build argument to work around it with. What Chromium decides — page-break placement and
+the PDF text layer — is measured by outcome instead, by `tests/test_pdf.py` and the PDF/UA
+suite, on every pull request. Pinning the Alpine branch is the half that is both pinnable
+and load-bearing, and that is what `NODE_IMAGE` does.
+
+Do not "finish the job" by pinning the apk package. Read the comment first.
+
+The cost of pinning is that a pin does not update itself: a CVE disclosed against Node
+24.20.0, puppeteer, pa11y, pdf-lib or prettier sits there until someone opens
+`pipeline.py`. When you bump one, read the advisories for all of them rather than only the
+release notes — and be wary of a release that is only days old, which is the window in
+which a compromised one is usually still being found. `npm audit` over the resolved tree
+reported clean at the versions 0.31.0 pinned; that was a measurement of a day, not a
+property of the pins. The transitive tree below them is not pinned at all — `stn-5hv`.
+
 ### Keep the two guides in step with the templates
 
 `AUTHORING.md` is written for the person authoring markdown; `STENCIL.md` for the person
