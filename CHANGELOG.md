@@ -9,6 +9,28 @@ and the closed epics in `.beads/issues.jsonl` are the readable index.
 How the version gets bumped is written down in
 [AGENTS.md](AGENTS.md#cutting-a-release), not here.
 
+## 0.28.1
+
+- **The guard `stn-5ea` asked for, which 0.27.0 shipped without.** That ticket
+  listed "`with=hidden` checks the -hidden files" among the guards the change
+  needed, and the change went out with the other four and not this one.
+
+  `make check-pdf with=hidden` must open the `-hidden` PDFs, not the plain
+  ones. Both targets spell the name with `$(OUTPUT_SUFFIX)`, so they agree by
+  construction — and "by construction" stops being true the moment someone
+  edits one of the two lines. Checking the wrong six files would **pass**,
+  which is the failure mode worth a test rather than an argument.
+
+  The assertion is that the two lists are *equal*, not that either has a
+  particular shape: whatever `pdf` writes is what `check-pdf` opens.
+
+  | breach                                               | tests that fail |
+  | ---------------------------------------------------- | --------------- |
+  | drop `$(OUTPUT_SUFFIX)` from the check-pdf filenames | 2               |
+  | check only the first document                        | 1               |
+
+  No behaviour change. This is a closed ticket's unfinished half.
+
 ## 0.28.0
 
 - **Emoji render instead of printing as empty boxes.** Six of them in cs425's

@@ -287,3 +287,60 @@ def test_every_dollar_in_the_rendered_script_is_escaped(doc_package):
         "the check-pdf script carries an unescaped $, which compose will "
         f"substitute away before sh runs it: {singles}"
     )
+
+
+def test_check_pdf_checks_the_same_files_the_pdf_target_wrote(doc_package):
+    """stn-5ea listed this guard and 0.27.0 shipped without it.
+
+    `make check-pdf with=hidden` must check the -hidden PDFs, not the plain
+    ones. Both targets spell the filename with $(OUTPUT_SUFFIX), so they agree
+    by construction -- but "by construction" is exactly the kind of claim that
+    stops being true when someone edits one of the two lines, and checking the
+    wrong six files would PASS.
+
+    So this asserts the two lists are equal rather than asserting either one's
+    shape: whatever `pdf` writes is what `check-pdf` opens.
+    """
+    makefile = (doc_package / "Makefile").read_text()
+
+    written = set()
+    checked = set()
+    for line in makefile.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("$(DC) run --rm pdf "):
+            # `... pdf <stem>.html <stem>.pdf`
+            written.add(stripped.split()[-1])
+        elif stripped.startswith("$(DC) run --rm check-pdf"):
+            checked.update(stripped.split()[4:])
+
+    assert written, "the pdf target writes nothing; the fixture has no documents"
+    assert checked == written, (
+        "check-pdf and pdf disagree about which files exist.\n"
+        f"  pdf writes:    {sorted(written)}\n"
+        f"  check-pdf opens: {sorted(checked)}\n"
+        "A mismatch here checks the wrong files and passes."
+    )
+
+
+def test_every_checked_filename_carries_the_output_suffix(doc_package):
+    """The specific way the pair can drift.
+
+    `make check-pdf with=hidden` builds Guide-hidden.pdf and must not then
+    check Guide.pdf -- which would be a stale file from an earlier build, or
+    absent entirely. A literal filename in the check-pdf line is the mistake
+    this catches.
+    """
+    makefile = (doc_package / "Makefile").read_text()
+    line = next(
+        stripped
+        for stripped in (l.strip() for l in makefile.splitlines())
+        if stripped.startswith("$(DC) run --rm check-pdf")
+    )
+
+    names = line.split()[4:]
+    assert names, "check-pdf is passed no filenames at all"
+    bare = [n for n in names if "$(OUTPUT_SUFFIX)" not in n]
+    assert not bare, (
+        f"{len(bare)} filename(s) without $(OUTPUT_SUFFIX): {bare}. "
+        "With WITH=hidden these name files the build did not write."
+    )
