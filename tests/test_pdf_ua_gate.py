@@ -26,8 +26,9 @@ integration = pytest.mark.integration
 
 # EVERY LINE OF THIS DOCUMENT IS A DEFECT THAT ONCE SHIPPED. The bold and the
 # list were 7.1 t5 and 7.2 t20; the table was 7.1 t3. The hyperlink is
-# stn-tm8 -- 7.18.1 t2 and 7.18.5 t2, three of six real handouts, and the one
-# thing 0.21.0's fixture did not contain when it reported full conformance.
+# stn-tm8 -- 7.18.1 t2 and 7.18.5 t2, three of six real handouts. The table's
+# EMPTY CELL is stn-yly -- 7.2 t43, the other two handouts. Neither was in
+# 0.21.0's fixture when it reported full conformance.
 # A case that is absent from this document is a case veraPDF never sees.
 GATE_DOC = """---
 title: "Conformance"
@@ -46,7 +47,7 @@ Prose with **bold**, *italic* and [a hyperlink](https://example.com/guide).
 | Stage  | Owner | Days |
 |--------|-------|------|
 | Draft  | Ada   | 3    |
-| Review | Grace | 2    |
+| Review | Grace |      |
 """
 
 

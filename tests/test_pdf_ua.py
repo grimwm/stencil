@@ -696,3 +696,198 @@ def test_a_description_survives_characters_outside_ascii(link_annots):
         if str(a["uri"]) == "https://example.com/accents"
     ]
     assert accented == ["Café — résumé"], accented
+
+
+# --- Table cells the browser declines to tag ------------------------------
+#
+# PDF/UA-1 7.2 t43: table rows shall have the same number of columns. Chromium
+# tags only cells that have content, so an empty <td> vanishes from the
+# structure tree and its row comes up short by exactly the number of blanks in
+# it. The source table is not ragged; the tag tree is.
+#
+# THE FIXTURE ABOVE BUILDS A TABLE WITH NO EMPTY CELL, which is the other half
+# of why 0.21.0 reported full conformance. Measured on the CS 425 corpus,
+# kanban-game.pdf table 0 came out rows=[5, 5, 4, 4, 2] from a table that is
+# five cells wide in every row.
+
+TABLE_DOC = """---
+title: "Tables"
+lang: en
+---
+
+## A board with empty slots
+
+| To Do | In Progress | In Review | QA  | Done |
+|-------|-------------|-----------|-----|------|
+| T1    | T5          | T9        | T12 | T15  |
+| T2    | T6          | T10       | T13 |      |
+| T3    | T7          | T11       | T14 |      |
+| T4    | T8          |           |     |      |
+
+## A table with a hole in the middle
+
+| Stage  | Owner | Days |
+|--------|-------|------|
+| Draft  | Ada   | 3    |
+| Review |       | 2    |
+| Ship   | Grace |      |
+
+## A blank corner header and a wholly blank row
+
+|        | Ada | Grace |
+|--------|-----|-------|
+| Draft  | 3   | 2     |
+|        |     |       |
+| Ship   | 1   | 4     |
+
+## A cell holding only a picture
+
+| Stage | Picture |
+|-------|---------|
+| Draft | ![A labelled flow diagram](images/flow.svg) |
+"""
+
+
+def table_rows(path) -> list[list[list[str]]]:
+    """Every /Table's rows, each row the sequence of its cells.
+
+    A cell is reported as "TD" or "TH" when it has content and "TD-empty" or
+    "TH-empty" when it has none, so a test can assert both the count and the
+    POSITION of a blank -- appending the missing cells to the end of a short
+    row satisfies 7.2 t43 and puts the kanban board's blanks in the wrong
+    columns.
+    """
+    root = PdfReader(path).trailer["/Root"]
+    tree = _deref(root.get("/StructTreeRoot"))
+    assert tree is not None, "the PDF is untagged"
+
+    tables: list[list[list[str]]] = []
+
+    def walk(node, table=None):
+        node = _deref(node)
+        if isinstance(node, list):
+            for child in node:
+                walk(child, table)
+            return
+        if not isinstance(node, dict):
+            return
+        kind = str(node.get("/S"))
+        if kind == "/Table":
+            table = []
+            tables.append(table)
+        elif kind == "/TR" and table is not None:
+            table.append([])
+        elif kind in ("/TD", "/TH") and table:
+            empty = "" if node.get("/K") is not None else "-empty"
+            table[-1].append(kind.lstrip("/") + empty)
+        if "/K" in node:
+            walk(node["/K"], table)
+
+    walk(tree.get("/K"))
+    return tables
+
+
+@pytest.fixture(scope="module")
+def table_pdf(to_pdf):
+    result, path = to_pdf("doc", "tables.md", text=TABLE_DOC, stem="tables")
+    assert result.returncode == 0, result.stderr[-3000:]
+    return path
+
+
+@pytest.fixture(scope="module")
+def tagged_tables(table_pdf):
+    tables = table_rows(table_pdf)
+    assert len(tables) == 4, (
+        f"the document draws four tables, the PDF has {len(tables)}"
+    )
+    return tables
+
+
+def test_every_table_row_spans_the_same_number_of_columns(tagged_tables):
+    """The acceptance criterion. Measured before the fix, this document came
+    out rows=[5, 5, 4, 4, 2], [3, 3, 2, 2], [3, 3, 0, 3], [2, 2]."""
+    ragged = [
+        (index, [len(row) for row in table])
+        for index, table in enumerate(tagged_tables)
+        if len({len(row) for row in table}) > 1
+    ]
+    assert not ragged, (
+        f"tables whose tagged rows are not all the same width: {ragged}"
+    )
+
+
+def test_a_blank_cell_is_tagged_in_its_own_column(tagged_tables):
+    """The half a checker cannot see.
+
+    7.2 t43 counts cells; it does not care where they are. Appending three
+    empty /TD to the end of the kanban board's last row would make the count
+    right and put the board's blanks under the wrong headings, which is the
+    same trade role="none" made in 0.15.0 -- a rule cleared by destroying the
+    information it was protecting.
+    """
+    board, middle, corner, _picture = tagged_tables
+
+    assert board[4] == ["TD", "TD", "TD-empty", "TD-empty", "TD-empty"], board[4]
+    # The one that appending gets wrong: the hole is in the MIDDLE column.
+    assert middle[2] == ["TD", "TD-empty", "TD"], middle[2]
+    assert middle[3] == ["TD", "TD", "TD-empty"], middle[3]
+    assert corner[2] == ["TD-empty"] * 3, corner[2]
+
+
+def test_a_wholly_blank_row_is_still_a_row_of_cells(tagged_tables):
+    """Measured: Chromium emits the /TR and hangs nothing under it, so the row
+    exists and is zero cells wide. Nothing about the fix depends on a row
+    having at least one tagged cell to align against."""
+    corner = tagged_tables[2]
+    assert len(corner[2]) == 3, corner
+
+
+def test_an_empty_header_cell_was_already_tagged_and_is_left_alone(tagged_tables):
+    """A measured asymmetry, pinned so a change to it is visible.
+
+    Chromium does NOT tag an empty <td> and DOES tag an empty <th> -- and it
+    hangs a marked-content kid under the header too, so the blank corner cell
+    reads as an ordinary tagged cell rather than as the hollow one the fix
+    inserts. That is why a blank corner header was never part of this failure,
+    and why nothing should be inserted beside it.
+    """
+    corner = tagged_tables[2]
+    assert corner[0] == ["TH", "TH", "TH"], corner[0]
+
+
+def test_a_cell_holding_only_a_picture_is_not_treated_as_empty(tagged_tables):
+    """A picture is content. A blank test written on text alone -- "the cell
+    has no words" -- calls this cell empty, and the row then has one more cell
+    than the tree does."""
+    picture = tagged_tables[3]
+    assert picture[1] == ["TD", "TD"], picture[1]
+
+
+def test_tagging_a_blank_cell_puts_nothing_in_the_text_layer(table_pdf):
+    """The fix must add structure and no content, so nothing changes for a
+    reader who copies out of the table.
+
+    This is the guard on the OTHER candidate fix, which was measured rather
+    than argued about. `td:empty::before` is the obvious one-line answer:
+
+        content: "\\00a0"   rows still [5, 5, 4, 4, 2]; text layer unchanged
+        content: "x"        rows still [5, 5, 4, 4, 2]; an "x" in every blank
+                            cell of the extracted text
+
+    So the CSS answer is rejected on the FIRST column of that table, not the
+    second: Chromium does not tag CSS-generated content in a cell at all, and
+    neither spelling produces a /TD. The second column is why no future
+    version of it should be reached for either -- a generated character that
+    is visible enough to be tagged is visible enough to be copied. Measured:
+    the non-breaking space never reaches the text layer here, so it is the
+    "x" run this assertion actually fires on.
+    """
+    text = "\n".join(page.extract_text() or "" for page in PdfReader(table_pdf).pages)
+    for junk in ("\u00a0", "\u200b", "\ufeff", "x x"):
+        assert junk not in text, (
+            f"the fix put {junk!r} into the PDF's text layer, so it is in "
+            "anything a reader copies out of the table"
+        )
+    # The board's short rows read exactly as they did before any of this.
+    assert "T4 T8" in text.replace("\n", " ")
+    assert "Review 2" in text.replace("\n", " ")
