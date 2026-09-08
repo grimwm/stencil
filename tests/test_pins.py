@@ -131,7 +131,7 @@ def code_lines(package):
     for path, text in text_files(package):
         for line in text.splitlines():
             stripped = line.strip()
-            if stripped.startswith("#") or stripped.startswith("//"):
+            if stripped.startswith(("#", "//")):
                 continue
             yield path, stripped
 
@@ -406,7 +406,7 @@ def test_the_generated_lockfile_is_the_committed_one(doc_package, filename):
 # the committed lockfiles
 
 
-@pytest.mark.parametrize("filename,manifest_name,pins", LOCKED)
+@pytest.mark.parametrize(("filename", "manifest_name", "pins"), LOCKED)
 def test_the_lockfile_agrees_with_the_pins(filename, manifest_name, pins):
     """THE ACCEPTANCE stn-5hv asks for: the lockfile and the pins in pipeline.py
     cannot drift.

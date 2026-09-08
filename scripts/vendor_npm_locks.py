@@ -100,31 +100,37 @@ def npm(work: str, runtime: str, args: list[str]) -> subprocess.CompletedProcess
     HOME points into the mount because npm writes a cache under it, and with
     $HOME unset npm falls back to a path the unprivileged uid cannot create.
     """
-    return subprocess.run(
-        [
-            runtime,
-            "run",
-            "--rm",
-            *ownership_flags(runtime),
-            "-e",
-            "HOME=/work",
-            "-e",
-            "NPM_CONFIG_UPDATE_NOTIFIER=false",
-            "-v",
-            f"{work}:/work:z",
-            "-w",
-            "/work",
-            pipeline.NODE_IMAGE,
-            "npm",
-            *args,
-            "--registry",
-            REGISTRY,
-            "--no-audit",
-            "--no-fund",
-        ],
-        capture_output=True,
-        text=True,
-    )
+    argv = [
+        runtime,
+        "run",
+        "--rm",
+        *ownership_flags(runtime),
+        "-e",
+        "HOME=/work",
+        "-e",
+        "NPM_CONFIG_UPDATE_NOTIFIER=false",
+        "-v",
+        f"{work}:/work:z",
+        "-w",
+        "/work",
+        pipeline.NODE_IMAGE,
+        "npm",
+        *args,
+        "--registry",
+        REGISTRY,
+        "--no-audit",
+        "--no-fund",
+    ]
+    try:
+        return subprocess.run(argv, capture_output=True, text=True)
+    except OSError as error:
+        # container_runtime() found the binary on PATH; that is not a promise
+        # it will still exec -- a daemon that is not running, a podman machine
+        # that is stopped, a binary removed between the check and here. Say
+        # which command failed and stop, rather than letting a traceback stand
+        # in for it and rather than carrying on to write a lockfile from a run
+        # that never happened.
+        raise SystemExit(f"could not run {runtime}: {error}") from error
 
 
 def resolve(manifest: str, runtime: str) -> str:
