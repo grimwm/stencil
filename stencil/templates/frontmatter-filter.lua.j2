@@ -4,11 +4,31 @@ Three jobs, every one of them something a pandoc template cannot do for itself:
 a template can ask `$if(x)$`, but it cannot compare a string, OR two keys
 together, or fill one key in from another.
 
-* `show_date` is coerced to a boolean. Pandoc reads YAML 1.2, where `true` and
-  `false` are the only booleans -- `show_date: no` arrives as the *string*
-  "no", and `$if(show_date)$` fires on any non-empty string. So the obvious
-  thing to write meant the exact opposite of itself, silently, in the
-  direction that publishes something the author asked to withhold.
+* `show_date` is coerced to a boolean, because the spelling an author writes
+  and the type pandoc hands this filter are two different things.
+
+  MEASURED against the pandoc this repository pins -- PANDOC_IMAGE in
+  stencil/pipeline.py -- `show_date: no` arrives as a real boolean false
+  rather than as the *string* "no": that pandoc resolves YAML 1.1's boolean
+  spellings. But only the ENUMERATED ones, which is the part that still bites.
+  `no`, `No` and `NO` are booleans; `nO` is the plain string "nO", and
+  `$if(show_date)$` fires on any non-empty string. So the obvious thing to
+  write still means the exact opposite of itself for a spelling nobody looks
+  at twice, silently, in the direction that publishes something the author
+  asked to withhold.
+
+  This comment used to say pandoc reads YAML 1.2, where `true` and `false` are
+  the only booleans, so `show_date: no` arrived here as a string. The tempting
+  explanation is documentation that drifted when the pandoc pin moved under
+  it, and the history does not support it: PANDOC_IMAGE was pinned to the
+  image it still names the day BEFORE this file was written, and has not moved
+  since. The comment was wrong when it was typed, not overtaken later.
+
+  Nothing failed either way, because the coercion below is correct whichever
+  way pandoc resolves -- which is exactly why it survived: no test could catch
+  it. tests/test_yaml_resolution.py now pins what the pinned image actually
+  does, so a change here fails a test instead of a comment staying quietly
+  wrong.
 
 * `date` is filled from the build date when `show_date` is on and the author
   wrote no date of their own. Done here rather than in the template so the
@@ -25,6 +45,16 @@ cheaper than knowing which is which.
 
 -- Everything a person might reasonably write to mean "no". Compared after
 -- lowercasing and trimming, so `No` and ` off ` land here too.
+--
+-- The lowercasing does more than tidy up. The pinned pandoc resolves only
+-- YAML 1.1's enumerated boolean spellings -- `no`, `No` and `NO`, but not
+-- `nO` -- so a mixed-case value reaches this filter as a plain string, and
+-- this table is then the only thing that turns it back into the answer its
+-- author meant. Delete the table and `nO` silently inverts.
+--
+-- [""] is unreachable, and kept as a statement of intent rather than as live
+-- code: text_of() returns nil for the empty string, so truthy() returns its
+-- default before this table is ever consulted.
 local FALSE = {
   [""] = true,
   ["no"] = true,
@@ -145,9 +175,15 @@ end
 --- both have to land there rather than at `false`. show_date wants blank to
 --- agree with absent (both off), which the old hardcoded `false` already
 --- gave it; a default-true key wants the same agreement in the other
---- direction, and pandoc hands this filter an empty MetaInlines for a blank
---- value rather than nil -- so `text_of` returning nil for that case is what
---- has to be caught here, not left to fall through to `not FALSE[""]`.
+--- direction, and pandoc hands this filter an EMPTY STRING for a blank value
+--- rather than nil -- so `text_of` returning nil for that case is what has to
+--- be caught here, not left to fall through to `not FALSE[""]`.
+---
+--- An empty string, not an empty Inlines: this comment used to say
+--- MetaInlines, and the value is a plain Lua string. `null`, `~` and a blank
+--- value all three arrive that way and are indistinguishable from one
+--- another, which is why they cannot be given three different meanings.
+--- Measured, and pinned by tests/test_yaml_resolution.py.
 local function truthy(value, default)
   if default == nil then
     default = false

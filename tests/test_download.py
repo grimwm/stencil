@@ -13,30 +13,40 @@ entry this key has to stop short of, see below) -- and truthy() is expected to
 grow a `default` argument so this key can resolve the opposite way from
 show_date while sharing the same table.
 
-WHAT PANDOC ACTUALLY HANDS THE FILTER, measured on the pinned pandoc (3.10)
-with a probe reporting the exact Lua type rather than inferred from the YAML
-spec:
+WHAT PANDOC ACTUALLY HANDS THE FILTER, measured on the pinned pandoc with a
+probe reporting the exact Lua type rather than inferred from the YAML spec.
+tests/test_yaml_resolution.py now owns that measurement and pins it, so a
+future image bump fails a test instead of turning this paragraph into a lie.
+The short version:
 
-    true false yes no on off   (any case)  -> a real boolean
-    1 0 none                               -> a string
-    null ~ and a blank value               -> an empty string, all three
-                                              indistinguishable from one another
-    absent                                 -> nil
+    true false yes no on off, y n  -> a real boolean, but ONLY in the three
+                                      spellings YAML 1.1 enumerates: no, No
+                                      and NO. `nO` is not one of them.
+    1 0 none, and any mixed case   -> a list of Inlines
+    null ~ and a blank value       -> an empty string, all three
+                                      indistinguishable from one another
+    absent                         -> nil
 
-That is YAML 1.1 boolean resolution, and it is worth stating plainly because
-this repository documents the opposite. frontmatter-filter.lua.j2's header
-comment, AUTHORING.md's show_date section and stn-ejv itself all say pandoc
-reads YAML 1.2, where `true` and `false` are the only booleans and
-`show_download: no` therefore arrives as the STRING "no". That was presumably
-true when show_date was written; it is not true of the pandoc this project
-pins today, and it is tracked separately rather than rewritten here.
+That is YAML 1.1 boolean resolution. This docstring used to add that the rest
+of the repository documented the opposite -- frontmatter-filter.lua.j2's header
+comment, AUTHORING.md's show_date section and stn-ejv all said pandoc reads
+YAML 1.2, where `true` and `false` are the only booleans -- and that the
+disagreement was tracked separately rather than rewritten here. stn-38o has
+since landed and those sites now agree with this one.
 
-The FALSE table is not thereby dead. It still decides `0` and `none`, which
-arrive as strings, and it still catches a QUOTED "no" or "null" -- which is
-the spelling an author reaches for when they have been bitten once and are
-being careful. truthy() checks the boolean branch first and falls through to
-the table, so every spelling lands correctly whichever way pandoc resolves it,
-and the feature does not depend on which YAML version a future pandoc picks.
+It also used to say "(any case)", which was wrong in the other direction:
+mixed case is a plain string, not a boolean. That correction is the reason the
+table above distinguishes `no` from `nO`.
+
+The FALSE table is not thereby dead -- it does more work than it looks like.
+It decides `0` and `none`; it catches a QUOTED "no" or "null", which is the
+spelling an author reaches for when they have been bitten once and are being
+careful; and because it is consulted after lowercasing, it is the only thing
+that gets mixed case right, since `nO` reaches it as a plain string and would
+otherwise be every bit as truthy as `yes`. truthy() checks the boolean branch
+first and falls through to the table, so every spelling lands correctly
+whichever way pandoc resolves it, and the feature does not depend on which
+YAML version a future pandoc picks.
 
 The blank case is the one unique to a default-true key, and it is why this
 file exists on its own rather than as a few more parametrize entries bolted
@@ -489,8 +499,9 @@ def test_yaml_1_1_no_is_false_at_the_config_level(generate_package, kind, build)
     that side as well. The two sides differ in what they do with a value that
     is NEITHER a boolean nor blank: front matter runs it through truthy() and
     its table of false-ish words, while the config side refuses and names the
-    key. frontmatter-filter.lua.j2's comment still claims YAML 1.2; that is
-    stale and tracked as stn-38o.
+    key. frontmatter-filter.lua.j2's comment used to claim YAML 1.2; stn-38o
+    corrected it, and tests/test_yaml_resolution.py pins the measurement both
+    sides of that comparison now rest on.
 
     yaml.safe_load is used here rather than writing `False` directly, so this
     test would fail if PyYAML's own coercion ever changed -- the point is to

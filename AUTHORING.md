@@ -325,9 +325,18 @@ show_date: yes
 ```
 
 `yes`, `true`, `on` and `1` all mean yes; `no`, `false`, `off`, `0`, `none` and a blank value all mean
-no, as does leaving the key out. Spelling matters less than the fact that it is settled before the
-template sees it — pandoc reads YAML 1.2, where `no` is the *string* `"no"` rather than a boolean, so
-without `frontmatter-filter.lua` normalizing it first, `show_date: no` would print a date.
+no, as does leaving the key out. Any capitalization works.
+
+Spelling matters less than the fact that it is settled before the template sees it — and it does need
+settling. The pandoc this project pins hands the filter a real boolean for the spellings YAML 1.1
+enumerates, which is `no`, `No` and `NO` but *not* `nO`; anything outside that list arrives as a plain
+string, and `$if(show_date)$` fires on any non-empty string. So `show_date: nO` would print a date if
+`frontmatter-filter.lua` were not normalizing it first.
+
+That paragraph used to say pandoc reads YAML 1.2, where `no` is the string `"no"`. It was simply
+wrong about the pandoc this project pins, and nothing broke, because the filter is correct either
+way. `tests/test_yaml_resolution.py` now pins what that pandoc actually does, so a version that
+changes it fails a test instead of quietly making this page wrong again.
 
 Writing your own `date:` beats `show_date` — a date you wrote is the date you meant — so use one or
 the other, not both. Under `make` the stamp is the build machine's day, passed in as `build-date`,
