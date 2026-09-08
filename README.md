@@ -156,6 +156,8 @@ Stencil includes a minimal set of templates for document generation:
 | `docker-compose.yml.j2`        | HTML generation service (Pandoc)                   |
 | `docker-compose-html.yml.j2`   | Services for HTML, PDF, WCAG and PDF/UA checks     |
 | `Dockerfile.browser.j2`        | Shared Chromium image for `pdf` and `check-access` |
+| `browser-package-lock.json.j2` | The npm lockfile that image's `npm ci` installs    |
+| `format-package-lock.json.j2`  | The npm lockfile behind `make format-md`           |
 | `html-template.html.j2`        | Pandoc HTML template for flowing documents         |
 | `slide-template.html.j2`       | Pandoc HTML template for slide decks               |
 | `_page-*.html.j2`              | Head, styling and scripts shared by both           |

@@ -94,12 +94,15 @@ print-to-PDF.
 
 ```bash
 mkdir -p /workspace && cd /workspace
-# copy the BUILT html and html-to-pdf.js here; the script hardcodes file:///workspace/
-# Take the puppeteer and pdf-lib versions from the package's Dockerfile.browser
-# (the `npm install --global` line), so the direct dependencies match `make pdf`.
+# copy the BUILT html, html-to-pdf.js AND browser-package-lock.json here;
+# the script hardcodes file:///workspace/
 export PUPPETEER_SKIP_DOWNLOAD=1
-npm init -y >/dev/null
-npm install --no-audit --no-fund --ignore-scripts puppeteer@<pinned> pdf-lib@<pinned>
+# Install the image's tree, not an approximation of it. The manifest is the
+# single-quoted JSON on the `printf ... > /opt/tools/package.json` line in the
+# package's Dockerfile.browser; the lockfile is generated beside it.
+printf '%s\n' '<the JSON from Dockerfile.browser>' > package.json
+cp -f browser-package-lock.json package-lock.json
+npm ci --no-audit --no-fund --ignore-scripts
 chrome=(/opt/pw-browsers/chromium-*/chrome-linux/chrome)   # a glob does not expand inside an assignment
 test -x "${chrome[0]}"
 export PUPPETEER_EXECUTABLE_PATH="${chrome[0]}"
@@ -107,13 +110,15 @@ node html-to-pdf.js Deck.html Deck.pdf
 ```
 
 `--ignore-scripts` keeps a dependency's install hook from running against the files just copied
-in; nothing in this pair needs one, since Chromium is supplied rather than downloaded. Do not
-substitute floating versions: the pins are what make the result comparable to `make pdf`. They
-are also the limit of the comparison. Only the direct dependencies are pinned, here and in
-`Dockerfile.browser` alike; neither install carries a lockfile, so the transitive tree below
-puppeteer and pdf-lib can resolve differently from one day to the next (`stn-5hv` in stencil's
-tracker). This is a review build with the same direct versions, not a reproduction of the
-image.
+in; nothing here needs one, since Chromium is supplied rather than downloaded. Do not substitute
+`npm install` and a list of names: `npm ci` against the package's own lockfile is what makes the
+JavaScript identical to the image's rather than merely the same two top-level versions, and it
+verifies every tarball against a sha512 on the way in. It installs pa11y as well, which this
+build does not use — that is the cost of installing the image's tree rather than a subset of it.
+
+What is left of the gap is Chromium, which stencil deliberately does not pin (see
+`Dockerfile.browser`'s comment). This is a review build with the image's JavaScript and a
+different browser, not a reproduction of the image.
 
 Success prints the repairs applied. Verify with pdf-lib that `StructTreeRoot` and `Metadata` are
 present and the page geometry is right — letter landscape 792x612pt for decks, portrait for
@@ -146,17 +151,6 @@ artifact.
   files and let the human run git.
 - Roll forward with `git revert` or a follow-up fix commit, again from a normal checkout or
   through the connector. Never `git reset --hard`, and never rewrite already-pushed history.
-
-## Known trap: inline code in a table header
-
-Inline `code` inside a `thead` cell fails WCAG AA in the light theme. `--code-inline` (`#c7254e`) on
-`--surface-accent-on` (`#d2def2`) measures 4.07:1. That colour clears 4.5:1 on every other surface
-in the theme — white 5.52, even rows 5.15, caption 4.73, code blocks 5.19 — so the header fill is
-the only place it fails. The dark pairing (`#ff9ab0` on `#2f4680`) passes at 4.55:1, a 0.05 margin.
-
-Until the palette changes, **do not put backticks in a markdown table header row**; put the literal
-values in the body cells instead. The upstream fix is `--code-inline: #b01f45` (4.95:1 on the header,
-6.71:1 on white, indistinguishable to the eye) or a scoped `th code {}` rule; tracked as `stn-1y7`.
 
 ## Course content from an adopted textbook
 

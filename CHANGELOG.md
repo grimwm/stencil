@@ -9,7 +9,7 @@ and the closed epics in `.beads/issues.jsonl` are the readable index.
 How the version gets bumped is written down in
 [AGENTS.md](AGENTS.md#cutting-a-release), not here.
 
-## 0.32.0
+## 0.35.0
 
 - **Every generated page now carries a self-download button, on by default.** A
   document gets it beside the theme control; a deck gets it in the toolbar,
@@ -82,6 +82,274 @@ How the version gets bumped is written down in
   reason. A string capture defers that work to the moment it is actually
   needed — assigned back into `outerHTML` on click — rather than paying it on
   every page load.
+
+## 0.34.0
+
+- **An exact version pinned three packages and left 44 floating.** The browser
+  image ran `npm install --global --prefix /opt/tools pa11y@10.0.0 pdf-lib@1.17.1 puppeteer@25.10.0`, which fixes those three and the exact
+  puppeteer-core puppeteer declares. Everything below that — 44 of the 47
+  packages in the resolved tree — still resolved within a range at build time,
+  so a rebuild months apart installed different code, and nothing checked the
+  bytes of any of it. `stn-5hv`, raised by the adversarial review of `stn-ba9`.
+
+  Both installs now go through a committed lockfile and `npm ci`:
+  `stencil/assets/browser-package-lock.json` and
+  `stencil/assets/format-package-lock.json`, resolved once by a maintainer
+  running `python3 scripts/vendor_npm_locks.py` and shipped into every
+  generated package. `stencil gen` still touches no network — this is the
+  shape `stencil/assets.py` and `scripts/vendor_page_assets.py` already used
+  for the page assets, applied to npm.
+
+  The guarantee is a hash rather than a version number. Every one of the 47
+  entries carries a sha512 `integrity`, and npm verifies each tarball against
+  it: flipping one character of one hash fails the build with `npm error code EINTEGRITY`, measured rather than assumed.
+
+- **`npm ci` has no `--global`, so /opt/tools stopped being a prefix.**
+  `--global --prefix /opt/tools` put modules under `lib/node_modules` and
+  binaries under `bin`. The install is now an ordinary local one rooted at
+  `/opt/tools`, so `NODE_PATH` moves to `/opt/tools/node_modules` and `PATH` to
+  the `node_modules/.bin` symlinks npm writes itself — no hand-made symlink for
+  `pa11y` any more. Both paths are rendered from `stencil/pipeline.py`, and
+  `tests/test_compose_check_access.py` runs the real service through
+  `docker compose`, so a rewiring that leaves `pa11y` or `require("puppeteer")`
+  unresolvable fails there rather than in somebody's handout.
+
+- **A generated package gains two files**, `browser-package-lock.json` and
+  `format-package-lock.json`. `stencil clean` removes them and the managed
+  `.gitignore` section covers them. The `package.json` each install needs is
+  *derived* from the pins and written inline by the Dockerfile and the
+  format-md entrypoint, so there is still exactly one place a version is
+  written down, and a consumer's package directory gains two files rather than
+  four.
+
+  The browser lockfile travels with `Dockerfile.browser`, for any package that
+  renders markdown — the two must arrive together, because the Dockerfile
+  `COPY`s it. The format-md one is emitted for **every** package, with no
+  predicate, and that is the interesting half. Three predicates were tried and
+  each left a case behind: `has_pages` missed a package whose config-level
+  `templates:` produces a compose file anyway; the compose file's own name
+  missed a renamed `dest:`; adding the conventional spellings still missed a
+  consumer whose composition template has a name of its own and pulls the
+  partial in by include — which nothing outside a template body can see. The
+  file is 1.3 KB and `stencil clean` removes it, so shipping it to a package
+  that does not use it costs a small unused file, against a `make format-md`
+  that fails for a consumer who did nothing wrong. The service also checks for
+  it now and says what to run, rather than dying on `cp: can't stat`.
+
+- **Both `npm ci` invocations pass `--ignore-scripts`.** A lifecycle script
+  runs as root at image build time, with network, before any test looks — and
+  a transitive package that *gains* a `postinstall` arrives in a 48-entry JSON
+  diff as one added boolean. It costs nothing here: measured on npm 11.19.0,
+  `--ignore-scripts` still installs all 47 packages and still leaves `pa11y`
+  and `puppeteer` in `node_modules/.bin`, because bin symlinks are the
+  linker's work rather than a script's. The only install script in either tree
+  is puppeteer's, whose job `PUPPETEER_SKIP_DOWNLOAD` already cancels, and
+  `tests/test_pins.py` freezes that set so a new one is a failing test.
+
+- **`stencil clean` and the managed `.gitignore` now read the same list
+  `stencil gen` renders from.** They were two hand-maintained spellings of one
+  list, and the comment recording what that cost — a `package_sources`-only
+  doc package with five generated files nothing could remove — was sitting
+  directly above the second one while this change added entries to both. The
+  guard that outlives the refactor is a property test: generate a package,
+  look at what is on disk, and require `get_generated_files` to name every
+  file. It catches the next injected file, whoever adds it.
+
+- **`tests/test_compose_format_md.py` runs the format-md service** rather than
+  reading it, the way `tests/test_compose_check_access.py` does for
+  check-access. Its entrypoint went from one `npm install` that needed nothing
+  on disk to a `printf`, a `cp` and an `npm ci` whose behaviour depends on the
+  mount, the working directory and the YAML block scalar — none of which a
+  text assertion can see. One case formats a real file; the other plants a
+  `package.json` in the workspace naming a dependency that does not exist, and
+  proves `npm ci` never read it.
+
+- **A bumped pin with a stale lockfile is now a loud failure.**
+  `tests/test_pins.py` fails when the lockfile's root dependencies stop
+  equalling the pin maps, when an entry carries no integrity hash, when one
+  resolves from anywhere but registry.npmjs.org, and when the browser tree
+  grows a second puppeteer — that last one used to require building an image
+  and is now a fact about a file. `npm ci` refuses independently, with
+  `npm error code EUSAGE`, `Invalid: lock file's pdf-lib@1.17.1 does not satisfy pdf-lib@1.17.0`.
+
+  The container tier goes further: it compares *every* installed package
+  against the lockfile entry for its path, in both directions. Three pinned
+  names being right was never the claim in question.
+
+- **Breaking for a consumer that copied `docker-compose-html.yml.j2` rather
+  than including it.** The partial's context interface changed:
+  `format_npm_specs` is gone, replaced by `format_manifest`,
+  `format_lockfile_name` and `format_tools_dir`. A composition template that
+  includes the partial gets the new service and needs no edit.
+
+  **A copy is not a supported configuration and must be migrated.** It keeps
+  rendering, and what it renders is a service that installs prettier by name —
+  no lockfile, no integrity check, the whole tree below those two versions
+  re-resolved on every run. That is precisely the state this release exists to
+  end, and nothing in stencil can detect it, because a copy reads none of
+  stencil's context keys and `StrictUndefined` therefore has nothing to
+  complain about. Replace the copy with an include, or port the three keys and
+  the `npm ci` invocation into it;
+  `tests/test_template_contract.py` records the set a composition must
+  provide.
+
+- Filed rather than folded in: `stn-8vi`. `NODE_IMAGE`, `PANDOC_IMAGE` and
+  `VERAPDF_IMAGE` are pinned by tag, and a registry tag is mutable. That is the
+  same class of gap one layer further out, it affects all three images, and
+  pinning one of them by digest while the other two float would make the
+  convention inconsistent for whoever bumps the next one.
+
+- Also filed rather than fixed: `stn-86y`. The image resolves its tools
+  through `NODE_PATH`, which is Node's *last-resort* lookup — so a
+  `node_modules` directory in the consumer's own package folder outranks it.
+  Measured in the built image: a decoy resolves as `0.0.0-decoy` from
+  `/workspace/node_modules`. That predates this release and is not made worse
+  by it (`NODE_PATH` was already the mechanism; only its value moved), but it
+  is the one path by which something other than the locked tree renders a
+  handout, so it is written down with the measurement rather than left to be
+  rediscovered.
+
+## 0.33.0
+
+Takes 0.33.0 rather than 0.32.0, which was in flight on another branch while
+this was written and has since landed as the entry below. The run of versions
+is contiguous; nothing is missing.
+
+- **The other four painted gaps, measured rather than assumed.** 0.13.0 fixed
+  the document and deck headers, where a whitespace-only text node between two
+  inline boxes never reached the PDF text layer and "Author Ada Lovelace"
+  printed as "AuthorAda Lovelace". Four more places paint a gap with nothing
+  behind it — `.side-by-side`, deck `.columns`, the `header.doc-title` grid,
+  and the facts line — and none of them had ever been looked at in a PDF.
+  `stn-avj` asked for a measurement first, not a fix.
+
+  All four are fine, and the reason is worth writing down because it is *not*
+  the reason the header is fine. None of them has a character behind the gap:
+  pandoc emits a whitespace-only text node between the boxes and flex and grid
+  both discard it, which is exactly the 0.13.0 shape. What saves them is that
+  these are **block** boxes. Chromium emits each side as its own text object
+  with its own `Tm` origin, and an extractor recovers the boundary from the
+  advance — the same way it does between any two paragraphs or table cells in
+  any PDF.
+
+- **The threshold that recovery depends on, since "the extractor handles it"
+  is not a measurement.** Built by hand: two Helvetica runs on one baseline,
+  no space glyph, only the second run's x varying. Both extractors jam at a
+  zero gap, and both break the word above a fraction of an em that does not
+  depend on point size — roughly **0.15 em** for pypdf and **0.12 em** for
+  poppler's `pdftotext`, holding at 9, 11, 14 and 24pt.
+
+  Against that, measured in the real print PDFs: `header.doc-title` 1.06 em
+  (~7×), `.columns` 2.8 em (~18×), `.side-by-side` 3.5 em (~23×). The header
+  is the narrow one, which is why it is the one that now has a guard that can
+  fail rather than an assertion that cannot.
+
+  In em rather than px on purpose. `@media print` rescales the root font to
+  9.78pt, so a gap quoted in screen pixels — as an earlier draft of this entry
+  did — describes a different document than the one being extracted.
+
+- **The header guard could not have failed, and now can.** The assertion in
+  `tests/test_pdf.py` since 0.13.0 said the identity and context columns must
+  not run together, with a comment conceding it had never been checked whether
+  an arrangement exists in which they could. There is one, and finding it
+  needs three things at once: no byline, no subtitle, and a single-line title
+  nearly filling the identity track. Anything else in the identity column is
+  emitted between the two, and pypdf breaks on the y change before it ever
+  compares x. The columns still extract apart in that arrangement.
+
+- **The facts line's accessibility boundary is now enforced, not just
+  described.** `.doc-facts` being a flex container blockifies its `<span>`
+  children, and that — rather than any character — is what separates "Sep 05"
+  from the next fact's label in the accessibility tree, since the separators
+  are `aria-hidden` and contribute no whitespace. The stylesheet had said so
+  in a comment since 0.11.0 and nothing checked it.
+
+  The new test reads the computed display of the `.doc-fact` elements
+  themselves rather than of `.doc-facts`'s children, so both ways of losing
+  the boundary are caught: `display: block` on the container, which satisfies
+  a stylesheet grep while leaving the spans inline, and grouping facts in a
+  wrapper div, which would satisfy a check on the container's children. A
+  second test pins the separators' `aria-hidden`, which is the premise the
+  whole argument rests on. Both verified by mutation.
+
+  Nothing else would have caught either: the PDF text layer stays correct
+  throughout, because the separators carry real characters, and neither pa11y
+  engine behind `check-access` has a rule for adjacent text with no separating
+  whitespace.
+
+  Not fixed, deliberately: putting a character inside each flex item would
+  shift the `space-between` distribution, which is a rendered change to every
+  handout's header in exchange for a boundary that already exists.
+
+- **What the sweeps do and do not catch, established by mutation.** Setting
+  `.columns { gap: 0 }` does not fail them — and that is evidence the mutation
+  failed, not that the tests are insensitive. Zeroing the CSS gap leaves the
+  left column's line-breaking slack in place, so the glyph-to-glyph distance
+  never approaches zero. A narrowing control has to walk the last glyph to the
+  track edge, which the fill sweeps do and a gap edit does not. Turning
+  `.columns` into inline flow *does* fail, through the non-vacuity check that
+  requires at least one variant to land on a single extracted line.
+
+- **Two extractors, two models, and the stylesheets no longer overstate one.**
+  pypdf follows the content stream and breaks on any y change; poppler does
+  geometric column detection. On the deck columns poppler emits a paragraph
+  break where pypdf emits a space — both correct, neither a jam. The header is
+  where they genuinely disagree: poppler reorders it and puts the context after
+  the body text. So the "far apart in the content stream" argument that stood
+  in `_page-style.css.j2` was pypdf-specific, and the comment now says what
+  both models actually rely on, which is the gap width.
+
+## 0.32.0
+
+- **Inline code in a table header failed WCAG AA, in the theme most handouts
+  are printed from.** `--code-inline` was `#c7254e`, which measures 5.52:1 on
+  white and 4.07:1 on `--surface-accent-on` `#d2def2` — the `thead` fill, the
+  darkest surface in the light palette. A backticked column name in a markdown
+  table was therefore below the 4.5:1 threshold while the identical colour
+  passed everywhere else it appeared.
+
+  Raised to `#b01f45`: 4.95:1 on the header fill, 6.71:1 on white, and
+  indistinguishable from the old colour at reading size. The alternative was a
+  scoped `th code {}` rule, and it was rejected — it makes the same inline code
+  two different reds depending on which row it lands in, needs a dark-mode
+  counterpart of its own, and leaves the *next* dark surface someone adds
+  failing again. The palette had one colour that was too light; the fix is to
+  stop it being too light, at the token.
+
+  It also lifts printed table headers from 4.51:1 to 5.48:1. Half a hundredth
+  above the threshold is not a margin, and print is the one output a reader
+  cannot re-theme.
+
+- **The dark pairing was measured and left alone.** `#ff9ab0` on `#2f4680` is
+  4.55:1 — passing, on 0.05. Moving it to gain headroom would have been a
+  change made without a failure to justify it, and the token's comment now
+  records the number so the next person does not have to re-derive it.
+
+- **Why four releases of `make check-access` never saw this.** pa11y measures
+  the pairings a page actually renders, and no fixture had a table at all — so
+  the checker was passing over a document that could not produce the failure.
+  `tests/fixtures/document.md` now carries a table with backticks in both its
+  header row and its caption, and `tests/test_fixtures.py` fails if it loses
+  them.
+
+  The stronger guard is cheaper: `tests/test_theme.py` now measures
+  `--code-inline` against every fill prose can land on, in both themes and in
+  print, and runs in `pytest -m 'not integration'`. Contrast is arithmetic on
+  two hex values; it should never have needed a browser to find out.
+
+- **A known trap came out of the stencil-tool plugin skill.** The
+  docs-and-decks skill told authors not to put backticks in a table header
+  row. That was a workaround for this bug, the constraint no longer holds, and
+  standing advice that outlives its cause is worse than none.
+
+- Not fixed here, and filed rather than glossed: `stn-7i8`. A deck's title
+  slide is rendered from front matter, and pandoc renders `$title$` as inline
+  markdown, so a backticked title puts inline code on the accent fill. It fails
+  badly on the old colour and the new one alike — 1.78:1 then 1.47:1 against
+  `--deck-accent-from`, and 1.06:1 against `--deck-accent-to`, which is very
+  nearly no contrast at all. Raising the token cannot reach it, because the
+  fill is dark and inline code is ink; it wants a scoped rule inheriting the
+  on-accent colour, which is a different decision from the palette one.
 
 ## 0.31.0
 
@@ -279,6 +547,34 @@ How the version gets bumped is written down in
   can still draw. `stn-uje` proposed subsetting the faces to the glyphs a page
   actually uses, which would take the font payload lower still; that is not in
   this release, and no coverage was removed in its place.
+
+- **The generated compose SERVICE is now run, not read** (`stn-8j4`). The
+  `check-access` fix above put the script in `stencil/pipeline.py` so a test
+  could execute it, and `tests/test_check_access.py` does. That is a weaker
+  claim than it sounds: the script is one line of a service definition, and
+  the bug was in a different line — the argument saying which directory to
+  search, disagreeing with the mount saying where the products are. A test
+  that assembles the mounts itself in Python supplies the correct answer as an
+  argument and then confirms the script uses it.
+
+  `tests/test_compose_check_access.py` runs what `make check-access` runs —
+  `compose build check-access`, then `compose run --rm check-access` — against
+  a real generated package, in both layouts, with the page put in place by the
+  compose `doc` service so the two services have to agree about `/out` rather
+  than being told separately. Nothing in this repository had ever run compose.
+
+  Proven against its own breach four ways, including the shipped error
+  verbatim (`net::ERR_FILE_NOT_FOUND at file:///workspace//out/document.html`).
+  Three of the four are also caught in the fast tier by a string assertion
+  standing in for the behaviour. The fourth is not caught anywhere else:
+  comparing the skip-list against `$f` instead of `$(basename "$f")` points
+  pa11y at stencil's own pandoc templates, and the 298 fast-tier tests and all
+  seven script-level cases stay green — because a skip-list is only wrong in a
+  directory that has something to skip, and the script-level tests use a
+  scrubbed one holding a single copied page.
+
+  Generated packages are unchanged: this adds `pipeline.compose_command()`,
+  `pipeline.compose()` and a test file, and rewrites no template.
 
 - 0.29.0 through 0.30.2 shipped without entries here. Git is the record of them.
 

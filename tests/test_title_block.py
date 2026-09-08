@@ -92,7 +92,16 @@ def print_block(css) -> str:
     """
     # `css` starts past Bootstrap, which ships an @media print block of its
     # own, so the first one here is stencil's.
-    start = css.index("@media print")
+    #
+    # Matched as the at-rule -- name, whitespace, opening brace -- rather than
+    # as the bare string. A plain `index("@media print")` also matches the
+    # phrase inside a COMMENT, and the stylesheet's comments discuss the print
+    # block by name; one added above it silently reassigned `start` to prose,
+    # after which `rule(print_block, "html")` found no html rule and two tests
+    # failed pointing at the root font size rather than at the search.
+    match = re.search(r"@media\s+print\s*\{", css)
+    assert match, "no @media print block in the stylesheet"
+    start = match.start()
     depth = 0
     for i in range(css.index("{", start), len(css)):
         if css[i] == "{":

@@ -11,10 +11,17 @@ ENV PUPPETEER_SKIP_DOWNLOAD=true
 ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium-browser
 ENV NPM_CONFIG_UPDATE_NOTIFIER=false
 
-# Resolve `require("puppeteer")` and the pa11y binary from the shared prefix
-# below rather than from a node_modules tree inside the mounted workspace.
-ENV NODE_PATH=/opt/tools/lib/node_modules
-ENV PATH=/opt/tools/bin:$PATH
+# Resolve `require("puppeteer")` and the pa11y binary from the tree installed
+# below rather than from a node_modules directory inside the mounted workspace.
+#
+# A LOCAL INSTALL, WHICH IS WHY THESE TWO PATHS LOOK LIKE THIS. `npm ci` has no
+# `--global`, so /opt/tools is no longer a global prefix and the layout it used
+# -- lib/node_modules for modules, bin for binaries -- is gone with it. Modules
+# are now at node_modules and binaries at the node_modules/.bin symlinks npm
+# writes itself, so neither line needs a hand-made symlink and both come from
+# stencil/pipeline.py rather than being spelled out here.
+ENV NODE_PATH={{ browser_node_modules }}
+ENV PATH={{ browser_node_modules }}/.bin:$PATH
 
 # CHROMIUM IS DELIBERATELY NOT PINNED, and the reasoning is worth keeping here
 # rather than in a commit message, because the obvious "fix" makes things worse.
@@ -64,11 +71,44 @@ RUN apk add --no-cache chromium font-noto ttf-dejavu
 # pdf-lib is used after printing, to add the role map and XMP metadata that
 # PDF/UA-1 requires and Chromium does not write. See html-to-pdf.js.
 #
-# Exact versions, from stencil/pipeline.py, where the reasoning and the dated
-# measurement they were taken from live. Unpinned, this line decided which
-# Chromium driver honoured `tagged: true` and which engine `make check-access`
-# ran, and a rebuild could change both without appearing in any diff (stn-s5b).
-RUN npm install --global --prefix /opt/tools {{ browser_npm_specs | join(' ') }}
+# INSTALLED FROM A LOCKFILE, NOT FROM A LIST OF NAMES. Installing
+# `pa11y pdf-lib puppeteer` at exact versions fixed those three and the exact
+# puppeteer-core puppeteer declares -- and left every one of the other packages
+# in the resolved tree to a range, re-resolved on each build, verified by
+# nothing (stn-5hv). The lockfile beside this file pins all of them by sha512,
+# and `npm ci` checks each tarball against its hash: a rebuild months from now
+# installs the same bytes or fails.
+#
+# No version is named in this comment on purpose. They live in
+# stencil/pipeline.py and are rendered in below; a number repeated in prose goes
+# stale the first time a pin moves, and says nothing while it does.
+#
+# The manifest is written here rather than shipped because it is DERIVED from
+# the pins in stencil/pipeline.py -- one place where a version is written down,
+# and one more file a consumer would otherwise have in their package directory
+# with nothing to say about it. `npm ci` needs both and refuses when they
+# disagree, which is what makes a bumped pin with a stale lockfile a loud
+# failure instead of a quiet one.
+RUN mkdir -p {{ browser_tools_dir }} \
+ && printf '%s\n' '{{ browser_manifest }}' > {{ browser_tools_dir }}/package.json
+COPY {{ browser_lockfile_name }} {{ browser_tools_dir }}/package-lock.json
+#
+# --ignore-scripts, and it costs nothing here. A lifecycle script runs as root
+# during the build, with network, before any test in this repository gets to
+# look -- and a transitive package that GAINS a postinstall arrives as one
+# added boolean in a 48-entry JSON diff. The only install script in this tree
+# is puppeteer's, whose whole job is downloading Chromium, and
+# PUPPETEER_SKIP_DOWNLOAD above already says not to. Measured on npm 11.19.0:
+# `npm ci --ignore-scripts` adds all 47 packages and leaves node_modules/.bin
+# holding pa11y and puppeteer either way, because bin symlinks are the
+# linker's work rather than a script's. tests/test_pins.py freezes the set of
+# packages that declare one, so a new arrival is a red test rather than a
+# quiet execution.
+#
+# `cd` rather than `--prefix`, so this does not depend on which directory the
+# build happens to be in. It is `/` today, and a WORKDIR added above this line
+# would silently change what npm reads.
+RUN cd {{ browser_tools_dir }} && npm ci --ignore-scripts --no-audit --no-fund
 
 # One pa11y config per theme, each driving the control before measuring.
 # chromeLaunchConfig is in both: this image runs as root -- it sets no USER and

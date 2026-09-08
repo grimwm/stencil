@@ -5,6 +5,14 @@ on:
     branches: [main]
   pull_request:
 
+# This repository is public and `pull_request` builds a fork's code, so the
+# token every job gets is the one a malicious PR would be handed. Nothing here
+# writes: the jobs run pytest and pre-commit and report through the checks API.
+# Declared at the top level so a job added later inherits read-only rather than
+# whatever the repository default happens to be that year.
+permissions:
+  contents: read
+
 # A force-push should not leave the previous run burning a runner.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -63,6 +71,24 @@ jobs:
       - name: Pull the browser image's base
         run: |
           docker pull "$(python -c 'from stencil import pipeline; print(pipeline.NODE_IMAGE)')"
+
+      # The container tier SKIPS what it cannot find, which is right for a
+      # contributor and wrong here: a runner without the compose plugin would
+      # quietly stop running the check-access service tests and report green.
+      # The same failure mode as a pre-push hook gated on `command -v`.
+      - name: Fail if the runner has no compose implementation
+        run: |
+          python - <<'EOF'
+          import sys
+          from stencil import pipeline
+          command = pipeline.compose_command()
+          if command is None:
+              sys.exit(
+                  "no compose implementation on this runner; the compose "
+                  "service tests would skip and CI would report green"
+              )
+          print("compose:", " ".join(command))
+          EOF
 
       - run: pytest -v
 
