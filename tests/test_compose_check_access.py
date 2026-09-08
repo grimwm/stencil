@@ -208,19 +208,32 @@ def compose(compose_impl):
         # The image is left alone deliberately. It is minutes of Chromium and
         # npm, its layers are the cache the next run reads, and the repository
         # already leaves BROWSER_IMAGE_TAG in place for the same reason.
-        removed = pipeline.compose(
-            ["down", "--remove-orphans", "--volumes"],
-            workdir=package,
-            project=project,
-            command=compose_impl,
-            timeout=600,
-        )
-        # WARN RATHER THAN RAISE. A teardown that raises from a finalizer
-        # replaces the assertion error the test was reporting, so the run says
-        # "could not remove a network" about a failure that was actually the
-        # service being broken. But a teardown that says nothing leaks a
-        # compose network per run and nobody finds out until docker refuses to
-        # make another one.
+        # WARN RATHER THAN RAISE, and warn rather than propagate. A teardown
+        # that raises from a finalizer replaces the assertion error the test
+        # was reporting, so the run says "could not remove a network" about a
+        # failure that was actually the service being broken. But a teardown
+        # that says nothing leaks a compose network per run, and nobody finds
+        # out until docker refuses to make another one.
+        #
+        # The timeout is the case that made this a try. `compose down` on a
+        # wedged daemon raises TimeoutExpired rather than returning non-zero,
+        # and an exception here would abandon every project after this one in
+        # the loop -- turning one leaked network into all of them.
+        try:
+            removed = pipeline.compose(
+                ["down", "--remove-orphans", "--volumes"],
+                workdir=package,
+                project=project,
+                command=compose_impl,
+                timeout=600,
+            )
+        except (OSError, subprocess.SubprocessError) as error:
+            warnings.warn(
+                f"compose down left project {project} behind: {error!r}",
+                stacklevel=1,
+            )
+            continue
+
         if removed.returncode != 0:
             warnings.warn(
                 f"compose down left project {project} behind "
