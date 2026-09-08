@@ -315,10 +315,46 @@ def test_every_file_a_package_holds_is_one_clean_can_see(generate_package, packa
     generated = generate_package(config)
 
     listed = {entry.removeprefix("demo/") for entry in get_generated_files(config)}
-    on_disk = {path.name for path in generated.iterdir()}
+    # rglob, and relative paths. A template may name a nested destination --
+    # `dest: .vscode/settings.json` is in the config's own documentation, and
+    # render_templates creates the parent directories for it -- so a top-level
+    # iterdir() would compare the DIRECTORY against a list holding the file
+    # inside it, and pass while the file it was meant to catch went unlisted.
+    on_disk = {
+        path.relative_to(generated).as_posix()
+        for path in generated.rglob("*")
+        if path.is_file()
+    }
 
     assert on_disk - listed == set(), (
         "stencil wrote files get_generated_files does not name, so `stencil "
         "clean` leaves them behind and the managed .gitignore section does not "
         "cover them"
     )
+
+
+def test_a_nested_destination_is_named_by_its_path(generate_package):
+    """The case the check above is walked recursively for.
+
+    `dest:` may carry a directory -- `.vscode/settings.json` is the example in
+    the config's own documentation, and render_templates creates the parent for
+    it. A comparison over basenames would ask whether `settings.json` is
+    listed while `get_generated_files` had named `.vscode/settings.json`, and a
+    comparison that included directories would ask about `.vscode` itself.
+    """
+    config = {
+        "templates": [{"src": "Makefile.j2", "dest": "build/Makefile"}],
+        "packages": {"demo": {"name": "Demo", "package_type": "none"}},
+    }
+    generated = generate_package(config)
+
+    assert (generated / "build" / "Makefile").is_file()
+    assert "demo/build/Makefile" in get_generated_files(config)
+
+    listed = {entry.removeprefix("demo/") for entry in get_generated_files(config)}
+    on_disk = {
+        path.relative_to(generated).as_posix()
+        for path in generated.rglob("*")
+        if path.is_file()
+    }
+    assert on_disk - listed == set()

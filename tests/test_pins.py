@@ -74,6 +74,15 @@ LOCKED = [
     ),
 ]
 
+# The same two, for the assertions that are about the lockfile's own shape and
+# have no use for the pins it was resolved from. A narrower parametrization
+# rather than three arguments a test ignores: an unused parameter reads as
+# something the test forgot to check.
+LOCKFILES = [
+    pytest.param(pipeline.BROWSER_LOCKFILE, id="browser"),
+    pytest.param(pipeline.FORMAT_LOCKFILE, id="format-md"),
+]
+
 
 def lockfile(name: str) -> dict:
     return json.loads((ASSETS / name).read_text())
@@ -346,6 +355,24 @@ def test_a_package_that_renders_no_markdown_still_gets_the_format_lockfile(
     assert not (package / pipeline.BROWSER_LOCKFILE).exists()
 
 
+def test_a_renamed_compose_file_still_gets_the_format_lockfile(generate_package):
+    """`dest:` is an ordinary thing for a config to set, and `docker-compose.yaml`
+    is an ordinary thing to rename it to. Matching only the destination filename
+    would ship a compose file whose `cp` names a lockfile stencil did not write
+    -- the same failure as keying the lockfile off has_pages, reached by a
+    different route."""
+    package = generate_package(
+        {
+            "templates": [
+                {"src": "docker-compose.yml.j2", "dest": "docker-compose.yaml"}
+            ],
+            "packages": {"demo": {"name": "Demo", "package_type": "none"}},
+        }
+    )
+    assert (package / "docker-compose.yaml").is_file()
+    assert (package / pipeline.FORMAT_LOCKFILE).is_file()
+
+
 def test_a_package_with_no_compose_file_gets_no_format_lockfile(generate_package):
     """The other side of the predicate. A lockfile for a service the package
     does not have is a file `stencil clean` has to know about and nothing
@@ -420,8 +447,8 @@ def test_the_lockfile_agrees_with_the_pins(filename, manifest_name, pins):
         )
 
 
-@pytest.mark.parametrize("filename,manifest_name,pins", LOCKED)
-def test_every_locked_package_carries_an_integrity_hash(filename, manifest_name, pins):
+@pytest.mark.parametrize("filename", LOCKFILES)
+def test_every_locked_package_carries_an_integrity_hash(filename):
     """The mechanism the acceptance names: "verified by integrity hash rather
     than by a version number".
 
@@ -461,8 +488,8 @@ def test_every_locked_package_carries_an_integrity_hash(filename, manifest_name,
 LOCK_FLOOR = {pipeline.BROWSER_LOCKFILE: 40, pipeline.FORMAT_LOCKFILE: 3}
 
 
-@pytest.mark.parametrize("filename,manifest_name,pins", LOCKED)
-def test_the_lockfile_describes_a_whole_tree(filename, manifest_name, pins):
+@pytest.mark.parametrize("filename", LOCKFILES)
+def test_the_lockfile_describes_a_whole_tree(filename):
     """Non-vacuity, and the lockfile format the rest of this file assumes.
 
     Every other assertion here walks `packages`, which is a lockfileVersion 2
@@ -486,10 +513,8 @@ def test_the_lockfile_describes_a_whole_tree(filename, manifest_name, pins):
     )
 
 
-@pytest.mark.parametrize("filename,manifest_name,pins", LOCKED)
-def test_every_locked_package_resolves_to_itself_on_the_public_registry(
-    filename, manifest_name, pins
-):
+@pytest.mark.parametrize("filename", LOCKFILES)
+def test_every_locked_package_resolves_to_itself_on_the_public_registry(filename):
     """A lockfile decides WHERE each tarball is fetched from, and WHICH one,
     and neither is covered by the integrity hash.
 
@@ -536,10 +561,8 @@ INSTALL_SCRIPTS = {
 }
 
 
-@pytest.mark.parametrize("filename,manifest_name,pins", LOCKED)
-def test_the_set_of_packages_with_install_scripts_is_the_frozen_one(
-    filename, manifest_name, pins
-):
+@pytest.mark.parametrize("filename", LOCKFILES)
+def test_the_set_of_packages_with_install_scripts_is_the_frozen_one(filename):
     """See INSTALL_SCRIPTS above. Read the new package before widening this."""
     lock = lockfile(filename)
     declared = {

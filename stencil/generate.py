@@ -815,7 +815,23 @@ SLIDE_PAGE_TEMPLATES = ["slide-template.html.j2", "slide-sections.lua.j2"]
 # lockfile would not be written for that package and the service would fail on
 # `cp: can't stat`. Everything else stencil injects is a markdown-rendering
 # concern; formatting markdown a package merely contains is not.
-COMPOSE_DEST = "docker-compose.yml"
+#
+# MATCHED ON THE SOURCE AS WELL AS THE DESTINATION. A config may rename the
+# output -- `dest: docker-compose.yaml` is ordinary -- and matching only the
+# destination filename would silently stop shipping the lockfile for exactly
+# that package. The source is what stencil can be sure about: it is stencil's
+# own template, and it is the one that includes the partial carrying the
+# format-md service. The destination spellings are there for a consumer whose
+# composition template has its own name and includes the partial.
+#
+# The residual case, stated rather than hidden: a consumer template that both
+# has a name of its own AND writes to something unlike a compose file, while
+# including stencil's partial, gets a service whose lockfile is not generated.
+# Nothing here can see that, because the include is inside the template body.
+COMPOSE_SRC = "docker-compose.yml.j2"
+COMPOSE_DESTS = frozenset(
+    {"docker-compose.yml", "docker-compose.yaml", "compose.yml", "compose.yaml"}
+)
 COMPOSE_TEMPLATES = ["format-package-lock.json.j2"]
 
 
@@ -839,17 +855,21 @@ def when_holds(tdef: dict, context: dict) -> bool:
     return all(context.get(key) for key in when)
 
 
-def emits(template_defs: list, context: dict, dest: str) -> bool:
-    """True when this package's template list produces ``dest``.
+def emits_compose(template_defs: list, context: dict) -> bool:
+    """True when this package renders a docker-compose file.
 
     Honours ``when``, so a consumer who gates their compose file on a feature
     flag does not get a lockfile for a service they did not ask for.
     """
-    return any(
-        tdef.get("dest", template_dest(tdef.get("src", ""))) == dest
-        for tdef in template_defs
-        if when_holds(tdef, context)
-    )
+    for tdef in template_defs:
+        if not when_holds(tdef, context):
+            continue
+        src = tdef.get("src", "")
+        if src == COMPOSE_SRC:
+            return True
+        if tdef.get("dest", template_dest(src)) in COMPOSE_DESTS:
+            return True
+    return False
 
 
 def injected_sources(config_templates: list, context: dict) -> list[str]:
@@ -861,7 +881,7 @@ def injected_sources(config_templates: list, context: dict) -> list[str]:
         sources += SHARED_PAGE_TEMPLATES
         if context.get("has_slides"):
             sources += SLIDE_PAGE_TEMPLATES
-    if emits(config_templates, context, COMPOSE_DEST):
+    if emits_compose(config_templates, context):
         sources += COMPOSE_TEMPLATES
     return sources
 
