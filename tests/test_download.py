@@ -607,26 +607,53 @@ const puppeteer = require("puppeteer");
 const fs = require("fs");
 const path = require("path");
 
+// The suggested filename arrives on Browser.downloadWillBegin and NOWHERE
+// else. Browser.downloadProgress carries {guid, totalBytes, receivedBytes,
+// state} and never the name, so reading event.suggestedFilename off the
+// completed progress event yields undefined -- which surfaces far away, as
+// path.join throwing ERR_INVALID_ARG_TYPE, rather than as anything that
+// mentions downloads. Correlate the two events by guid instead.
 function waitForDownload(client, timeoutMs) {
   return new Promise((resolve, reject) => {
     var settled = false;
-    var timer = setTimeout(function () {
-      if (settled) return;
+    var names = {};
+
+    function onBegin(event) {
+      names[event.guid] = event.suggestedFilename;
+    }
+
+    function finish(fn, arg) {
       settled = true;
-      reject(new Error("timed out waiting for Browser.downloadProgress"));
-    }, timeoutMs);
-    client.on("Browser.downloadProgress", function (event) {
+      clearTimeout(timer);
+      client.off("Browser.downloadWillBegin", onBegin);
+      client.off("Browser.downloadProgress", onProgress);
+      fn(arg);
+    }
+
+    function onProgress(event) {
       if (settled) return;
       if (event.state === "completed") {
-        settled = true;
-        clearTimeout(timer);
-        resolve(event);
+        var suggested = names[event.guid];
+        if (!suggested) {
+          finish(reject, new Error(
+            "download " + event.guid + " completed but no downloadWillBegin " +
+            "carried a suggestedFilename for it"
+          ));
+          return;
+        }
+        finish(resolve, { guid: event.guid, suggestedFilename: suggested });
       } else if (event.state === "canceled") {
-        settled = true;
-        clearTimeout(timer);
-        reject(new Error("download canceled: " + JSON.stringify(event)));
+        finish(reject, new Error("download canceled: " + JSON.stringify(event)));
       }
-    });
+    }
+
+    var timer = setTimeout(function () {
+      if (settled) return;
+      finish(reject, new Error("timed out waiting for Browser.downloadProgress"));
+    }, timeoutMs);
+
+    client.on("Browser.downloadWillBegin", onBegin);
+    client.on("Browser.downloadProgress", onProgress);
   });
 }
 
