@@ -11,9 +11,9 @@ How the version gets bumped is written down in
 
 ## 0.33.0
 
-Takes 0.33.0 rather than 0.32.0: that number is claimed by an in-flight branch
-(`stn-1y7`, inline-code contrast) which had not merged when this was written.
-Nothing is missing between 0.31.0 and here.
+Takes 0.33.0 rather than 0.32.0, which was in flight on another branch while
+this was written and has since landed as the entry below. The run of versions
+is contiguous; nothing is missing.
 
 - **The other four painted gaps, measured rather than assumed.** 0.13.0 fixed
   the document and deck headers, where a whitespace-only text node between two
@@ -98,6 +98,58 @@ Nothing is missing between 0.31.0 and here.
   the body text. So the "far apart in the content stream" argument that stood
   in `_page-style.css.j2` was pypdf-specific, and the comment now says what
   both models actually rely on, which is the gap width.
+
+## 0.32.0
+
+- **Inline code in a table header failed WCAG AA, in the theme most handouts
+  are printed from.** `--code-inline` was `#c7254e`, which measures 5.52:1 on
+  white and 4.07:1 on `--surface-accent-on` `#d2def2` — the `thead` fill, the
+  darkest surface in the light palette. A backticked column name in a markdown
+  table was therefore below the 4.5:1 threshold while the identical colour
+  passed everywhere else it appeared.
+
+  Raised to `#b01f45`: 4.95:1 on the header fill, 6.71:1 on white, and
+  indistinguishable from the old colour at reading size. The alternative was a
+  scoped `th code {}` rule, and it was rejected — it makes the same inline code
+  two different reds depending on which row it lands in, needs a dark-mode
+  counterpart of its own, and leaves the *next* dark surface someone adds
+  failing again. The palette had one colour that was too light; the fix is to
+  stop it being too light, at the token.
+
+  It also lifts printed table headers from 4.51:1 to 5.48:1. Half a hundredth
+  above the threshold is not a margin, and print is the one output a reader
+  cannot re-theme.
+
+- **The dark pairing was measured and left alone.** `#ff9ab0` on `#2f4680` is
+  4.55:1 — passing, on 0.05. Moving it to gain headroom would have been a
+  change made without a failure to justify it, and the token's comment now
+  records the number so the next person does not have to re-derive it.
+
+- **Why four releases of `make check-access` never saw this.** pa11y measures
+  the pairings a page actually renders, and no fixture had a table at all — so
+  the checker was passing over a document that could not produce the failure.
+  `tests/fixtures/document.md` now carries a table with backticks in both its
+  header row and its caption, and `tests/test_fixtures.py` fails if it loses
+  them.
+
+  The stronger guard is cheaper: `tests/test_theme.py` now measures
+  `--code-inline` against every fill prose can land on, in both themes and in
+  print, and runs in `pytest -m 'not integration'`. Contrast is arithmetic on
+  two hex values; it should never have needed a browser to find out.
+
+- **A known trap came out of the stencil-tool plugin skill.** The
+  docs-and-decks skill told authors not to put backticks in a table header
+  row. That was a workaround for this bug, the constraint no longer holds, and
+  standing advice that outlives its cause is worse than none.
+
+- Not fixed here, and filed rather than glossed: `stn-7i8`. A deck's title
+  slide is rendered from front matter, and pandoc renders `$title$` as inline
+  markdown, so a backticked title puts inline code on the accent fill. It fails
+  badly on the old colour and the new one alike — 1.78:1 then 1.47:1 against
+  `--deck-accent-from`, and 1.06:1 against `--deck-accent-to`, which is very
+  nearly no contrast at all. Raising the token cannot reach it, because the
+  fill is dark and inline code is ink; it wants a scoped rule inheriting the
+  on-accent colour, which is a different decision from the palette one.
 
 ## 0.31.0
 

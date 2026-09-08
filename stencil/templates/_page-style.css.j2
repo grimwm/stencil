@@ -65,7 +65,16 @@
       --card-border: #c8b48c;
 
       /* Code */
-      --code-inline: #c7254e;
+      /* Inline code is the one text colour that is not measured against
+         --surface, because it lands on every surface a table has: a thead
+         fill, a caption, a striped row. #c7254e cleared 4.5:1 on all of them
+         except the darkest, --surface-accent-on, where it measured 4.07:1 --
+         so a backticked column name in a table header failed AA and nothing
+         but `make check-access` could see it. Raised until the WORST pairing
+         passes, which is what tests/test_theme.py now asserts: 4.95:1 on the
+         header fill, 6.71:1 on white. It also lifts --print-th-bg from 4.51:1
+         to 5.48:1, and that 0.01 of margin was never a margin. */
+      --code-inline: #b01f45;
       --hl-builtin: #c85200;
       --hl-string: #0550ae;
 
@@ -859,6 +868,10 @@
         --card-bg: #232016;
         --card-border: #5c5031;
 
+        /* Left alone when the light value was raised: its worst pairing is
+           the same header fill, --surface-accent-on #2f4680, and it measures
+           4.55:1 there -- passing, on 0.05 of margin. Anything moved here
+           moves that number, so measure before touching it. */
         --code-inline: #ff9ab0;
         --hl-builtin: #ffa657;
         --hl-string: #a5d6ff;
