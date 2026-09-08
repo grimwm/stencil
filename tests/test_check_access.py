@@ -78,6 +78,13 @@ def _with_show_download_false(text: str) -> str:
     """document.md/deck.md's frontmatter plus an explicit `show_download:
     false`, so the no-download pages differ from the ones in PAGES only in
     the control's presence -- same content, same images, same citations."""
+    # The first "---\n" has to be the front-matter opener. It is, for both
+    # fixtures -- but a fixture that ever loses its front matter would get the
+    # key spliced into a horizontal rule instead, and the page would render
+    # fine while silently testing the wrong thing.
+    assert text.startswith("---\n"), (
+        f"expected front matter at the top of the fixture, got {text[:40]!r}"
+    )
     return text.replace("---\n", "---\nshow_download: false\n", 1)
 
 

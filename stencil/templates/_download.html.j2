@@ -78,6 +78,7 @@
        turns into a failed build for every consumer, and beats a button that
        would go on to write a corrupt file. */
     var download = null;
+    var PRISTINE = 'data-stencil-pristine';
 
     try {
       var containerEl = document.querySelector('.container');
@@ -87,18 +88,62 @@
         for (var i = 0; i < liveBodyAttrs.length; i++) {
           bodyAttrs.push([liveBodyAttrs[i].name, liveBodyAttrs[i].value]);
         }
+        /* Captured BEFORE the markers below are stamped, so no marker
+           lands inside the string that gets restored on click.
+
+           A STRING, not a detached clone. Chrome live-loads <img> in a
+           detached tree, so cloning an image-heavy container would decode
+           every base64 image a second time. */
+        var containerHtml = containerEl.outerHTML;
+
+        /* MARK what pandoc wrote, rather than counting it or naming its
+           classes. Both of the obvious alternatives were tried and both are
+           wrong:
+
+           - A child COUNT for <head>, reverted by trimming the tail, assumes
+             every later mutation appends. It does not. The vendored mermaid
+             bundle prepends its cytoscape stylesheet --
+             `a.insertBefore(h, a.children[0])` -- so trimming the tail
+             removes the wrong node. Today that node happens to be the
+             whitespace before </head> and the damage is invisible; on a
+             consumer whose head ends `</style></head>` it is the page's
+             entire inlined stylesheet, and the downloaded file opens
+             unstyled with no exception and nothing failing.
+           - A CLASS whitelist for <body> ties the revert to this
+             repository's own markup. AGENTS.md documents composition
+             templates as a consumer interface, so a consumer's own wrapper
+             would be deleted from every downloaded copy.
+
+           A marker survives cloneNode, does not care in what order anything
+           arrives, and is stripped from the clone before it is serialized.
+           Scripts are the exception, because the page's own trailing script
+           tags are not in the DOM yet at this point -- that is the same fact
+           that rules out a child count for <body>. */
+        var i;
+        var headKids = document.head.children;
+        for (i = 0; i < headKids.length; i++) {
+          headKids[i].setAttribute(PRISTINE, '');
+        }
+        var bodyKids = document.body.children;
+        for (i = 0; i < bodyKids.length; i++) {
+          bodyKids[i].setAttribute(PRISTINE, '');
+        }
+
+        /* Every attribute on <html> EXCEPT the two the head bootstrap in
+           _page-head.html.j2 has already set by now. Snapshotting those two
+           as well would freeze the reader's theme into the download, which
+           is the thing being reverted. */
+        var rootAttrs = [];
+        var liveRootAttrs = document.documentElement.attributes;
+        for (i = 0; i < liveRootAttrs.length; i++) {
+          var rootName = liveRootAttrs[i].name;
+          if (rootName === 'data-theme' || rootName === 'data-theme-pref') continue;
+          rootAttrs.push([rootName, liveRootAttrs[i].value]);
+        }
+
         download = {
-          /* A STRING, not a detached clone. Chrome live-loads <img> in a
-             detached tree, so cloning an image-heavy container would decode
-             every base64 image a second time. */
-          containerHtml: containerEl.outerHTML,
-          /* An integer, not the head's markup, which is megabytes of inlined
-             fonts and CSS. Every head mutation in play between now and a
-             click is an append -- only cytoscape's stylesheet injection, and
-             only for cytoscape-backed diagrams -- so truncating the clone's
-             head back to this count reverts all of them for free. */
-          headCount: document.head.childNodes.length,
-          rootClass: document.documentElement.getAttribute('class'),
+          containerHtml: containerHtml,
+          rootAttrs: rootAttrs,
           bodyAttrs: bodyAttrs,
         };
       }
@@ -110,6 +155,30 @@
        downloaded blob's own address (none -- it is a blob: URL), derived
        instead from the page's own location so "deck.html" downloads as
        "deck.html" rather than a generated blob id. */
+    function byteLength(text) {
+      try {
+        return new TextEncoder().encode(text).length;
+      } catch (error) {
+        /* No TextEncoder is not a case any browser this ships to hits, and
+           nothing here may throw. Characters are the conservative guess:
+           never fewer than the byte count would allow. */
+        return text.length;
+      }
+    }
+
+    /* Trim to a byte budget without splitting a surrogate pair. Iterating
+       code points rather than UTF-16 units is what keeps an emoji whole. */
+    function truncateToBytes(text, limit) {
+      if (byteLength(text) <= limit) return text;
+      var chars = typeof Array.from === 'function' ? Array.from(text) : text.split('');
+      var out = '';
+      for (var i = 0; i < chars.length; i++) {
+        if (byteLength(out + chars[i]) > limit) break;
+        out += chars[i];
+      }
+      return out;
+    }
+
     function downloadFilename() {
       var pathname = location.pathname;
       try {
@@ -156,16 +225,39 @@
          the actual end of the string, which is the only place a regex
          end-anchor would normally go -- and an end-anchor is the one thing
          off limits in a file with no dollar sign. */
+      /* Split any extension the name already carries off the stem rather
+         than leaving it attached. Capping a name that ALREADY ends .html
+         eats that extension just as surely as capping one this function
+         appended -- the suffix has to be out of the way before the stem is
+         trimmed, either way. Slicing it off rather than re-spelling it also
+         keeps the author's own case, so a .HTML stays .HTML. */
       var lower = cleaned.toLowerCase();
-      if (lower.slice(-5) !== '.html' && lower.slice(-4) !== '.htm') {
-        cleaned = cleaned + '.html';
+      var suffix = '.html';
+      if (lower.slice(-5) === '.html') {
+        suffix = cleaned.slice(-5);
+        cleaned = cleaned.slice(0, -5);
+      } else if (lower.slice(-4) === '.htm') {
+        suffix = cleaned.slice(-4);
+        cleaned = cleaned.slice(0, -4);
       }
 
-      /* Measured against real Chrome: a name over roughly 255 bytes makes
-         the download get silently canceled, so the click appears to do
-         nothing and nothing anywhere reports an error. 200 characters
-         leaves headroom under that without needing to count bytes. */
-      return cleaned.slice(0, 200);
+      /* Measured against real Chrome: a name over roughly 255 BYTES makes
+         the download get silently canceled -- the click appears to do
+         nothing and nothing anywhere reports an error. 200 bytes leaves
+         headroom under that.
+
+         The cap goes on the STEM, before the suffix is appended. Capping
+         the finished name instead truncates the extension it just added: a
+         210-character path yields a 200-character name ending in no
+         extension at all, which does not open in a browser on a double
+         click and gives the reader nothing to go on. Measured, deterministic
+         and ASCII-only -- it needs nothing more exotic than a long filename.
+
+         Bytes rather than characters, and trimmed on a code point boundary,
+         because 90 CJK characters is 275 UTF-8 bytes -- already past the
+         threshold this cap exists to stay under -- and a character-wise
+         slice can leave a lone surrogate at the end. */
+      return truncateToBytes(cleaned, 200 - byteLength(suffix)) + suffix;
     }
 
     /* The click handler. Nothing in here may throw -- html-to-pdf.js treats
@@ -179,29 +271,27 @@
            anchor into the copy. */
         var clone = document.documentElement.cloneNode(true);
 
-        /* The head bootstrap script sets exactly these two attributes; drop
-           them so a downloaded copy opens with no theme frozen in. */
-        clone.removeAttribute('data-theme');
-        clone.removeAttribute('data-theme-pref');
-        if (download.rootClass === null) {
-          clone.removeAttribute('class');
-        } else {
-          clone.setAttribute('class', download.rootClass);
-        }
+        /* Restore <html>'s attributes wholesale from the snapshot. That
+           drops data-theme and data-theme-pref (deliberately excluded when
+           the snapshot was taken), drops the `presenting` class a deck adds,
+           and also drops whatever some future library decides to put here --
+           which naming the two theme attributes explicitly would not. */
+        var cloneRootAttrs = Array.prototype.slice.call(clone.attributes);
+        cloneRootAttrs.forEach(function (attr) {
+          clone.removeAttribute(attr.name);
+        });
+        download.rootAttrs.forEach(function (pair) {
+          clone.setAttribute(pair[0], pair[1]);
+        });
 
+        /* Keep the head elements pandoc wrote, drop the rest. Text nodes are
+           left alone: only an element can carry the marker, and only
+           elements get injected. */
         var cloneHead = clone.querySelector('head');
         if (cloneHead) {
-          while (cloneHead.childNodes.length > download.headCount) {
-            cloneHead.removeChild(cloneHead.lastChild);
-          }
-        }
-
-        /* The setter works on this detached clone because the element still
-           has a parent -- the cloned body -- so it does not throw, and it
-           does not execute any script in the replacement markup. */
-        var cloneContainer = clone.querySelector('.container');
-        if (cloneContainer) {
-          cloneContainer.outerHTML = download.containerHtml;
+          Array.prototype.slice.call(cloneHead.children).forEach(function (child) {
+            if (!child.hasAttribute(PRISTINE)) cloneHead.removeChild(child);
+          });
         }
 
         var cloneBody = clone.querySelector('body');
@@ -219,9 +309,11 @@
              out of the downloaded copy. */
           var children = Array.prototype.slice.call(cloneBody.children);
           children.forEach(function (child) {
-            var keep = child.classList.contains('container') ||
-                       child.classList.contains('theme-toggle-host') ||
-                       child.tagName === 'SCRIPT';
+            /* Marked, or a script. The page's own trailing script tags were
+               not in the DOM when the markers were stamped -- this partial
+               runs mid-parse -- which is exactly why <body> cannot be
+               reverted by a child count the way <head> once was. */
+            var keep = child.hasAttribute(PRISTINE) || child.tagName === 'SCRIPT';
             if (!keep) {
               cloneBody.removeChild(child);
             } else if (child.classList.contains('theme-toggle-host')) {
@@ -230,6 +322,22 @@
               while (child.firstChild) child.removeChild(child.firstChild);
             }
           });
+
+          /* Replace the container AFTER the marker sweep above, never
+             before it. The captured markup was taken before the markers
+             were stamped, so it carries none -- splice it in first and the
+             sweep sees an unmarked body child and deletes the entire
+             document. That is not hypothetical: it is what the first
+             version of this did, and the downloaded deck came out with no
+             slides at all.
+
+             The setter works on this detached clone because the element
+             still has a parent -- the cloned body -- so it does not throw,
+             and it does not execute any script in the replacement markup. */
+          var cloneContainer = cloneBody.querySelector('.container');
+          if (cloneContainer) {
+            cloneContainer.outerHTML = download.containerHtml;
+          }
 
           /* Restore exactly what pandoc wrote, dropping whatever runtime
              code added -- a Bootstrap component that sets class="modal-open"
@@ -244,21 +352,30 @@
           });
         }
 
+        /* The markers are this partial's bookkeeping, not the page's.
+           Strip them from the clone so the downloaded file is what pandoc
+           wrote, and so downloading again from that copy behaves the same. */
+        Array.prototype.slice.call(clone.querySelectorAll('[' + PRISTINE + ']'))
+          .forEach(function (marked) {
+            marked.removeAttribute(PRISTINE);
+          });
+
         var html = '<!DOCTYPE html>\n' + clone.outerHTML;
         var filename = downloadFilename();
         var blob = new Blob([html], { type: 'text/html;charset=utf-8' });
         var url = URL.createObjectURL(blob);
+        var link = document.createElement('a');
         try {
-          var link = document.createElement('a');
           link.href = url;
           link.download = filename;
           document.body.appendChild(link);
           link.click();
-          document.body.removeChild(link);
         } finally {
-          /* In a finally, not after: a throw between create and revoke
-             could otherwise pin a multi-megabyte blob for the life of the
-             tab. */
+          /* Both cleanups in the finally, not after the click. A throw
+             between here and there would otherwise pin a multi-megabyte blob
+             for the life of the tab, and leave a stray anchor in the live
+             DOM for the next capture to trip over. */
+          if (link.parentNode) link.parentNode.removeChild(link);
           URL.revokeObjectURL(url);
         }
       } catch (error) {

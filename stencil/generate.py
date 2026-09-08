@@ -119,7 +119,7 @@ def brand_image_path(value: str | None) -> str | None:
 _UNSAFE_IN_PATH = re.compile(r"[$`;|&<>\\\n]")
 
 
-def show_download_default(package: dict, config: dict) -> bool:
+def show_download_default(package: dict, config: dict, package_id: str = "") -> bool:
     """Whether a package's pages carry the download button unless a
     document says otherwise. Package first, then config-wide, then on.
 
@@ -131,7 +131,7 @@ def show_download_default(package: dict, config: dict) -> bool:
     `package.get('show_download') or config.get(...)` would read that False
     as "unset" and fall through to the wider scope -- exactly backwards.
     """
-    for scope in (package, config):
+    for where, scope in ((f"package {package_id!r}", package), ("config", config)):
         if "show_download" in scope:
             value = scope["show_download"]
             if value is None:
@@ -144,12 +144,17 @@ def show_download_default(package: dict, config: dict) -> bool:
                 # scope, and then to the default.
                 continue
             if not isinstance(value, bool):
+                # Naming WHERE it came from, the way check_config_path below
+                # does. A config with a dozen packages otherwise sends the
+                # author looking through all of them for a key that is set in
+                # one -- or at the top level, which is not a package at all.
                 raise ValueError(
-                    f"show_download must be true or false, not {value!r}. "
-                    ".config.yaml is read as YAML 1.1, so an unquoted "
-                    "no/off/false is already a real boolean -- a value that "
-                    "is neither means it was quoted, or is a number. Write "
-                    "show_download: true or show_download: false, unquoted."
+                    f"{where}: show_download must be true or false, not "
+                    f"{value!r}. .config.yaml is read as YAML 1.1, so an "
+                    "unquoted no/off/false is already a real boolean -- a "
+                    "value that is neither means it was quoted, or is a "
+                    "number. Write show_download: true or "
+                    "show_download: false, unquoted."
                 )
             return value
     return True
@@ -423,7 +428,7 @@ def get_template_context(package_id: str, config: dict) -> dict:
         # so StrictUndefined has nothing to complain about and no
         # `| default(...)` is needed at the call site -- see AGENTS.md on why
         # papering over an undeclared key with a default is worse than this.
-        "config_show_download": show_download_default(package, config),
+        "config_show_download": show_download_default(package, config, package_id),
         "package_name": package_name,
         "package_dir": package.get("dir", f"{package_id}"),
         "package_type": package_type,

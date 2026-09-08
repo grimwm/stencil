@@ -283,6 +283,16 @@ def test_the_download_include_is_wrapped_in_the_show_download_conditional(templa
         "$if(show_download)$ ... $endif$, so the control would render "
         "whatever the front matter says"
     )
+    # The second failure the docstring above names, which the membership
+    # check alone does not catch: a conditional closed AFTER the page-scripts
+    # include swallows the page's own scripts whenever show_download is off.
+    # Every such page would load with no highlighting, no diagrams, no tabs
+    # and no theme control, and nothing else here would say why.
+    assert "{% include '_page-scripts.html.j2' %}" not in guarded, (
+        f"{template} leaves _page-scripts.html.j2 inside "
+        "$if(show_download)$ ... $endif$, so turning the download button off "
+        "would also drop every script the page needs"
+    )
 
 
 # --- the config-level default: package, then config-wide, then True --------
@@ -567,6 +577,24 @@ RUNTIME_DOCUMENT = document('title: "Doc"\n') + (
     "```{.mermaid}\n"
     "flowchart LR\n"
     "  client --> api --> db\n"
+    "```\n"
+    "\n"
+    # A mindmap as well as a flowchart, and the difference is the whole point.
+    # A flowchart is dagre-backed and touches <head> zero times, so a suite
+    # with only flowcharts cannot see what the download control does about
+    # head mutation -- which is exactly how a real bug got through review
+    # here. A mindmap is cytoscape-backed, and the vendored mermaid bundle
+    # PREPENDS a "__________cytoscape_stylesheet" <style> to <head> for it
+    # (`a.insertBefore(h, a.children[0])`). That prepend is what falsified the
+    # original "every head mutation is an append" design, and this block is
+    # what keeps the marker-based revert honest: without it, every assertion
+    # about the downloaded head passes on a page that structurally cannot
+    # fail them.
+    "```{.mermaid}\n"
+    "mindmap\n"
+    "  root((core))\n"
+    "    parsing\n"
+    "    rendering\n"
     "```\n"
     "\n"
     '<nav class="nav-tabs">\n'
@@ -891,15 +919,19 @@ def downloaded_path(pdf_workspace: Path, kind: str, slot: int, filename: str) ->
 
 
 def parsed_tree(html_text: str) -> str:
-    """A stable, parser-normalized form for comparing two HTML documents.
+    """Both sides through the same parser, so serializer drift cancels out.
 
-    NOT byte equality -- the corrections from the adversarial review measured
-    real serializer drift on the round trip (&#160; -> &nbsp;, &middot; -> a
-    literal middot character, <path/> -> <path></path>, a newline immediately
-    after <pre> dropped), so a byte comparison is red against a correct
-    implementation and would be the same always-red mistake as the substring
-    searches this file is written to avoid. Parsing both sides through the
-    same parser normalizes that drift away.
+    The downloaded bytes are NOT identical to the file pandoc wrote -- the
+    browser's serializer rewrites `&#160;` to `&nbsp;` and `<path/>` to
+    `<path></path>` -- so a byte comparison would fail against a correct
+    implementation. Parsing both sides normalizes those identically.
+
+    One known fragility, written down so it is not rediscovered: html.parser
+    drops a newline immediately following `<pre>`, per the HTML spec's own
+    rule. That is why `<pre>\nfirst` and `<pre>first` compare equal here, and
+    it is fine today because pandoc emits `<pre><code>` with no leading
+    newline. If it ever starts emitting one, this comparison stays correct
+    while quietly losing the ability to see that particular difference.
     """
     return BeautifulSoup(html_text, "html.parser").prettify()
 
