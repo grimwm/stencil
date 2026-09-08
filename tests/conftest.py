@@ -86,6 +86,20 @@ def demo_config():
 
 
 @pytest.fixture
+def install_sources():
+    """``install_fixtures`` as a fixture, for a test that builds its own package.
+
+    The ``render`` fixture below installs them on the way past, which serves
+    every test that renders through it. A test driving the generated compose
+    file needs the same markdown in a package it generated itself, and
+    ``from tests.conftest import install_fixtures`` resolves locally while
+    failing on CI with ModuleNotFoundError -- the same trap ``demo_config``
+    documents. Handing the function out is the portable spelling.
+    """
+    return install_fixtures
+
+
+@pytest.fixture
 def generate_package(tmp_path: Path):
     def _generate(config: dict, package_id: str = "demo") -> Path:
         return make_package(tmp_path, config, package_id)
