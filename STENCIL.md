@@ -233,16 +233,23 @@ accessed in your templates.
 
 ## Makefile Targets
 
-| Target       | Description                                      |
-| ------------ | ------------------------------------------------ |
-| `help`       | Show available targets                           |
-| `install`    | Create/update virtual environment                |
-| `gen T=name` | Generate scaffolding for package `name`          |
-| `doc`        | Generate all HTML (add `WITH=hidden` for extras) |
-| `slide`      | Generate HTML slide decks only                   |
-| `format-md`  | Format markdown files with prettier              |
-| `clean`      | Remove generated files                           |
-| `clean-pkg`  | Remove package-specific generated files          |
+These are the targets stencil writes into a generated package's `Makefile`. The generator itself
+is `stencil gen <package>`; the generated `Makefile` carries no target for it. A consuming
+repository may wrap `stencil gen` in a target of its own, and that wrapper is the repository's
+convention rather than stencil's.
+
+| Target         | Description                                                 |
+| -------------- | ----------------------------------------------------------- |
+| `help`         | Show available targets                                      |
+| `doc`          | Generate all HTML (add `WITH=hidden` for extras)            |
+| `slide`        | Generate HTML slide decks only                              |
+| `pdf`          | Print the generated HTML to PDF/UA-1 files                  |
+| `check-access` | Check the generated HTML against WCAG 2.1 AA (pa11y)        |
+| `check-pdf`    | Check the generated PDFs for PDF/UA-1 conformance (veraPDF) |
+| `format-md`    | Format markdown files with prettier                         |
+| `pkg`          | Build the package's submission zip or combined PDF          |
+| `clean`        | Remove generated files                                      |
+| `clean-pkg`    | Remove package-specific generated files                     |
 
 ## Extending Stencil
 

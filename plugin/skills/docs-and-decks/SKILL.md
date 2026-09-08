@@ -1,6 +1,6 @@
 ---
 name: docs-and-decks
-description: Build, verify and troubleshoot stencil-generated documents and slide decks. Use when wiring a new deck or handout into a package, when `make doc`, `make pdf` or `make check-access` fails, or when working from a Cowork sandbox where Docker and the repository's venv are unavailable.
+description: Build, verify and troubleshoot stencil-generated documents and slide decks. Use when wiring a new deck or handout into a package, when `make doc`, `make pdf` or `make check-access` fails, or when working from a Cowork sandbox where Docker and a host-built venv are unavailable.
 ---
 
 # Stencil documents and decks
@@ -24,17 +24,23 @@ configuration, read the source of truth rather than guessing:
 When working *inside* the stencil repository, read the local files instead of fetching them.
 
 **Never hand-edit generated files.** `Makefile`, `docker-compose.yml`, the Lua filters, the pandoc
-templates and `.gitignore` are all rewritten by `make gen`. Change the config or the template.
+templates and `.gitignore` are all rewritten by `stencil gen`. Change the config or the template.
 
 ## Build loop
 
 ```bash
-make gen T=<package>     # after any .config.yaml change
+stencil gen <package>    # after any .config.yaml change; regenerates the package's Makefile
 make doc                 # student build
 make doc WITH=hidden     # presenter build -> <name>-hidden.html
 make check-access        # pa11y, WCAG 2.1 AA
 make pdf                 # PDF/UA-1: headless Chromium + pdf-lib repairs
+make check-pdf           # veraPDF, PDF/UA-1 conformance
 ```
+
+The `make` targets are the ones stencil writes into the generated `Makefile` (`STENCIL.md`,
+"Makefile Targets"). A consuming repository may wrap `stencil gen` in a target of its own; if so,
+that wrapper is the repository's convention, not stencil's — read its Makefile rather than assuming
+a name.
 
 Adding a `slides:` list beside `docs:` in a package is all that is needed to get a deck; the `slide`
 pandoc service is emitted automatically under `has_slides`. A markdown file belongs to `docs:` or
@@ -48,10 +54,13 @@ conformant file, and PDF/UA-1 is a different standard from the WCAG 2.1 AA that 
 
 Three constraints usually apply, and none of them are stencil bugs:
 
-1. **No Docker in the Cowork Linux VM**, so `make gen/doc/pdf/check-access` cannot run there.
-2. **The repository's venv is often host-bound** — a macOS checkout has
-   `#!/Users/…/python3.14` pointing into `/opt/homebrew`, which does not exist in the VM. The
-   symptom is `make: …/stencil: No such file or directory` even though the file is present.
+1. **No Docker in the Cowork Linux VM**, so `make doc`, `make pdf` and `make check-access` cannot
+   run there.
+2. **A venv created on the host is host-bound.** Its console scripts carry the host interpreter's
+   absolute path in their shebang — `#!/Users/…/python3.14`, say, pointing into `/opt/homebrew` —
+   and that path does not exist in the VM. The symptom is `…/stencil: No such file or directory`
+   even though the file is present. Where the checkout keeps its venv is the repository's business;
+   the symptom is the same wherever it is.
 3. **The mount forbids `unlink` but permits `rename(2)`.**
 
 So `make` targets run on the user's own machine. Two useful things can still be done agent-side.
@@ -59,7 +68,7 @@ So `make` targets run on the user's own machine. Two useful things can still be 
 ### Verify slide structure without Docker
 
 pandoc is present in the Cowork VM and in the cloud container. `slide-sections.lua.j2` is plain Lua
-with no Jinja, so the template is byte-identical to what `make gen` writes.
+with no Jinja, so the template is byte-identical to what `stencil gen` writes.
 
 ```bash
 pandoc --lua-filter=hidden-filter.lua --lua-filter=slide-sections.lua -t html deck.md -o stu.html
@@ -131,7 +140,7 @@ the only place it fails. The dark pairing (`#ff9ab0` on `#2f4680`) passes at 4.5
 
 Until the palette changes, **do not put backticks in a markdown table header row**; put the literal
 values in the body cells instead. The upstream fix is `--code-inline: #b01f45` (4.95:1 on the header,
-6.71:1 on white, indistinguishable to the eye) or a scoped `th code {}` rule.
+6.71:1 on white, indistinguishable to the eye) or a scoped `th code {}` rule; tracked as `stn-1y7`.
 
 ## Course content from an adopted textbook
 

@@ -3,8 +3,11 @@
 A Cowork/Claude Code plugin for repositories scaffolded by
 [stencil](https://github.com/grimwm/stencil).
 
-Install it into a stencil-consuming repository (cs234, cs425, or any other) so agent sessions know
-how to build, verify and troubleshoot the document and deck pipeline without rediscovering it.
+Install it into any repository that stencil scaffolds so agent sessions know how to build, verify
+and troubleshoot the document and deck pipeline without rediscovering it.
+
+The skill describes only what stencil itself emits: `stencil gen`, and the targets of the generated
+`Makefile`. A consuming repository's own wrappers and layout belong in that repository's skills.
 
 ## What it contains
 
@@ -16,8 +19,8 @@ how to build, verify and troubleshoot the document and deck pipeline without red
 
 **This plugin does not restate the dialect.** `AUTHORING.md` and `STENCIL.md` in this repository are
 the source of truth for markdown syntax, slide layouts and package configuration, and the skill links
-to them rather than copying them. A copy one directory from the original is the same drift trap the
-repo already documents for `stencil.mk`.
+to them rather than copying them. A copy one directory from the original drifts from it, and a
+copy in a different repository drifts faster.
 
 What the skill *does* carry is the operational knowledge that lives nowhere else: how to verify slide
 splitting without Docker, how to produce a real PDF/UA file from a cloud sandbox, and which git
