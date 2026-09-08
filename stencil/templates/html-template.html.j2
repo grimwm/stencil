@@ -25,6 +25,9 @@
   </div>
 
 {% include '_theme-toggle.html.j2' %}
+$if(show_download)$
+{% include '_download.html.j2' %}
+$endif$
 {% include '_page-scripts.html.j2' %}
 </body>
 </html>

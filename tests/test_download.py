@@ -13,12 +13,30 @@ entry this key has to stop short of, see below) -- and truthy() is expected to
 grow a `default` argument so this key can resolve the opposite way from
 show_date while sharing the same table.
 
-Pandoc reads YAML 1.2, where `true` and `false` are the only real booleans, so
-`show_download: no` arrives at the filter as the STRING "no" -- exactly as
-truthy as "yes" to a naive `$if(show_download)$`. That string is the case that
-matters most here, for the same reason it mattered for show_date: the obvious
-spelling would silently mean its own opposite, and it would mean it in the
-direction that leaves an unwanted control sitting in the toolbar.
+WHAT PANDOC ACTUALLY HANDS THE FILTER, measured on the pinned pandoc (3.10)
+with a probe reporting the exact Lua type rather than inferred from the YAML
+spec:
+
+    true false yes no on off   (any case)  -> a real boolean
+    1 0 none                               -> a string
+    null ~ and a blank value               -> an empty string, all three
+                                              indistinguishable from one another
+    absent                                 -> nil
+
+That is YAML 1.1 boolean resolution, and it is worth stating plainly because
+this repository documents the opposite. frontmatter-filter.lua.j2's header
+comment, AUTHORING.md's show_date section and stn-ejv itself all say pandoc
+reads YAML 1.2, where `true` and `false` are the only booleans and
+`show_download: no` therefore arrives as the STRING "no". That was presumably
+true when show_date was written; it is not true of the pandoc this project
+pins today, and it is tracked separately rather than rewritten here.
+
+The FALSE table is not thereby dead. It still decides `0` and `none`, which
+arrive as strings, and it still catches a QUOTED "no" or "null" -- which is
+the spelling an author reaches for when they have been bitten once and are
+being careful. truthy() checks the boolean branch first and falls through to
+the table, so every spelling lands correctly whichever way pandoc resolves it,
+and the feature does not depend on which YAML version a future pandoc picks.
 
 The blank case is the one unique to a default-true key, and it is why this
 file exists on its own rather than as a few more parametrize entries bolted
@@ -141,7 +159,7 @@ def test_the_ways_of_writing_yes(render_soup, kind, build, written):
 
 @pytest.mark.integration
 @pytest.mark.parametrize("kind,build", [("doc", document), ("slide", deck)])
-@pytest.mark.parametrize("written", ["false", "no", "off", "0", "none", "null"])
+@pytest.mark.parametrize("written", ["false", "no", "off", "0", "none", '"null"'])
 def test_the_ways_of_writing_no(render_soup, kind, build, written):
     """The regression this key exists to guard against: pandoc hands the
     filter the string "no", every bit as truthy as "yes" to a naive $if()."""
@@ -150,6 +168,33 @@ def test_the_ways_of_writing_no(render_soup, kind, build, written):
     )
     assert not has_download_control(soup), (
         f"show_download: {written} rendered the control anyway"
+    )
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("kind,build", [("doc", document), ("slide", deck)])
+@pytest.mark.parametrize("written", ["null", "~"])
+def test_a_yaml_null_is_absent_rather_than_false(render_soup, kind, build, written):
+    """`null` and `~` mean ABSENT, which for this key means on.
+
+    Measured against the pinned pandoc with a probe filter reporting the exact
+    Lua type it hands the Meta function: `show_download: null`,
+    `show_download: ~` and `show_download:` with nothing after it are
+    INDISTINGUISHABLE -- all three arrive as an empty string. So they cannot
+    mean anything different from a blank value, and a blank value is the same
+    as leaving the key out.
+
+    The FALSE table's "null" entry is not dead: it catches the QUOTED string
+    "null", which does arrive as a real string, and which is covered in
+    test_the_ways_of_writing_no above. But an unquoted null is a YAML null,
+    not the word.
+    """
+    soup = render_soup(
+        kind, "d.md", text=build(f'title: "T"\nshow_download: {written}\n')
+    )
+    assert has_download_control(soup), (
+        f"show_download: {written} is a YAML null, which means absent -- and "
+        "absent means the configured default, which ships as on"
     )
 
 

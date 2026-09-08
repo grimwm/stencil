@@ -1,0 +1,31 @@
+{# The self-download control, shared by documents and decks.
+
+   Placeholder for this task: only window.mountDownloadButton needs to exist
+   yet, so the include-order test (stn-bd3.1) and the truth-table tests in
+   tests/test_download.py can pass without the real capture-and-serialize
+   behaviour, which is stn-bd3.4.
+
+   Included strictly between _theme-toggle.html.j2 and _page-scripts.html.j2
+   in both composition templates -- see tests/test_download.py for why that
+   position is load-bearing: _page-scripts.html.j2 runs hljs.highlightAll()
+   and the mermaid <pre> -> <div> swap at PARSE time, so the real
+   implementation has to sit before it to capture the page's pristine markup.
+
+   Two mount points, mirroring the theme toggle: a document gets the fixed
+   container in html-template.html.j2; a deck's toolbar is built by JS at
+   runtime, so _slide-scripts.html.j2 will call mountDownloadButton() once it
+   inserts the theme group, the same way it already calls mountThemeToggle().
+
+   No dollar sign anywhere in this file -- see _theme-toggle.html.j2, which
+   this mirrors, and tests/test_download.py's
+   test_the_partial_contains_no_pandoc_variable_syntax. #}
+  <script>
+  (function () {
+    window.mountDownloadButton = function (container) {
+      if (!container || container.querySelector('.download-button')) return;
+      // Real capture-and-serialize behaviour lands in stn-bd3.4. This stub
+      // exists so both composition templates have something safe to call.
+      return null;
+    };
+  })();
+  </script>
