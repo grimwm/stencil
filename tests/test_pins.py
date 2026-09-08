@@ -380,10 +380,21 @@ def test_a_renamed_compose_file_still_gets_the_format_lockfile(generate_package)
     assert (package / pipeline.FORMAT_LOCKFILE).is_file()
 
 
-def test_a_package_with_no_compose_file_gets_no_format_lockfile(generate_package):
-    """The other side of the predicate. A lockfile for a service the package
-    does not have is a file `stencil clean` has to know about and nothing
-    reads."""
+def test_the_format_lockfile_is_emitted_with_no_predicate_at_all(generate_package):
+    """Even for a package that renders no compose file today.
+
+    Three predicates were tried and each left a case behind: has_pages missed a
+    package whose config-level `templates:` produces a compose file anyway; the
+    compose file's own name missed a renamed `dest:`; and adding the
+    conventional spellings still missed a consumer whose composition template
+    has a name of its own and pulls the partial in by include -- which nothing
+    outside a template body can see.
+
+    So there is no predicate. The file is 1.3 KB, `stencil clean` removes it and
+    the managed .gitignore covers it; the cost of shipping it to a package that
+    does not use it is a small unused file, against a `make format-md` that
+    fails for a consumer who did nothing wrong.
+    """
     package = generate_package(
         {
             "templates": [{"src": "Makefile.j2"}],
@@ -392,9 +403,27 @@ def test_a_package_with_no_compose_file_gets_no_format_lockfile(generate_package
             },
         }
     )
-    assert not (package / pipeline.FORMAT_LOCKFILE).exists()
-    # It renders markdown, so the browser image and its lockfile are both here.
+    assert (package / pipeline.FORMAT_LOCKFILE).is_file()
+    # The browser lockfile still has one, because it pairs with a Dockerfile
+    # that COPYs it: a package with one and not the other cannot build.
     assert (package / pipeline.BROWSER_LOCKFILE).is_file()
+
+
+def test_a_package_that_renders_nothing_still_gets_no_browser_lockfile(
+    generate_package,
+):
+    """The browser lockfile is not unconditional, and the asymmetry is the
+    point: it exists to be COPYed by Dockerfile.browser, which is emitted only
+    for a package that renders markdown."""
+    package = generate_package(
+        {
+            "templates": [{"src": "Makefile.j2"}],
+            "packages": {"demo": {"name": "Demo", "package_type": "none"}},
+        }
+    )
+    assert not (package / "Dockerfile.browser").exists()
+    assert not (package / pipeline.BROWSER_LOCKFILE).exists()
+    assert (package / pipeline.FORMAT_LOCKFILE).is_file()
 
 
 @pytest.mark.parametrize("filename", [pipeline.BROWSER_LOCKFILE, pipeline.FORMAT_LOCKFILE])
@@ -541,15 +570,19 @@ def test_every_locked_package_resolves_to_itself_on_the_public_registry(filename
         if path == "":
             continue
         url = entry["resolved"]
-        assert url.startswith("https://registry.npmjs.org/"), (
-            f"{filename}: {path} is fetched from {url}"
-        )
         name = path.rsplit("node_modules/", 1)[1]
         stem = name.rsplit("/", 1)[-1]
-        expected = f"/{name}/-/{stem}-{entry['version']}.tgz"
-        assert url.endswith(expected), (
-            f"{filename}: {path} claims version {entry['version']} but is "
-            f"fetched from {url}, which is a different package or version"
+        # THE WHOLE URL, not a prefix and a suffix. A fragment is not sent in
+        # the request, so `https://evil.example/x.tgz#/pdf-lib/-/pdf-lib-1.17.1.tgz`
+        # satisfies a startswith on the registry only if the host matches -- but
+        # a registry URL for a DIFFERENT tarball can carry the expected path in
+        # its fragment and satisfy an endswith while npm fetches something else.
+        # npm checks the bytes against `integrity`; it never checks that the URL
+        # names the package the lockfile key claims.
+        expected = f"https://registry.npmjs.org/{name}/-/{stem}-{entry['version']}.tgz"
+        assert url == expected, (
+            f"{filename}: {path} claims version {entry['version']}, which is "
+            f"served at {expected}, but the lockfile fetches {url}"
         )
 
 

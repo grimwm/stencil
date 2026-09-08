@@ -807,32 +807,26 @@ SLIDE_PAGE_TEMPLATES = ["slide-template.html.j2", "slide-sections.lua.j2"]
 # The compose file's format-md service copies this lockfile into place and runs
 # `npm ci` against it, so the file has to exist wherever that service does.
 #
-# EMITTED ON THE COMPOSE FILE, NOT ON has_pages, and that distinction is a
-# regression this nearly shipped with. `templates:` is config-level and applies
-# to every package, so a `package_type: none` package with no docs and no
-# slides still gets a docker-compose.yml -- and `make format-md` worked for it,
-# because installing by name needs nothing on disk. Keyed off has_pages, the
-# lockfile would not be written for that package and the service would fail on
-# `cp: can't stat`. Everything else stencil injects is a markdown-rendering
-# concern; formatting markdown a package merely contains is not.
+# EMITTED FOR EVERY PACKAGE, WITH NO PREDICATE AT ALL, and the two predicates
+# tried before it are why. Keyed off has_pages -- the obvious choice, matching
+# everything else stencil injects -- it was not written for a `package_type:
+# none` package with no docs, whose `templates:` list still produces a compose
+# file, because `templates:` is config-level. `make format-md` worked for that
+# package before this change and would have started failing on `cp: can't
+# stat`. Keyed off the compose file's own name instead, it was not written for
+# a config that renames the output, and then not for a consumer whose
+# composition template has a name of its own and pulls stencil's partial in by
+# include -- which nothing here can see, because an include statement lives
+# inside a template body and this function has neither the environment nor the
+# search path to resolve one.
 #
-# MATCHED ON THE SOURCE AS WELL AS THE DESTINATION. A config may rename the
-# output -- `dest: docker-compose.yaml` is ordinary -- and matching only the
-# destination filename would silently stop shipping the lockfile for exactly
-# that package. The source is what stencil can be sure about: it is stencil's
-# own template, and it is the one that includes the partial carrying the
-# format-md service. The destination spellings are there for a consumer whose
-# composition template has its own name and includes the partial.
-#
-# The residual case, stated rather than hidden: a consumer template that both
-# has a name of its own AND writes to something unlike a compose file, while
-# including stencil's partial, gets a service whose lockfile is not generated.
-# Nothing here can see that, because the include is inside the template body.
-COMPOSE_SRC = "docker-compose.yml.j2"
-COMPOSE_DESTS = frozenset(
-    {"docker-compose.yml", "docker-compose.yaml", "compose.yml", "compose.yaml"}
-)
-COMPOSE_TEMPLATES = ["format-package-lock.json.j2"]
+# Each fix made the predicate narrower and left a case behind. The file is 1.3
+# KB, `stencil clean` removes it and the managed .gitignore covers it, so the
+# cost of emitting it for a package that turns out not to need it is a small
+# unused file -- against a build target that fails for a consumer who did
+# nothing wrong. That is not a close trade, and a predicate nobody can get
+# right is worse than no predicate.
+ALWAYS_TEMPLATES = ["format-package-lock.json.j2"]
 
 
 def template_dest(src: str) -> str:
@@ -855,24 +849,7 @@ def when_holds(tdef: dict, context: dict) -> bool:
     return all(context.get(key) for key in when)
 
 
-def emits_compose(template_defs: list, context: dict) -> bool:
-    """True when this package renders a docker-compose file.
-
-    Honours ``when``, so a consumer who gates their compose file on a feature
-    flag does not get a lockfile for a service they did not ask for.
-    """
-    for tdef in template_defs:
-        if not when_holds(tdef, context):
-            continue
-        src = tdef.get("src", "")
-        if src == COMPOSE_SRC:
-            return True
-        if tdef.get("dest", template_dest(src)) in COMPOSE_DESTS:
-            return True
-    return False
-
-
-def injected_sources(config_templates: list, context: dict) -> list[str]:
+def injected_sources(context: dict) -> list[str]:
     """Every template stencil adds to a package's own list, in render order."""
     sources: list[str] = []
     if context.get("has_pages"):
@@ -881,14 +858,13 @@ def injected_sources(config_templates: list, context: dict) -> list[str]:
         sources += SHARED_PAGE_TEMPLATES
         if context.get("has_slides"):
             sources += SLIDE_PAGE_TEMPLATES
-    if emits_compose(config_templates, context):
-        sources += COMPOSE_TEMPLATES
+    sources += ALWAYS_TEMPLATES
     return sources
 
 
-def injected_templates(config_templates: list, context: dict) -> list[dict]:
+def injected_templates(context: dict) -> list[dict]:
     """``injected_sources`` as template definitions render_templates accepts."""
-    return [{"src": src} for src in injected_sources(config_templates, context)]
+    return [{"src": src} for src in injected_sources(context)]
 
 
 def generate_package(
@@ -916,7 +892,7 @@ def generate_package(
             print(f"Created directory: {output_dir}")
 
     config_templates = list(config.get("templates", []))
-    template_defs = injected_templates(config_templates, context) + config_templates
+    template_defs = injected_templates(context) + config_templates
     if not template_defs:
         print(f"Error: No templates defined in config", file=sys.stderr)
         return None
@@ -1024,7 +1000,7 @@ def get_generated_files(config: dict) -> list[str]:
         # from, on the same predicates -- spelling them twice is what left a
         # package_sources-only doc package with five generated files that clean
         # could not see.
-        for src in injected_sources(config_templates, context):
+        for src in injected_sources(context):
             entries.add(f"{pkg_dir}/{template_dest(src)}")
 
         if context["has_pages"]:

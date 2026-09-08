@@ -48,14 +48,19 @@ How the version gets bumped is written down in
   written down, and a consumer's package directory gains two files rather than
   four.
 
-  They arrive on different predicates, deliberately. The browser lockfile
-  travels with `Dockerfile.browser`, for any package that renders markdown.
-  The format-md one travels with `docker-compose.yml`, because `templates:` is
-  config-level and a package with no docs and no slides still gets a compose
-  file — and `make format-md` formats the markdown a package *contains*
-  whether or not it renders any. Keyed off the wrong one, that package's
-  working `format-md` target would have started failing with
-  `cp: can't stat`.
+  The browser lockfile travels with `Dockerfile.browser`, for any package that
+  renders markdown — the two must arrive together, because the Dockerfile
+  `COPY`s it. The format-md one is emitted for **every** package, with no
+  predicate, and that is the interesting half. Three predicates were tried and
+  each left a case behind: `has_pages` missed a package whose config-level
+  `templates:` produces a compose file anyway; the compose file's own name
+  missed a renamed `dest:`; adding the conventional spellings still missed a
+  consumer whose composition template has a name of its own and pulls the
+  partial in by include — which nothing outside a template body can see. The
+  file is 1.3 KB and `stencil clean` removes it, so shipping it to a package
+  that does not use it costs a small unused file, against a `make format-md`
+  that fails for a consumer who did nothing wrong. The service also checks for
+  it now and says what to run, rather than dying on `cp: can't stat`.
 
 - **Both `npm ci` invocations pass `--ignore-scripts`.** A lifecycle script
   runs as root at image build time, with network, before any test looks — and
@@ -101,9 +106,18 @@ How the version gets bumped is written down in
   than including it.** The partial's context interface changed:
   `format_npm_specs` is gone, replaced by `format_manifest`,
   `format_lockfile_name` and `format_tools_dir`. A composition template that
-  `{% include %}`s the partial gets the new service and needs no edit. A copy
-  keeps working and keeps installing by name, which is the thing this release
-  is about — `tests/test_template_contract.py` records the new set.
+  includes the partial gets the new service and needs no edit.
+
+  **A copy is not a supported configuration and must be migrated.** It keeps
+  rendering, and what it renders is a service that installs prettier by name —
+  no lockfile, no integrity check, the whole tree below those two versions
+  re-resolved on every run. That is precisely the state this release exists to
+  end, and nothing in stencil can detect it, because a copy reads none of
+  stencil's context keys and `StrictUndefined` therefore has nothing to
+  complain about. Replace the copy with an include, or port the three keys and
+  the `npm ci` invocation into it;
+  `tests/test_template_contract.py` records the set a composition must
+  provide.
 
 - Filed rather than folded in: `stn-8vi`. `NODE_IMAGE`, `PANDOC_IMAGE` and
   `VERAPDF_IMAGE` are pinned by tag, and a registry tag is mutable. That is the

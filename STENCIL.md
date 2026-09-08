@@ -160,9 +160,12 @@ committed copies.
 | `format-package-lock.json`  | The same for the `format-md` service's prettier             |
 
 `browser-package-lock.json` arrives with the pandoc/Chromium templates, for any
-package that renders markdown. `format-package-lock.json` arrives with
-`docker-compose.yml`, because `make format-md` formats the markdown a package
-contains whether or not it renders any.
+package that renders markdown — `Dockerfile.browser` copies it into the image, so
+the two always travel together. `format-package-lock.json` arrives for *every*
+package, with no condition: `make format-md` formats the markdown a package
+contains whether or not it renders any, and a compose file can reach stencil's
+format-md service through a composition template stencil cannot inspect from the
+outside. It is 1.3 KB, and `stencil clean` removes it either way.
 
 You can create custom templates for any project type. Templates are Jinja2 files (`.j2` suffix)
 that have access to the package context variables.
