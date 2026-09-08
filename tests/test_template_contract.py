@@ -97,6 +97,14 @@ CONTRACT = {
         "verapdf_script",
     },
     "_doc-body.html.j2": set(),
+    # The self-download control reads nothing from the Jinja context --
+    # everything it needs comes from the DOM at runtime, not from a variable
+    # this partial interpolates -- so a consumer including it gets the
+    # control for free. Registered anyway, at an empty key set, so a future
+    # context key added here becomes a visible line in this table's diff
+    # rather than a silent one. (_theme-toggle.html.j2 is the same shape and
+    # is not in this table; that omission is pre-existing and out of scope.)
+    "_download.html.j2": set(),
     "_page-head.html.j2": {"assets"},
     "_page-scripts.html.j2": {"assets"},
     "_page-style.css.j2": set(),

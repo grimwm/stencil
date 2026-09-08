@@ -74,27 +74,25 @@ subtly wrong forever. There is no way to catch that at runtime once the two
 partials are adjacent; the ordering has to be pinned as a standing structural
 fact.
 
-ACCEPTANCE NOW (read before "fixing" a result that looks wrong):
-- RED: show_download absent, blank, and every truthy spelling (true, yes, on,
-  1) -- none of them render the control today, because nothing does.
-- RED: the no-`$` test and the include-order test -- both error, because
-  stencil/templates/_download.html.j2 does not exist yet.
-- GREEN, but not yet meaningful: every false-ish spelling (false, no, off, 0,
-  none, null) passes, because the control renders nowhere for anybody yet.
-  That is a coincidence of the current state, not evidence the feature works --
-  do not treat it as license to touch this file's coercion cases once
-  _download.html.j2 exists and RED starts turning green for the right reason.
+This file covers: the coercion table above (booleans, the false-ish strings,
+and the blank/nil default-to-on case); that _download.html.j2 contains no `$`
+and sits strictly between _theme-toggle.html.j2 and _page-scripts.html.j2 in
+both composition templates; and the runtime behaviour of the mounted control
+and its serializer -- placement, the downloaded bytes, and non-compounding on
+a second save.
 """
 
 from __future__ import annotations
 
 import copy
 import json
+import re
 from pathlib import Path
 
 import pytest
 import yaml
 from bs4 import BeautifulSoup
+from pypdf import PdfReader
 
 from stencil import pipeline
 from stencil.generate import get_template_context
@@ -1272,6 +1270,54 @@ def test_downloading_from_the_downloaded_document_does_not_compound(
     assert parsed_tree(first.read_text()) == parsed_tree(second.read_text()), (
         "downloading from the downloaded document produced different bytes "
         "-- the operation compounds"
+    )
+
+
+# --- gate: the button never reaches a real PDF ------------------------------
+
+
+def download_glyph() -> str:
+    """The button's decorative glyph, read out of _download.html.j2 rather
+    than retyped, so this test and that file cannot drift. See its own
+    comment: THE GLYPH IS U+2193, not a substitute."""
+    match = re.search(r'aria-hidden="true">(.)</span>', source("_download.html.j2"))
+    assert match, "could not find the glyph span in _download.html.j2"
+    return match.group(1)
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize(
+    "kind,md_source,build",
+    [("doc", "download-doc.md", document), ("slide", "download-deck.md", deck)],
+)
+def test_the_download_button_is_absent_from_a_real_pdf(
+    to_pdf, kind, md_source, build
+):
+    """show_download defaults to true, so both a document and a deck built
+    through the real pandoc-to-PDF pipeline carry the control in HTML -- but
+    AGENTS.md is explicit that the print stylesheet IS the PDF page geometry,
+    and the ticket's SCOPE says PDF output does not need the button. Proved
+    against a real PDF's text layer, not by reading the stylesheet.
+
+    "Download" is the visually-hidden label; the VISIBLE artifact in a
+    rendered page is the arrow glyph, which is aria-hidden and contributes no
+    text of its own. A regression that leaks the control into print would
+    render the glyph and sail past a label-only assertion, so both are
+    checked. Neither tests/fixtures/document.md nor deck.md contains the
+    string "download", so this is not vacuous.
+    """
+    result, pdf = to_pdf(kind, md_source, text=build('title: "T"\n'))
+    assert result.returncode == 0, result.stderr
+
+    text = "\n".join(page.extract_text() or "" for page in PdfReader(pdf).pages)
+    assert "Download" not in text, (
+        f"the download button's label leaked into the {kind} PDF:\n{text}"
+    )
+
+    glyph = download_glyph()
+    assert glyph not in text, (
+        f"the download button's glyph ({glyph!r}) leaked into the {kind} PDF:"
+        f"\n{text}"
     )
 
 

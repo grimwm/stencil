@@ -182,6 +182,15 @@ packages:
 Templates are searched in order: `templates_dir` (if specified), then bundled stencil templates.
 This allows projects to override or extend the default templates.
 
+A handful of keys can also be set at this top level — `lang`, `brand`, `brand-alt`, and
+`show_download` — to give every package in the config the same default without repeating it. Each
+resolves package first, then config-wide, then a built-in default; see
+[Package Configuration](#package-configuration) below for what each key does at the package level,
+and [AUTHORING.md](AUTHORING.md) for how a document's own front matter overrides whatever is
+configured here. `.config.yaml` is read as YAML 1.1, so `show_download: false` (unquoted) is already
+a real boolean there — a *quoted* `"false"` is a string, and stencil refuses it with an error naming
+the key rather than silently coercing it.
+
 ### Documents vs. Slide Decks
 
 A package renders markdown two ways, and a file belongs to exactly one of them:
@@ -213,20 +222,21 @@ slide breaks, layout fences, presenter-only content, present mode and printing -
 
 ### Package Configuration
 
-| Field             | Required | Description                                                                                                                                                                |
-| ----------------- | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `name`            | No       | Display name (defaults to package ID)                                                                                                                                      |
-| `lang`            | No       | Language for this package's pages, overriding the config-wide `lang` (default `en`)                                                                                        |
-| `brand`           | No       | Brand for this package's documents, overriding the config-wide `brand`: a name, or a `file://` path to a logo resolved relative to this config file                        |
-| `brand-alt`       | No       | Alt text for a `brand` logo. Required when `brand` is an image; `stencil gen` fails without it                                                                             |
-| `dir`             | No       | Output subdirectory (defaults to package ID)                                                                                                                               |
-| `package_type`    | Yes      | `doc` for HTML documents, `zip` for submissions                                                                                                                            |
-| `docs`            | No       | List of markdown files to convert to HTML docs                                                                                                                             |
-| `slides`          | No       | List of markdown files to convert to slide decks                                                                                                                           |
-| `package_name`    | zip only | Submission filename (a `doc` using `package_sources` needs one too, ending in `.pdf`)                                                                                      |
-| `package_sources` | No       | What `pkg` puts into `package_name` (zip default: `[htdocs]`); a glob expands sorted, a directory means every file under it, recursively, anything else is used as written |
-| `services`        | No       | Docker services: `web`, `mysql`                                                                                                                                            |
-| `deps_script`     | No       | Install scripts keyed by OS                                                                                                                                                |
+| Field             | Required | Description                                                                                                                                                                             |
+| ----------------- | -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `name`            | No       | Display name (defaults to package ID)                                                                                                                                                   |
+| `lang`            | No       | Language for this package's pages, overriding the config-wide `lang` (default `en`)                                                                                                     |
+| `brand`           | No       | Brand for this package's documents, overriding the config-wide `brand`: a name, or a `file://` path to a logo resolved relative to this config file                                     |
+| `brand-alt`       | No       | Alt text for a `brand` logo. Required when `brand` is an image; `stencil gen` fails without it                                                                                          |
+| `show_download`   | No       | Whether pages in this package carry the download button, overriding the config-wide `show_download` (default `true`); a document's own front matter overrides this, in either direction |
+| `dir`             | No       | Output subdirectory (defaults to package ID)                                                                                                                                            |
+| `package_type`    | Yes      | `doc` for HTML documents, `zip` for submissions                                                                                                                                         |
+| `docs`            | No       | List of markdown files to convert to HTML docs                                                                                                                                          |
+| `slides`          | No       | List of markdown files to convert to slide decks                                                                                                                                        |
+| `package_name`    | zip only | Submission filename (a `doc` using `package_sources` needs one too, ending in `.pdf`)                                                                                                   |
+| `package_sources` | No       | What `pkg` puts into `package_name` (zip default: `[htdocs]`); a glob expands sorted, a directory means every file under it, recursively, anything else is used as written              |
+| `services`        | No       | Docker services: `web`, `mysql`                                                                                                                                                         |
+| `deps_script`     | No       | Install scripts keyed by OS                                                                                                                                                             |
 
 All package fields are available as template context variables. Custom fields can be added and
 accessed in your templates.

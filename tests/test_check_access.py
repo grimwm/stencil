@@ -40,6 +40,7 @@ from __future__ import annotations
 
 import json
 import shutil
+from pathlib import Path
 
 import pytest
 
@@ -47,12 +48,38 @@ from stencil import pipeline
 
 pytestmark = pytest.mark.integration
 
+FIXTURES = Path(__file__).parent / "fixtures"
+
 # (source, kind, rendered) -- the two document kinds a package can produce.
 PAGES = [
     ("document.md", "doc", "document.html"),
     ("deck.md", "slide", "deck.html"),
 ]
+
+# show_download now defaults to true, so the two pages above already carry
+# the button and only ever measure WCAG with it PRESENT. These pair each one
+# with an otherwise-identical page that sets `show_download: false`, so the
+# matrix also measures the button's ABSENCE -- both mount points, both
+# themes -- rather than leaving that half of the toggle unmeasured. The
+# fixture below writes their markdown into pdf_workspace before rendering,
+# rather than adding fixture files, so each stays an obvious variant of the
+# page next to it in PAGES.
+NO_DOWNLOAD_PAGES = [
+    ("document-no-download.md", "doc", "document-no-download.html"),
+    ("deck-no-download.md", "slide", "deck-no-download.html"),
+]
+
+ALL_PAGES = PAGES + NO_DOWNLOAD_PAGES
+
 THEMES = ["light", "dark"]
+
+
+def _with_show_download_false(text: str) -> str:
+    """document.md/deck.md's frontmatter plus an explicit `show_download:
+    false`, so the no-download pages differ from the ones in PAGES only in
+    the control's presence -- same content, same images, same citations."""
+    return text.replace("---\n", "---\nshow_download: false\n", 1)
+
 
 # Runs pa11y exactly as the generated check-access service does: the config the
 # Dockerfile wrote, which carries both the sandbox flags and the click on the
@@ -94,18 +121,31 @@ def accessibility(pdf_workspace):
 
     pa11y launches a browser per page per theme, so this is the expensive
     fixture in the suite after the image build itself. Once per session, and
-    the four cases below read its result rather than each paying for a
+    the eight cases below read its result rather than each paying for a
     container start of their own.
     """
     for source, kind, rendered in PAGES:
         built = pipeline.render(kind, source, rendered, workdir=pdf_workspace)
         assert built.returncode == 0, f"pandoc failed on {source}\n{built.stderr}"
 
+    # The show_download-false variants: write the fixture markdown they are
+    # paired with into pdf_workspace with the key added, then render exactly
+    # as above.
+    for source, kind, rendered in NO_DOWNLOAD_PAGES:
+        paired_source = "document.md" if kind == "doc" else "deck.md"
+        text = (FIXTURES / paired_source).read_text()
+        (pdf_workspace / source).write_text(_with_show_download_false(text))
+        built = pipeline.render(kind, source, rendered, workdir=pdf_workspace)
+        assert built.returncode == 0, f"pandoc failed on {source}\n{built.stderr}"
+
     script = PROBE % {
-        "pages": json.dumps([rendered for _, _, rendered in PAGES]),
+        "pages": json.dumps([rendered for _, _, rendered in ALL_PAGES]),
         "themes": json.dumps(THEMES),
     }
-    result = pipeline.run_in_browser(script, workdir=pdf_workspace, timeout=900)
+    # pa11y launches a browser per page per theme, and the matrix doubled
+    # from 4 combinations to 8 with the show_download-false pages above --
+    # double the work, double the budget.
+    result = pipeline.run_in_browser(script, workdir=pdf_workspace, timeout=1800)
 
     line = next(
         (line for line in result.stdout.splitlines() if line.startswith(MARKER)), None
@@ -119,7 +159,7 @@ def accessibility(pdf_workspace):
     return report
 
 
-@pytest.mark.parametrize("rendered", [rendered for _, _, rendered in PAGES])
+@pytest.mark.parametrize("rendered", [rendered for _, _, rendered in ALL_PAGES])
 @pytest.mark.parametrize("theme", THEMES)
 def test_a_generated_page_passes_wcag_2_1_aa(accessibility, rendered, theme):
     """What `make check-access` asserts, asserted where CI can see it."""
@@ -156,6 +196,12 @@ def one_page(pdf_workspace, tmp_path_factory):
     workspace would make these cases pass or fail on whatever some other test
     happened to render -- and the generated pages are self-contained, so one
     copied file is a complete page.
+
+    Renders document.md, which now carries the download button by default.
+    No edit needed here: this fixture and the two script tests below only
+    check that check-access's own script finds and passes over HTML it is
+    pointed at -- they are not the WCAG matrix above, and a button on the one
+    page they render does not change what they are proving.
     """
     built = pipeline.render(
         "doc", "document.md", "document.html", workdir=pdf_workspace
