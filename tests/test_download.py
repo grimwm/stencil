@@ -224,9 +224,13 @@ def assert_download_include_between_theme_and_scripts(template: str) -> None:
     assert DOWNLOAD_INCLUDE in text, (
         f"{template} does not include _download.html.j2 at all"
     )
-    theme_at = text.index("{% include '_theme-toggle.html.j2' %}")
+    theme_include = "{% include '_theme-toggle.html.j2' %}"
+    scripts_include = "{% include '_page-scripts.html.j2' %}"
+    for needed in (theme_include, scripts_include):
+        assert needed in text, f"{template} no longer contains {needed}"
+    theme_at = text.index(theme_include)
     download_at = text.index(DOWNLOAD_INCLUDE)
-    scripts_at = text.index("{% include '_page-scripts.html.j2' %}")
+    scripts_at = text.index(scripts_include)
     assert theme_at < download_at < scripts_at, (
         f"{template}: _download.html.j2 must be included strictly between "
         "_theme-toggle.html.j2 and _page-scripts.html.j2"
@@ -275,7 +279,15 @@ def test_the_download_include_is_wrapped_in_the_show_download_conditional(templa
     silently swallow the scripts that follow. Neither shows up anywhere else.
     """
     text = source(template)
+    assert "$if(show_download)$" in text, (
+        f"{template} does not gate _download.html.j2 on $if(show_download)$ at "
+        "all, so the control would render on every page regardless of front "
+        "matter"
+    )
     start = text.index("$if(show_download)$")
+    assert "$endif$" in text[start:], (
+        f"{template} opens $if(show_download)$ and never closes it"
+    )
     end = text.index("$endif$", start)
     guarded = text[start:end]
     assert DOWNLOAD_INCLUDE in guarded, (
@@ -360,10 +372,12 @@ def render_matrix(generate_package, config: dict, kind: str, text: str):
     file.
     """
     package = generate_package(config)
-    source = "d.md" if kind == "doc" else "s.md"
-    (package / source).write_text(text)
-    output = f"{Path(source).stem}.html"
-    result = pipeline.render(kind, source, output, workdir=package)
+    # Not `source`: that is this module's template-reading helper, and
+    # shadowing it here made the two impossible to tell apart at a glance.
+    source_name = "d.md" if kind == "doc" else "s.md"
+    (package / source_name).write_text(text)
+    output = f"{Path(source_name).stem}.html"
+    result = pipeline.render(kind, source_name, output, workdir=package)
     assert result.returncode == 0, f"pandoc exited {result.returncode}\n{result.stderr}"
     return BeautifulSoup((package / output).read_text(), "html.parser")
 
@@ -449,14 +463,22 @@ def test_show_download_resolution_matrix(
 def test_yaml_1_1_no_is_false_at_the_config_level(generate_package, kind, build):
     """The config side of the boolean trap, pinned rather than inferred.
 
-    .config.yaml is read by PyYAML, which is YAML 1.1 -- an unquoted `no`
-    becomes a real Python False there, unlike front matter, which pandoc
-    reads as YAML 1.2 and hands over as the string "no" (see
-    test_the_ways_of_writing_no above, and frontmatter-filter.lua.j2's own
-    comment). yaml.safe_load is used here rather than writing `False`
-    directly, so this test would fail if PyYAML's own coercion ever changed --
-    the point is to pin what the config author's literal spelling means, not
-    just what a Python bool does.
+    .config.yaml is read by PyYAML, which is YAML 1.1, so an unquoted `no`
+    becomes a real Python False there.
+
+    NOT "unlike front matter", which is what this docstring used to say. The
+    pinned pandoc resolves YAML 1.1 booleans too -- measured, see this
+    module's own docstring -- so `no` reaches the Lua filter as a boolean on
+    that side as well. The two sides differ in what they do with a value that
+    is NEITHER a boolean nor blank: front matter runs it through truthy() and
+    its table of false-ish words, while the config side refuses and names the
+    key. frontmatter-filter.lua.j2's comment still claims YAML 1.2; that is
+    stale and tracked as stn-38o.
+
+    yaml.safe_load is used here rather than writing `False` directly, so this
+    test would fail if PyYAML's own coercion ever changed -- the point is to
+    pin what the config author's literal spelling means, not just what a
+    Python bool does.
     """
     parsed = yaml.safe_load("show_download: no\n")["show_download"]
     assert parsed is False, "sanity: PyYAML should parse unquoted `no` as False"
@@ -613,6 +635,11 @@ RUNTIME_DOCUMENT = document('title: "Doc"\n') + (
 
 PROBE_MARKER = "<<<DOWNLOAD-RUNTIME>>>"
 
+# The probe prints this prefix so the payload can be found in stdout. It is
+# injected into the script below rather than spelled a second time in the
+# JavaScript: two copies of a sentinel drift, and when they do the fixture
+# fails with "printed no result" while the probe is working perfectly.
+
 # One script, both page kinds -- the same shape tests/test_check_access.py's
 # `accessibility` fixture uses for pa11y, so this pays for one container
 # start rather than two.
@@ -629,6 +656,7 @@ PROBE_MARKER = "<<<DOWNLOAD-RUNTIME>>>"
 # silently clobber the first file before the non-compounding assertion ever
 # reads it.
 RUNTIME_PROBE = r"""
+const MARKER = "__PROBE_MARKER__";
 const puppeteer = require("puppeteer");
 const fs = require("fs");
 const path = require("path");
@@ -703,13 +731,6 @@ async function downloadViaClick(page, client, downloadDir, selector) {
   return { filename: filename, filePath: filePath };
 }
 
-function describeChildrenInPage(el) {
-  return Array.from(el.children).map(function (child) {
-    var cls = (child.className || "").toString().trim();
-    return cls ? child.tagName + "." + cls.split(/\s+/).join(".") : child.tagName;
-  });
-}
-
 async function probeOne(browser, kind, filename, downloadRoot) {
   var page = await browser.newPage();
   var pageErrors = [];
@@ -718,16 +739,31 @@ async function probeOne(browser, kind, filename, downloadRoot) {
 
   await page.goto("file:///workspace/" + filename, { waitUntil: "networkidle0" });
 
-  // MEASURE THE HEAD: captured as soon as the page has loaded, then again
-  // after __mermaidReady, so a future change that starts mutating <head>
-  // between parse and mermaid-ready shows up as a number here instead of an
-  // assumption nobody wrote down.
-  var headBefore = await page.evaluate(function () { return document.head.innerHTML; });
+  // MEASURE THE HEAD. This used to sample innerHTML here and again after
+  // __mermaidReady and assert the two matched -- which passed, and meant
+  // nothing. page.goto resolves on networkidle0, and a generated page makes
+  // no network requests at all, so by the time the first sample is taken
+  // mermaid has long since run. The window the comparison claimed to measure
+  // was already closed.
+  //
+  // What is worth reporting is whether the head is mutated AT ALL, because
+  // the download control's whole revert strategy turns on it. It is: the
+  // vendored mermaid bundle prepends a cytoscape stylesheet for the mindmap
+  // in RUNTIME_DOCUMENT. Report that as a fact the tests can assert on, so
+  // the fixture is proved to exercise the path rather than assumed to.
   await page
     .waitForFunction(function () { return window.__mermaidReady === true; }, { timeout: 30000 })
     .catch(function () {});
   var mermaidReady = await page.evaluate(function () { return window.__mermaidReady === true; });
-  var headAfter = await page.evaluate(function () { return document.head.innerHTML; });
+  var headState = await page.evaluate(function () {
+    return {
+      cytoscapeStylePresent:
+        document.getElementById("__________cytoscape_stylesheet") !== null,
+      firstHeadChild: document.head.children.length
+        ? document.head.children[0].tagName
+        : null,
+    };
+  });
 
   var structure = await page.evaluate(function (kindArg) {
     function describeChildrenInPage2(el) {
@@ -771,7 +807,8 @@ async function probeOne(browser, kind, filename, downloadRoot) {
   var result = {
     pageErrors: pageErrors,
     mermaidReady: mermaidReady,
-    headMatchesAfterMermaidReady: headBefore === headAfter,
+    cytoscapeStylePresent: headState.cytoscapeStylePresent,
+    firstHeadChild: headState.firstHeadChild,
     containerChildren: structure.containerChildren,
     buttonFound: structure.buttonFound,
     insideRadiogroup:
@@ -835,9 +872,9 @@ async function probeOne(browser, kind, filename, downloadRoot) {
   } finally {
     await browser.close();
   }
-  console.log("<<<DOWNLOAD-RUNTIME>>>" + JSON.stringify(out));
+  console.log(MARKER + JSON.stringify(out));
 })().catch(function (err) {
-  console.log("<<<DOWNLOAD-RUNTIME>>>" + JSON.stringify({ error: String(err) }));
+  console.log(MARKER + JSON.stringify({ error: String(err) }));
   process.exit(1);
 });
 """
@@ -884,7 +921,11 @@ def download_runtime(pdf_workspace):
         "slide": (pdf_workspace / "download-runtime-deck.html").read_text(),
     }
 
-    result = pipeline.run_in_browser(RUNTIME_PROBE, workdir=pdf_workspace, timeout=300)
+    result = pipeline.run_in_browser(
+        RUNTIME_PROBE.replace("__PROBE_MARKER__", PROBE_MARKER),
+        workdir=pdf_workspace,
+        timeout=300,
+    )
     line = next(
         (ln for ln in result.stdout.splitlines() if ln.startswith(PROBE_MARKER)), None
     )
@@ -950,6 +991,7 @@ def _require_attempted_download(download: dict, page_desc: str) -> None:
 # --- precondition: these are the pages the earlier sections already test ---
 
 
+@pytest.mark.integration
 def test_the_runtime_fixtures_still_have_teeth(download_runtime):
     """A precondition for every absence assertion in this section.
 
@@ -1378,15 +1420,46 @@ def test_the_download_button_is_absent_from_a_real_pdf(
 
 @pytest.mark.integration
 @pytest.mark.parametrize("kind", ["doc", "slide"])
-def test_head_is_unchanged_between_load_and_mermaid_ready(download_runtime, kind):
-    """Justifies capturing document.head.innerHTML at parse time in
-    stn-bd3.4: if this ever goes False, that capture point needs to move
-    earlier, and this is the test that will say so with a number."""
-    assert download_runtime[kind]["headMatchesAfterMermaidReady"] is True, (
-        f"the {kind} page's <head> changed between load and __mermaidReady -- "
-        "a parse-time capture of it would be stale by the time a reader "
-        "could click download"
-    )
+def test_the_runtime_prepends_a_stylesheet_to_the_head(download_runtime, kind):
+    """The fact the whole head-revert strategy turns on, asserted not assumed.
+
+    This replaces a test that compared document.head.innerHTML at two points
+    and asserted they matched. It passed, and it was empty: page.goto resolves
+    on networkidle0, a generated page makes no network requests, so the first
+    sample was already taken after mermaid had run.
+
+    Worse, it was guarding a design that no longer exists -- its docstring
+    justified capturing head.innerHTML at parse time, where the implementation
+    captures markers, and innerHTML equality would have caught a prepend that a
+    child count cannot.
+
+    So assert the thing that is actually true and actually load-bearing: the
+    runtime DOES mutate <head>, by PREPENDING. The vendored mermaid bundle
+    injects `__________cytoscape_stylesheet` for a cytoscape-backed diagram at
+    `a.insertBefore(h, a.children[0])`, ahead of even the charset meta. That
+    prepend is what falsified the original append-only revert, and if a mermaid
+    bump ever stops doing it this test says so rather than letting the fixture
+    quietly go toothless again.
+
+    The deck fixture has no mindmap, so only the document carries the
+    stylesheet; both kinds are checked so the asymmetry stays visible.
+    """
+    state = download_runtime[kind]
+    if kind == "doc":
+        assert state["cytoscapeStylePresent"] is True, (
+            "the document fixture no longer injects the cytoscape stylesheet, "
+            "so every assertion about reverting head mutation is now vacuous "
+            "-- restore a mindmap to RUNTIME_DOCUMENT"
+        )
+        assert state["firstHeadChild"] == "STYLE", (
+            "the cytoscape stylesheet is no longer the FIRST head child, so it "
+            "is no longer a prepend -- re-read _download.html.j2's revert, "
+            f"which exists because it is one. Got {state['firstHeadChild']!r}"
+        )
+    else:
+        assert state["cytoscapeStylePresent"] is False, (
+            "the deck fixture unexpectedly injected the cytoscape stylesheet"
+        )
 
 
 @pytest.mark.integration
