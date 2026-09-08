@@ -70,9 +70,15 @@ ACCEPTANCE NOW (read before "fixing" a result that looks wrong):
 
 from __future__ import annotations
 
+import copy
 from pathlib import Path
 
 import pytest
+import yaml
+from bs4 import BeautifulSoup
+
+from stencil import pipeline
+from stencil.generate import get_template_context
 
 TEMPLATES = Path(__file__).parent.parent / "stencil" / "templates"
 
@@ -233,3 +239,193 @@ def test_the_download_include_is_wrapped_in_the_show_download_conditional(templa
         "$if(show_download)$ ... $endif$, so the control would render "
         "whatever the front matter says"
     )
+
+
+# --- the config-level default: package, then config-wide, then True --------
+#
+# Everything above this line is per-document: the key lives only in front
+# matter, and truthy()'s hardcoded default of true is the only fallback. This
+# section is about stn-bd3's later widening -- a package, or a whole
+# .config.yaml, gets to change what an ABSENT key means, the same
+# narrowest-first shape brand_of() and the `lang` context key already use in
+# stencil/generate.py (package wins, then config-wide, then a hardcoded
+# default). A document's own front matter still outranks both, in EITHER
+# direction: an author can turn the control back on for one handout even
+# though their package turned it off, and off even though their package left
+# it on.
+#
+# render_soup (conftest.py) is built on the doc_package fixture, which is
+# pinned to the module-level DEMO_CONFIG -- it has no way to vary
+# show_download at the config or package level. MATRIX_CONFIG and
+# render_matrix() below repeat its shape (generate_package, then render real
+# markdown through the real pandoc container) for a config that does, mirroring
+# tests/test_config_validation.py::test_a_config_wide_lang_becomes_the_default
+# and ::test_a_package_lang_outranks_the_config_wide_one -- the precedent for
+# exactly this kind of key -- except the outcome under test is rendered
+# markup, not baked-in template text, because show_download's story is not
+# complete until a document's front matter has had a chance to override it.
+
+MATRIX_CONFIG = {
+    "packages": {
+        "demo": {
+            "name": "Demo",
+            "package_type": "none",
+            # A markdown file belongs to exactly one of docs/slides, so the two
+            # kinds need separate names even though render_matrix() overwrites
+            # whichever one it is asked to render.
+            "docs": ["d.md"],
+            "slides": ["s.md"],
+        }
+    },
+}
+
+
+def config_with(config_show_download, package_show_download) -> dict:
+    """MATRIX_CONFIG, with show_download optionally set at each level.
+
+    None means "leave the key unset" at that level, not "set it to None" --
+    show_download is never legitimately Python None once it reaches this
+    resolution, so the sentinel cannot collide with a real case.
+    """
+    config = copy.deepcopy(MATRIX_CONFIG)
+    if config_show_download is not None:
+        config["show_download"] = config_show_download
+    if package_show_download is not None:
+        config["packages"]["demo"]["show_download"] = package_show_download
+    return config
+
+
+def render_matrix(generate_package, config: dict, kind: str, text: str):
+    """render_soup's shape, for a config generate_package's fixture caller
+    controls directly instead of the fixed DEMO_CONFIG.
+
+    generate_package builds the scaffolding -- including html-template.html
+    and slide-template.html, since MATRIX_CONFIG's package has both docs and
+    slides -- and pipeline.render() drives the same pandoc container the
+    render fixture does, over the markdown written here rather than a fixture
+    file.
+    """
+    package = generate_package(config)
+    source = "d.md" if kind == "doc" else "s.md"
+    (package / source).write_text(text)
+    output = f"{Path(source).stem}.html"
+    result = pipeline.render(kind, source, output, workdir=package)
+    assert result.returncode == 0, f"pandoc exited {result.returncode}\n{result.stderr}"
+    return BeautifulSoup((package / output).read_text(), "html.parser")
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("kind,build", [("doc", document), ("slide", deck)])
+@pytest.mark.parametrize(
+    "config_value,package_value,extra_front_matter,expect_button",
+    [
+        pytest.param(None, None, "", True, id="nothing-set-anywhere"),
+        pytest.param(False, None, "", False, id="config-wide-false"),
+        pytest.param(
+            False, True, "", True, id="package-true-outranks-config-false"
+        ),
+        pytest.param(
+            True, False, "", False, id="package-false-outranks-config-true"
+        ),
+        pytest.param(
+            False,
+            None,
+            "show_download: true\n",
+            True,
+            id="front-matter-true-overrides-config-false",
+        ),
+        pytest.param(
+            None,
+            False,
+            "show_download: true\n",
+            True,
+            id="front-matter-true-overrides-package-false",
+        ),
+        pytest.param(
+            None,
+            True,
+            "show_download: false\n",
+            False,
+            id="front-matter-false-overrides-package-true",
+        ),
+    ],
+)
+def test_show_download_resolution_matrix(
+    generate_package,
+    kind,
+    build,
+    config_value,
+    package_value,
+    extra_front_matter,
+    expect_button,
+):
+    """Every combination of config-wide, package-level and front matter that
+    can disagree, for both a document and a deck.
+
+    The package/config half of this matrix is the precedent brand_of() and
+    lang already set: the narrower setting wins, and nothing here may be
+    written with `or`, because `package.get("show_download") or
+    config.get("show_download")` reads an explicit package-level False as
+    "unset" and falls through to the config value -- exactly the
+    package-false-outranks-config-true case below, which exists to catch
+    that.
+
+    The front-matter half is the direction that matters most and is easiest
+    to get wrong: an author must be able to turn the control back on for one
+    handout even when their package or config turned it off, and back off
+    even when their package left it on. Both directions are exercised.
+    """
+    config = config_with(config_value, package_value)
+    text = build(f'title: "T"\n{extra_front_matter}')
+    soup = render_matrix(generate_package, config, kind, text)
+    if expect_button:
+        assert has_download_control(soup), (
+            f"config={config_value!r} package={package_value!r} "
+            f"front matter={extra_front_matter!r} should show the control"
+        )
+    else:
+        assert not has_download_control(soup), (
+            f"config={config_value!r} package={package_value!r} "
+            f"front matter={extra_front_matter!r} should hide the control"
+        )
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("kind,build", [("doc", document), ("slide", deck)])
+def test_yaml_1_1_no_is_false_at_the_config_level(generate_package, kind, build):
+    """The config side of the boolean trap, pinned rather than inferred.
+
+    .config.yaml is read by PyYAML, which is YAML 1.1 -- an unquoted `no`
+    becomes a real Python False there, unlike front matter, which pandoc
+    reads as YAML 1.2 and hands over as the string "no" (see
+    test_the_ways_of_writing_no above, and frontmatter-filter.lua.j2's own
+    comment). yaml.safe_load is used here rather than writing `False`
+    directly, so this test would fail if PyYAML's own coercion ever changed --
+    the point is to pin what the config author's literal spelling means, not
+    just what a Python bool does.
+    """
+    parsed = yaml.safe_load("show_download: no\n")["show_download"]
+    assert parsed is False, "sanity: PyYAML should parse unquoted `no` as False"
+    config = config_with(parsed, None)
+    soup = render_matrix(generate_package, config, kind, build('title: "T"\n'))
+    assert not has_download_control(soup), (
+        "show_download: no at the config level should hide the control"
+    )
+
+
+def test_a_non_boolean_config_value_is_an_error():
+    """The config side is not front matter and does not get to guess.
+
+    Front matter's show_download runs through truthy(), which is built to
+    accept a spread of spellings pandoc might hand it. .config.yaml is read
+    straight by PyYAML, so by the time it reaches stencil the value is
+    whatever a config author wrote as YAML -- true/false booleans, or, if they
+    quoted it, a plain string. A quoted "no" is exactly that: not a coerced
+    False, just a string that happens to say "no". Silently reading it as
+    truthy (any non-empty string) or falsy (== "no") would both be guesses
+    about intent the config side is not entitled to make, so it must refuse
+    and name the key rather than pick a side.
+    """
+    config = config_with("no", None)
+    with pytest.raises(ValueError, match="show_download"):
+        get_template_context("demo", config)
