@@ -442,8 +442,28 @@ def get_template_context(package_id: str, config: dict) -> dict:
         # the comments at pipeline.NODE_IMAGE for why Chromium is not among
         # them.
         "node_image": pipeline.NODE_IMAGE,
-        "browser_npm_specs": pipeline.npm_specs(pipeline.BROWSER_NPM_PINS),
-        "format_npm_specs": pipeline.npm_specs(pipeline.FORMAT_NPM_PINS),
+        # Both installs go through `npm ci` against a committed lockfile, so
+        # what the scaffolding carries is a manifest (derived from the pins,
+        # written inline) and the lockfile itself (vendored, shipped verbatim).
+        # An exact version at the top level left the other 43 packages in the
+        # browser tree resolving within a range on every build; see stn-5hv and
+        # the comment above BROWSER_LOCKFILE in pipeline.py.
+        "browser_manifest": pipeline.npm_manifest(
+            pipeline.BROWSER_MANIFEST_NAME, pipeline.BROWSER_NPM_PINS
+        ),
+        "format_manifest": pipeline.npm_manifest(
+            pipeline.FORMAT_MANIFEST_NAME, pipeline.FORMAT_NPM_PINS
+        ),
+        "browser_lockfile": pipeline.read_lockfile(pipeline.BROWSER_LOCKFILE),
+        "format_lockfile": pipeline.read_lockfile(pipeline.FORMAT_LOCKFILE),
+        # The names those two land under in the package, which the Dockerfile
+        # COPYs and the format-md entrypoint cps, and the directories each
+        # install is rooted at.
+        "browser_lockfile_name": pipeline.BROWSER_LOCKFILE,
+        "format_lockfile_name": pipeline.FORMAT_LOCKFILE,
+        "browser_tools_dir": pipeline.BROWSER_TOOLS_DIR,
+        "browser_node_modules": pipeline.BROWSER_NODE_MODULES,
+        "format_tools_dir": pipeline.FORMAT_TOOLS_DIR,
         # CSS, JS and webfonts inlined into the pandoc templates. Loaded here
         # rather than fetched at page load, so a handout is self-contained and
         # make pdf does not depend on the network.
@@ -747,6 +767,110 @@ def copy_brand_image(
     print(f"Copied: {destination}")
 
 
+# The templates stencil injects itself, in render order. ONE list rather than
+# one per caller: generate_package reads it as template definitions and
+# get_generated_files reads it as destinations, and the two spellings drifting
+# is not a hypothetical -- the comment in get_generated_files records what it
+# cost last time, a package_sources-only doc package with five generated files
+# that `clean` could not see and `.gitignore` did not cover.
+#
+# What still has to be kept in step is the PREDICATE each group is emitted on.
+# tests/test_package_sources.py asserts every file a generated package holds is
+# one get_generated_files names, which is the guard that catches the next
+# addition whoever makes it.
+SHARED_PAGE_TEMPLATES = [
+    "frontmatter-filter.lua.j2",
+    "hidden-filter.lua.j2",
+    "mermaid-figure-filter.lua.j2",
+    "figure-name-filter.lua.j2",
+    "embed-images.lua.j2",
+    # Decides whether the highlighter rides along; see
+    # _CODE_BUNDLE_AFTER_HIDDEN in pipeline.py for why it runs last.
+    "code-bundle-filter.lua.j2",
+    # Drives the `pdf` compose service. Emitted for every package that renders
+    # markdown, so `make pdf` needs no configuration to exist.
+    "html-to-pdf.js.j2",
+    # Shared image the pdf and check-access services build from, and the
+    # lockfile its `npm ci` resolves through. The two travel together: the
+    # Dockerfile COPYs the lockfile, so a package that has one and not the
+    # other cannot build.
+    "Dockerfile.browser.j2",
+    "browser-package-lock.json.j2",
+]
+
+# Emitted for a doc package, and for one built only from package_sources --
+# Makefile-pkg runs those through the doc service, which names this template.
+DOC_PAGE_TEMPLATES = ["html-template.html.j2"]
+
+SLIDE_PAGE_TEMPLATES = ["slide-template.html.j2", "slide-sections.lua.j2"]
+
+# The compose file's format-md service copies this lockfile into place and runs
+# `npm ci` against it, so the file has to exist wherever that service does.
+#
+# EMITTED ON THE COMPOSE FILE, NOT ON has_pages, and that distinction is a
+# regression this nearly shipped with. `templates:` is config-level and applies
+# to every package, so a `package_type: none` package with no docs and no
+# slides still gets a docker-compose.yml -- and `make format-md` worked for it,
+# because installing by name needs nothing on disk. Keyed off has_pages, the
+# lockfile would not be written for that package and the service would fail on
+# `cp: can't stat`. Everything else stencil injects is a markdown-rendering
+# concern; formatting markdown a package merely contains is not.
+COMPOSE_DEST = "docker-compose.yml"
+COMPOSE_TEMPLATES = ["format-package-lock.json.j2"]
+
+
+def template_dest(src: str) -> str:
+    """The filename a template renders to, absent an explicit ``dest``."""
+    return src.removesuffix(".j2")
+
+
+def when_holds(tdef: dict, context: dict) -> bool:
+    """Whether a template definition's ``when`` condition is satisfied.
+
+    A name, or a list of names, all of which must be truthy in the context.
+    One spelling, because three copies of this loop is how a template starts
+    being rendered under one condition and cleaned under another.
+    """
+    when = tdef.get("when")
+    if when is None:
+        return True
+    if isinstance(when, str):
+        when = [when]
+    return all(context.get(key) for key in when)
+
+
+def emits(template_defs: list, context: dict, dest: str) -> bool:
+    """True when this package's template list produces ``dest``.
+
+    Honours ``when``, so a consumer who gates their compose file on a feature
+    flag does not get a lockfile for a service they did not ask for.
+    """
+    return any(
+        tdef.get("dest", template_dest(tdef.get("src", ""))) == dest
+        for tdef in template_defs
+        if when_holds(tdef, context)
+    )
+
+
+def injected_sources(config_templates: list, context: dict) -> list[str]:
+    """Every template stencil adds to a package's own list, in render order."""
+    sources: list[str] = []
+    if context.get("has_pages"):
+        if context.get("has_docs") or context.get("has_package_sources"):
+            sources += DOC_PAGE_TEMPLATES
+        sources += SHARED_PAGE_TEMPLATES
+        if context.get("has_slides"):
+            sources += SLIDE_PAGE_TEMPLATES
+    if emits(config_templates, context, COMPOSE_DEST):
+        sources += COMPOSE_TEMPLATES
+    return sources
+
+
+def injected_templates(config_templates: list, context: dict) -> list[dict]:
+    """``injected_sources`` as template definitions render_templates accepts."""
+    return [{"src": src} for src in injected_sources(config_templates, context)]
+
+
 def generate_package(
     env: Environment,
     config: dict,
@@ -771,33 +895,8 @@ def generate_package(
             output_dir.mkdir(parents=True)
             print(f"Created directory: {output_dir}")
 
-    template_defs = list(config.get("templates", []))
-    # When a package renders markdown, always include the pandoc templates and Lua
-    # filters it needs so a config can't forget them.
-    if context.get("has_pages"):
-        doc_templates = [
-            {"src": "frontmatter-filter.lua.j2"},
-            {"src": "hidden-filter.lua.j2"},
-            {"src": "mermaid-figure-filter.lua.j2"},
-            {"src": "figure-name-filter.lua.j2"},
-            {"src": "embed-images.lua.j2"},
-            # Decides whether the highlighter rides along; see
-            # _CODE_BUNDLE_AFTER_HIDDEN in pipeline.py for why it runs last.
-            {"src": "code-bundle-filter.lua.j2"},
-            # Drives the `pdf` compose service. Emitted for every package that
-            # renders markdown, so `make pdf` needs no configuration to exist.
-            {"src": "html-to-pdf.js.j2"},
-            # Shared image the pdf and check-access services build from.
-            {"src": "Dockerfile.browser.j2"},
-        ]
-        # Also for a doc package built from package_sources: Makefile-pkg runs
-        # its sources through the doc service, which names this template.
-        if context.get("has_docs") or context.get("has_package_sources"):
-            doc_templates.insert(0, {"src": "html-template.html.j2"})
-        if context.get("has_slides"):
-            doc_templates.append({"src": "slide-template.html.j2"})
-            doc_templates.append({"src": "slide-sections.lua.j2"})
-        template_defs = doc_templates + template_defs
+    config_templates = list(config.get("templates", []))
+    template_defs = injected_templates(config_templates, context) + config_templates
     if not template_defs:
         print(f"Error: No templates defined in config", file=sys.stderr)
         return None
@@ -829,16 +928,10 @@ def render_templates(
     templates = []
 
     for tdef in template_defs:
-        when = tdef.get("when")
-        if when is not None:
-            # Normalize to list
-            if isinstance(when, str):
-                when = [when]
-            if not all(context.get(k) for k in when):
-                continue
+        if not when_holds(tdef, context):
+            continue
         src = tdef["src"]
-        dest = tdef.get("dest", src.removesuffix(".j2"))
-        templates.append((src, dest))
+        templates.append((src, tdef.get("dest", template_dest(src))))
 
     for template_name, output_name in templates:
         try:
@@ -887,22 +980,7 @@ def get_generated_files(config: dict) -> list[str]:
     on templates by checking against each package's context.
     """
     entries = set()
-
-    # Templates always injected in generate_package for markdown-rendering packages
-    shared_page_files = [
-        "frontmatter-filter.lua",
-        "hidden-filter.lua",
-        "mermaid-figure-filter.lua",
-        "figure-name-filter.lua",
-        "embed-images.lua",
-        "code-bundle-filter.lua",
-        "html-to-pdf.js",
-        "Dockerfile.browser",
-    ]
-    doc_template_files = ["html-template.html"]
-    # A copied brand image is generated output like anything else here, so it
-    # belongs in the managed .gitignore section rather than in the repository.
-    slide_template_files = ["slide-template.html", "slide-sections.lua"]
+    config_templates = config.get("templates", [])
 
     # Process each package
     for package_id, package in config.get("packages", {}).items():
@@ -915,38 +993,27 @@ def get_generated_files(config: dict) -> list[str]:
             continue
 
         # Check each template's `when` condition against this package's context
-        for tdef in config.get("templates", []):
-            when = tdef.get("when")
-            if when is not None:
-                if isinstance(when, str):
-                    when = [when]
-                if not all(context.get(k) for k in when):
-                    continue
-            src = tdef.get("src", "")
-            dest = tdef.get("dest", src.removesuffix(".j2"))
+        for tdef in config_templates:
+            if not when_holds(tdef, context):
+                continue
+            dest = tdef.get("dest", template_dest(tdef.get("src", "")))
             if dest:
                 entries.add(f"{pkg_dir}/{dest}")
 
-        # Add template outputs for packages that render markdown. These read
-        # the derived context rather than the raw keys, so the predicates are
-        # the same ones generate_package injects on -- spelling them twice is
-        # what left a package_sources-only doc package with five generated
-        # files that clean could not see.
+        # What stencil injects, from the one list generate_package renders
+        # from, on the same predicates -- spelling them twice is what left a
+        # package_sources-only doc package with five generated files that clean
+        # could not see.
+        for src in injected_sources(config_templates, context):
+            entries.add(f"{pkg_dir}/{template_dest(src)}")
+
         if context["has_pages"]:
-            for f in shared_page_files:
-                entries.add(f"{pkg_dir}/{f}")
             # The copied brand image, which `clean` should be able to see and
             # git should not. Named by its basename, which is what it is
-            # copied to.
+            # copied to. Not a template, so it is not in the list above.
             brand_image = brand_image_path(brand_of(package, config)[0])
             if brand_image:
                 entries.add(f"{pkg_dir}/{Path(brand_image).name}")
-        if context["has_docs"] or context["has_package_sources"]:
-            for f in doc_template_files:
-                entries.add(f"{pkg_dir}/{f}")
-        if context["has_slides"]:
-            for f in slide_template_files:
-                entries.add(f"{pkg_dir}/{f}")
 
         # docs and slides generate .html files from .md files, and `make pdf`
         # prints each of those to a .pdf beside it (glob for feature variants)

@@ -401,9 +401,36 @@ something that is not there.
 `PANDOC_IMAGE`, `VERAPDF_IMAGE`, `NODE_IMAGE`, `BROWSER_NPM_PINS` and `FORMAT_NPM_PINS`
 are the complete set of versions a generated package builds with. They are exact, they are
 rendered into the templates from there rather than spelled out in them, and bumping one is
-one edit followed by a run of the container tier. `tests/test_pins.py` fails if any
-`npm install` in any generated file names a package without a version, so a new tool added
-to a template cannot arrive unpinned.
+one edit followed by a run of the container tier. `tests/test_pins.py` fails if anything in
+a generated file installs by name at all, so a new tool added to a template cannot arrive
+unpinned.
+
+**The two npm pin maps are a request; the lockfile beside them is the answer.**
+`BROWSER_NPM_PINS` fixes three packages and the exact puppeteer-core puppeteer declares —
+and used to leave the other 43 in the resolved tree floating (`stn-5hv`). What fixes those
+is `stencil/assets/browser-package-lock.json` and `stencil/assets/format-package-lock.json`,
+committed, installed with `npm ci`, and verified per tarball by sha512 rather than by a
+version number. That is the same vendoring shape as the page assets: a maintainer runs a
+script once, with the network, and `stencil gen` ships the artifact.
+
+So **bumping a pin is two steps, not one**:
+
+```bash
+$EDITOR stencil/pipeline.py             # the version
+python3 scripts/vendor_npm_locks.py     # re-resolve, needs docker/podman + network
+```
+
+Commit both together. Forgetting the second is loud in three places rather than silent:
+`tests/test_pins.py` fails on the root dependencies, the container tier fails on the
+installed tree, and `npm ci` itself refuses with `EUSAGE ... lock file's pdf-lib@1.17.1 does not satisfy pdf-lib@1.17.0`. A lockfile is a supply-chain artifact, so read the
+re-vendoring diff as one: check that every changed `resolved` still points at
+registry.npmjs.org (a test refuses anything else), and read the advisories for whatever
+moved transitively, not only for the package you bumped.
+
+A generated package therefore carries two files it did not before —
+`browser-package-lock.json` and `format-package-lock.json`. The `package.json` each install
+needs is derived from the pins and written inline by the Dockerfile and the format-md
+entrypoint, so there is still one place a version is written down.
 
 The one thing not pinned is Chromium, and that is a decision rather than an oversight —
 `stn-s5b`, with the measurements, in `Dockerfile.browser.j2`'s comment. Alpine keeps one
@@ -423,7 +450,11 @@ The cost of pinning is that a pin does not update itself: a CVE disclosed agains
 release notes — and be wary of a release that is only days old, which is the window in
 which a compromised one is usually still being found. `npm audit` over the resolved tree
 reported clean at the versions 0.31.0 pinned; that was a measurement of a day, not a
-property of the pins. The transitive tree below them is not pinned at all — `stn-5hv`.
+property of the pins, and the lockfile does not change that — it fixes *which* code you
+get, not whether that code is sound.
+
+The images are still pinned by mutable tag rather than by digest, for all three of them —
+`stn-8vi`.
 
 ### Keep the two guides in step with the templates
 

@@ -3,6 +3,18 @@
   # three floating installs stn-s5b found: it rewrites every markdown file in
   # the package, so a major landing between two runs reformats a course's whole
   # source tree and buries the actual edit.
+  #
+  # Installed with `npm ci` against the lockfile beside this file, for the
+  # reason Dockerfile.browser is (stn-5hv): naming two exact versions left
+  # prettier's own dependencies floating, and prettier is the process that
+  # rewrites the markdown. The manifest is written inline because it is derived
+  # from the pins; the lockfile is shipped because only npm can compute it.
+  #
+  # THE SUBSHELL IS NOT A STYLE CHOICE. working_dir is /workspace, which is the
+  # consumer's own package directory, and a course package legitimately holds a
+  # package.json of its own. Running npm from there is asking which manifest it
+  # resolves; running it from /tmp/fmt is not asking. The subshell keeps the
+  # prettier invocation below in /workspace, where the `**/*.md` glob belongs.
   format-md:
     image: {{ node_image }}
     volumes:
@@ -21,9 +33,12 @@
       - -c
       - |
         echo "Formatting markdown files..."
-        npm install --prefix /tmp/fmt {{ format_npm_specs | join(' ') }} && \
-        /tmp/fmt/node_modules/.bin/prettier \
-          --plugin /tmp/fmt/node_modules/@awmottaz/prettier-plugin-void-html/prettier-plugin-void-html.js \
+        mkdir -p {{ format_tools_dir }} && \
+        printf '%s\n' '{{ format_manifest }}' > {{ format_tools_dir }}/package.json && \
+        cp {{ format_lockfile_name }} {{ format_tools_dir }}/package-lock.json && \
+        (cd {{ format_tools_dir }} && npm ci --ignore-scripts --no-audit --no-fund) && \
+        {{ format_tools_dir }}/node_modules/.bin/prettier \
+          --plugin {{ format_tools_dir }}/node_modules/@awmottaz/prettier-plugin-void-html/prettier-plugin-void-html.js \
           --prose-wrap always --print-width 100 --write "**/*.md"
     restart: "no"
 

@@ -13,7 +13,12 @@ from __future__ import annotations
 
 import pytest
 
-from stencil.generate import get_generated_files, get_template_context
+from stencil.generate import (
+    SHARED_PAGE_TEMPLATES,
+    get_generated_files,
+    get_template_context,
+    template_dest,
+)
 
 from test_makefile import recipe
 
@@ -209,14 +214,11 @@ def test_a_doc_without_sources_gets_no_pkg_target(makefile):
 # could clean, and a pkg target naming a pandoc template that was never
 # written.
 
-SHARED_PAGE_FILES = [
-    "hidden-filter.lua",
-    "mermaid-figure-filter.lua",
-    "figure-name-filter.lua",
-    "embed-images.lua",
-    "html-to-pdf.js",
-    "Dockerfile.browser",
-]
+# Derived rather than listed. This was a hand-written subset of the files
+# generate.py injects, which is the third spelling of that list and the one
+# most likely to go quietly stale -- it is a test fixture, so nothing fails
+# when it falls behind, it just stops checking the file that was added.
+SHARED_PAGE_FILES = [template_dest(src) for src in SHARED_PAGE_TEMPLATES]
 
 
 def sources_only_config():
@@ -268,3 +270,55 @@ def test_a_docs_package_still_lists_every_page_file():
     listed = get_generated_files(config)
     for filename in SHARED_PAGE_FILES + ["html-template.html"]:
         assert f"demo/{filename}" in listed
+
+
+# --- the general form of the bug above --------------------------------------
+
+
+@pytest.mark.parametrize(
+    "package",
+    [
+        pytest.param({"package_type": "none"}, id="renders-nothing"),
+        pytest.param({"package_type": "none", "docs": ["README.md"]}, id="docs"),
+        pytest.param({"package_type": "none", "slides": ["Deck.md"]}, id="slides"),
+        pytest.param(
+            {"package_type": "none", "docs": ["README.md"], "slides": ["Deck.md"]},
+            id="both",
+        ),
+        pytest.param(
+            {
+                "package_type": "doc",
+                "package_name": "hs2.pdf",
+                "package_sources": ["md/*.md"],
+            },
+            id="package-sources-only",
+        ),
+    ],
+)
+def test_every_file_a_package_holds_is_one_clean_can_see(generate_package, package):
+    """The property, rather than one more hand-written list.
+
+    `stencil clean` and the managed `.gitignore` section are both driven by
+    `get_generated_files`, which used to spell the injected template list a
+    second time -- and the two drifted, leaving a package_sources-only doc
+    package with five files nothing could remove and git happily tracked. The
+    lists are one list now, but a predicate can still disagree: a template
+    injected under one condition and listed under another reproduces the same
+    bug with none of the duplication.
+
+    So this asserts the outcome instead. Generate a package, look at what is on
+    disk, and require `get_generated_files` to name every single file. It
+    catches the NEXT injected file, whoever adds it and whatever they forget.
+    """
+    package.setdefault("name", "Demo")
+    config = {"templates": MAKEFILE_TEMPLATES, "packages": {"demo": package}}
+    generated = generate_package(config)
+
+    listed = {entry.removeprefix("demo/") for entry in get_generated_files(config)}
+    on_disk = {path.name for path in generated.iterdir()}
+
+    assert on_disk - listed == set(), (
+        "stencil wrote files get_generated_files does not name, so `stencil "
+        "clean` leaves them behind and the managed .gitignore section does not "
+        "cover them"
+    )

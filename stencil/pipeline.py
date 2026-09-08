@@ -16,6 +16,8 @@ that the real build never uses.
 
 from __future__ import annotations
 
+import json
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -57,7 +59,12 @@ BROWSER_IMAGE_TAG = "localhost/stencil_browser:test"
 # VERAPDF_IMAGE, and pinning one of the three by digest buys defence in depth
 # for a third of the surface while making the convention inconsistent for
 # whoever bumps the next one. Raised by review; moving all three together is
-# stn-5hv, with the lockfile.
+# stn-8vi.
+#
+# stn-5hv, which this comment used to point at, closed the equivalent gap one
+# layer in -- the npm tree installed INTO this image is fixed by a committed
+# lockfile and verified by hash. That makes the image itself the remaining
+# floating input, and does not settle it.
 NODE_IMAGE = "docker.io/library/node:24.20.0-alpine3.24"
 
 # What the browser image installs. Exact, not `^`: stn-s5b was filed because
@@ -77,14 +84,27 @@ NODE_IMAGE = "docker.io/library/node:24.20.0-alpine3.24"
 # range, and a tree with two copies means `make check-access` drives a
 # different browser than `make pdf`. tests/test_pins.py asserts there is one.
 #
-# WHAT THIS DOES NOT PIN: the transitive tree. An exact version fixes these
-# three and the exact puppeteer-core puppeteer itself declares; everything
-# below that still resolves within a range at build time. `npm audit` over the
-# resolved tree reported no known advisory at any severity on the day these
-# were chosen, which is a measurement of that day and not a property of the
-# pin. Closing the gap properly means a committed lockfile and `npm ci` --
-# stencil already vendors its page assets exactly that way, in
-# scripts/vendor_page_assets.py -- and is tracked as stn-5hv.
+# THESE THREE NAMES ARE NOT WHAT FIXES THE TREE ANY MORE. An exact version
+# here fixes these three and the exact puppeteer-core puppeteer declares, and
+# nothing below that: every transitive dependency used to resolve within a
+# range at build time, so a rebuild months apart installed different code and
+# nothing verified integrity (stn-5hv). What fixes it now is
+# stencil/assets/browser-package-lock.json, committed, with a sha512 for all
+# 47 packages in the resolved tree, installed by `npm ci`.
+#
+# So this map has become the REQUEST and the lockfile is the ANSWER. They are
+# checked against each other two ways: tests/test_pins.py fails when the
+# lock's root dependencies stop equalling this dict, and `npm ci` itself
+# refuses a manifest the lock does not satisfy --
+#
+#     npm error `npm ci` can only install packages when your package.json and
+#     package-lock.json [...] are in sync.
+#     npm error Invalid: lock file's pdf-lib@1.17.1 does not satisfy
+#     pdf-lib@1.17.0
+#
+# -- so editing a version here without re-vendoring breaks the build loudly
+# rather than quietly installing something else. Re-vendor with
+# `python3 scripts/vendor_npm_locks.py` and commit both files together.
 #
 # WHEN BUMPING: pa11y 10.0.0 was ten days old when it was pinned to, which is
 # inside the window where a compromised release is usually still being found.
@@ -102,6 +122,57 @@ FORMAT_NPM_PINS = {
     "@awmottaz/prettier-plugin-void-html": "2.2.1",
     "prettier": "3.9.6",
 }
+
+# ---------------------------------------------------------------------------
+# The lockfiles the two installs above actually resolve through.
+#
+# Written once by scripts/vendor_npm_locks.py, committed under stencil/assets/,
+# and shipped into a generated package with no network access at generation
+# time -- the same shape as the page assets in stencil/assets.py, and for the
+# same reason. `stencil gen` does not touch the network; a maintainer running a
+# vendoring script does.
+#
+# `npm ci` NEEDS A MANIFEST AS WELL AS A LOCK, and refuses when the two
+# disagree. The manifest is derived from the pin maps above rather than
+# shipped, so a generated package gains two files rather than four and there is
+# still exactly one place a version is written down. It is rendered inline --
+# a `printf` in Dockerfile.browser, a `printf` in the format-md entrypoint --
+# from npm_manifest() below.
+#
+# THE COST BEING ACCEPTED, so nobody later "fixes" it by relaxing to a floating
+# install. A lockfile records URLs and hashes, not bytes. A version unpublished
+# from the registry, or a registry that cannot be reached, now fails the build
+# permanently, where installing by name would have succeeded with different
+# code. That is the trade this ticket exists to make -- a build that fails is
+# better than a handout rendered by something nobody chose -- and the way out
+# of it is to re-vendor, not to install by name again.
+#
+# What the lockfile does NOT do is judge what it pins. A re-vendor that pulls
+# in a newer transitive tree while the pins are unchanged passes every test
+# here and every build; reading that diff is a person's job, and
+# stencil/assets/README.md says what to look for.
+BROWSER_LOCKFILE = "browser-package-lock.json"
+FORMAT_LOCKFILE = "format-package-lock.json"
+
+# The `name` each manifest declares. It ends up in the lockfile's root entry,
+# so changing one means re-vendoring: `npm ci` compares them.
+BROWSER_MANIFEST_NAME = "stencil-browser-tools"
+FORMAT_MANIFEST_NAME = "stencil-format-md"
+
+# Where each install lands inside its container.
+#
+# NOT A GLOBAL PREFIX, and that is the cost stn-5hv named up front: `npm ci`
+# has no `--global`, so `npm install --global --prefix /opt/tools` -- which put
+# packages under /opt/tools/lib/node_modules and binaries under /opt/tools/bin
+# -- becomes an ordinary local install rooted at /opt/tools. The layout moves
+# with it: modules to node_modules, binaries to the node_modules/.bin symlinks
+# npm writes itself. Dockerfile.browser's NODE_PATH and PATH are built from
+# these constants for that reason; a rewiring that misses one leaves
+# `require("puppeteer")` or `pa11y` unresolvable at run time, which
+# tests/test_compose_check_access.py is what finds.
+BROWSER_TOOLS_DIR = "/opt/tools"
+BROWSER_NODE_MODULES = f"{BROWSER_TOOLS_DIR}/node_modules"
+FORMAT_TOOLS_DIR = "/tmp/fmt"
 
 # PDF/UA-1 conformance checking. Pinned, because veraPDF's rule set is the
 # thing being asserted against: an unpinned tag lets a build go red or green
@@ -264,13 +335,100 @@ _FRONTMATTER_FIRST = (
 KINDS = ("doc", "slide")
 
 
-def npm_specs(pins: dict[str, str]) -> list[str]:
-    """``{"pa11y": "10.0.0"}`` -> ``["pa11y@10.0.0"]``, for an install line.
+# An exact version and nothing else: no caret, no tilde, no range, no tag, no
+# `file:`/`git+ssh:` URL. Applied to the pin maps by npm_manifest, because a
+# manifest is the one place where a range would be accepted by npm and would
+# quietly reopen everything the lockfile closes. Prerelease and build metadata
+# are both allowed -- they are legal semver npm resolves, and refusing them
+# would be refusing a pin somebody may need rather than refusing a range.
+_EXACT_VERSION = re.compile(
+    r"^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$"
+)
 
-    Sorted, so the rendered scaffolding does not change because a dict was
-    edited in a different order.
+# A lowercase npm package name, optionally scoped, and nothing that could
+# escape the shell single-quoting the manifest is written into. See
+# npm_manifest. Uppercase is refused as well: npm has not accepted it in a new
+# name for years, and every pin here is lowercase, so allowing it would widen
+# the pattern for no case that exists.
+_SAFE_NAME = re.compile(r"^(?:@[a-z0-9][a-z0-9._-]*/)?[a-z0-9][a-z0-9._-]*$")
+
+
+def npm_manifest(name: str, pins: dict[str, str]) -> str:
+    """The package.json ``npm ci`` reads, as one line of JSON.
+
+    Deterministic: ``sort_keys`` and a fixed separator, so the rendered
+    scaffolding does not change because a dict was edited in a different order.
+    That property used to belong to ``npm_specs``, which sorted an install
+    line; the install line is gone and the manifest inherited the job.
+
+    ONE LINE, because both call sites write it with ``printf '%s\\n' '<json>'``
+    -- a Dockerfile ``RUN`` and a compose entrypoint. That makes the JSON a
+    single-quoted shell word, so a ``'`` anywhere in it would end the quoting
+    and hand the rest to sh, and a newline would end the printf. Both are
+    refused below rather than escaped: every name and version here comes from a
+    dict a maintainer edits by hand, so the honest answer to a value that
+    cannot be represented is to fail at generation time.
+
+    ``version`` is checked for exactness for a second reason. npm accepts
+    ``^25.10.0`` in a manifest quite happily, and ``npm ci`` would then install
+    whatever the lockfile holds while the manifest claimed a range -- the pin
+    would read as satisfied and mean nothing.
     """
-    return [f"{name}@{version}" for name, version in sorted(pins.items())]
+    if not _SAFE_NAME.match(name):
+        raise ValueError(f"manifest name {name!r} is not a plain npm package name")
+    for package, version in sorted(pins.items()):
+        if not _SAFE_NAME.match(package):
+            raise ValueError(
+                f"{package!r} is not a plain npm package name (lowercase, "
+                f"optionally scoped). Anything else would be written into a "
+                f"shell-quoted printf in Dockerfile.browser and the format-md "
+                f"entrypoint."
+            )
+        if not _EXACT_VERSION.match(version):
+            raise ValueError(
+                f"{package} is pinned to {version!r}, which is not an exact "
+                f"version. A range in the manifest reopens exactly what the "
+                f"lockfile closes: npm ci would install the locked tree while "
+                f"the pin claimed something looser."
+            )
+    return json.dumps(
+        {
+            "name": name,
+            "version": "0.0.0",
+            "private": True,
+            # Sorted here rather than by sort_keys, which would also reorder
+            # the four keys above into something no one writes a package.json
+            # in. Insertion order is deterministic in Python; the sort is what
+            # keeps a re-ordered pin map from changing the rendered text.
+            "dependencies": dict(sorted(pins.items())),
+        },
+        separators=(",", ":"),
+    )
+
+
+ASSETS_DIR = Path(__file__).parent / "assets"
+
+
+def read_lockfile(filename: str) -> str:
+    """A committed npm lockfile, ready to be rendered into a package.
+
+    The trailing newline is stripped and the template puts it back, so the
+    generated file is byte-identical to the committed one while the template
+    itself stays an ordinary text file ending in a newline.
+    """
+    path = ASSETS_DIR / filename
+    if not path.is_file():
+        raise FileNotFoundError(
+            f"npm lockfile not vendored: {filename}; "
+            f"run python3 scripts/vendor_npm_locks.py"
+        )
+    text = path.read_text(encoding="utf-8")
+    if not text.endswith("\n") or text.endswith("\n\n"):
+        raise ValueError(
+            f"{filename} must end with exactly one newline; npm writes it that "
+            f"way, and the generated copy is asserted byte-identical to this one"
+        )
+    return text[:-1]
 
 
 _TEMPLATE = {"doc": "html-template.html", "slide": "slide-template.html"}

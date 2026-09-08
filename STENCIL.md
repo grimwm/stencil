@@ -149,6 +149,21 @@ bundled templates produce:
 | `html-to-pdf.js`     | Headless-Chromium driver behind `make pdf`        |
 | `Dockerfile.browser` | Chromium image shared by `pdf` and `check-access` |
 
+Two of them are npm lockfiles, and they are generated output like everything else
+here — `stencil clean` removes them and the managed `.gitignore` section covers
+them. Do not edit them by hand; `stencil gen` overwrites them from stencil's own
+committed copies.
+
+| File                        | Purpose                                                     |
+| --------------------------- | ----------------------------------------------------------- |
+| `browser-package-lock.json` | What `Dockerfile.browser`'s `npm ci` installs, hash by hash |
+| `format-package-lock.json`  | The same for the `format-md` service's prettier             |
+
+`browser-package-lock.json` arrives with the pandoc/Chromium templates, for any
+package that renders markdown. `format-package-lock.json` arrives with
+`docker-compose.yml`, because `make format-md` formats the markdown a package
+contains whether or not it renders any.
+
 You can create custom templates for any project type. Templates are Jinja2 files (`.j2` suffix)
 that have access to the package context variables.
 

@@ -94,12 +94,15 @@ print-to-PDF.
 
 ```bash
 mkdir -p /workspace && cd /workspace
-# copy the BUILT html and html-to-pdf.js here; the script hardcodes file:///workspace/
-# Take the puppeteer and pdf-lib versions from the package's Dockerfile.browser
-# (the `npm install --global` line), so the direct dependencies match `make pdf`.
+# copy the BUILT html, html-to-pdf.js AND browser-package-lock.json here;
+# the script hardcodes file:///workspace/
 export PUPPETEER_SKIP_DOWNLOAD=1
-npm init -y >/dev/null
-npm install --no-audit --no-fund --ignore-scripts puppeteer@<pinned> pdf-lib@<pinned>
+# Install the image's tree, not an approximation of it. The manifest is the
+# single-quoted JSON on the `printf ... > /opt/tools/package.json` line in the
+# package's Dockerfile.browser; the lockfile is generated beside it.
+printf '%s\n' '<the JSON from Dockerfile.browser>' > package.json
+cp -f browser-package-lock.json package-lock.json
+npm ci --no-audit --no-fund --ignore-scripts
 chrome=(/opt/pw-browsers/chromium-*/chrome-linux/chrome)   # a glob does not expand inside an assignment
 test -x "${chrome[0]}"
 export PUPPETEER_EXECUTABLE_PATH="${chrome[0]}"
@@ -107,13 +110,15 @@ node html-to-pdf.js Deck.html Deck.pdf
 ```
 
 `--ignore-scripts` keeps a dependency's install hook from running against the files just copied
-in; nothing in this pair needs one, since Chromium is supplied rather than downloaded. Do not
-substitute floating versions: the pins are what make the result comparable to `make pdf`. They
-are also the limit of the comparison. Only the direct dependencies are pinned, here and in
-`Dockerfile.browser` alike; neither install carries a lockfile, so the transitive tree below
-puppeteer and pdf-lib can resolve differently from one day to the next (`stn-5hv` in stencil's
-tracker). This is a review build with the same direct versions, not a reproduction of the
-image.
+in; nothing here needs one, since Chromium is supplied rather than downloaded. Do not substitute
+`npm install` and a list of names: `npm ci` against the package's own lockfile is what makes the
+JavaScript identical to the image's rather than merely the same two top-level versions, and it
+verifies every tarball against a sha512 on the way in. It installs pa11y as well, which this
+build does not use — that is the cost of installing the image's tree rather than a subset of it.
+
+What is left of the gap is Chromium, which stencil deliberately does not pin (see
+`Dockerfile.browser`'s comment). This is a review build with the image's JavaScript and a
+different browser, not a reproduction of the image.
 
 Success prints the repairs applied. Verify with pdf-lib that `StructTreeRoot` and `Metadata` are
 present and the page geometry is right — letter landscape 792x612pt for decks, portrait for
