@@ -206,6 +206,34 @@ How the version gets bumped is written down in
   actually uses, which would take the font payload lower still; that is not in
   this release, and no coverage was removed in its place.
 
+- **The generated compose SERVICE is now run, not read** (`stn-8j4`). The
+  `check-access` fix above put the script in `stencil/pipeline.py` so a test
+  could execute it, and `tests/test_check_access.py` does. That is a weaker
+  claim than it sounds: the script is one line of a service definition, and
+  the bug was in a different line — the argument saying which directory to
+  search, disagreeing with the mount saying where the products are. A test
+  that assembles the mounts itself in Python supplies the correct answer as an
+  argument and then confirms the script uses it.
+
+  `tests/test_compose_check_access.py` runs what `make check-access` runs —
+  `compose build check-access`, then `compose run --rm check-access` — against
+  a real generated package, in both layouts, with the page put in place by the
+  compose `doc` service so the two services have to agree about `/out` rather
+  than being told separately. Nothing in this repository had ever run compose.
+
+  Proven against its own breach four ways, including the shipped error
+  verbatim (`net::ERR_FILE_NOT_FOUND at file:///workspace//out/document.html`).
+  Three of the four are also caught in the fast tier by a string assertion
+  standing in for the behaviour. The fourth is not caught anywhere else:
+  comparing the skip-list against `$f` instead of `$(basename "$f")` points
+  pa11y at stencil's own pandoc templates, and the 298 fast-tier tests and all
+  seven script-level cases stay green — because a skip-list is only wrong in a
+  directory that has something to skip, and the script-level tests use a
+  scrubbed one holding a single copied page.
+
+  Generated packages are unchanged: this adds `pipeline.compose_command()`,
+  `pipeline.compose()` and a test file, and rewrites no template.
+
 - 0.29.0 through 0.30.2 shipped without entries here. Git is the record of them.
 
 ## 0.28.2

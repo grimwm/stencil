@@ -33,6 +33,30 @@ test that covers only it proves nothing about the defect. The second layout,
 where products are on a separate mount at ``/out`` because a sibling directory
 is ``..`` away and ``..`` escapes a bind mount, is the one that could not pass.
 
+PROVEN AGAINST ITS OWN BREACH, four ways, because a test that passes against
+the bug is decoration:
+
+- Reintroducing ``file:///workspace/$f`` in ``CHECK_ACCESS_SCRIPT`` fails both
+  cases below with the shipped error verbatim --
+  ``net::ERR_FILE_NOT_FOUND at file:///workspace//out/document.html``.
+- Passing ``/workspace`` to the service in both layouts (dropping the
+  ``has_package_output_dir`` arm on the argument) fails the output_dir case
+  with ``check-access found no HTML to check``.
+- Dropping the ``build:`` stanza and clearing the tag locally, which is what a
+  contributor's machine looks like, fails both: the image the file names does
+  not exist and nothing built it.
+- Comparing the skip-list against ``$f`` rather than ``$(basename "$f")``
+  fails the first case with ``Checked 3 HTML file(s)`` -- pa11y pointed at
+  stencil's own pandoc templates.
+
+THE LAST ONE IS WHY THIS FILE EXISTS RATHER THAN A FIFTH CASE IN
+``tests/test_check_access.py``. The first three are also caught in the fast
+tier, by a string assertion standing in for the behaviour. The fourth is
+caught HERE AND NOWHERE ELSE: 298 fast-tier tests and all seven script-level
+cases stay green, because the script-level tests point the script at a scrubbed
+directory holding one copied page, and a skip-list is only wrong in a directory
+that has something to skip. A real generated package is that directory.
+
 WHY NO PORT IS BOUND, AND WHY THAT IS ASSERTED. Bringing compose into the
 container tier is the point at which a generated service could start taking a
 port a developer is already using -- 3000, 5173, 8000, 8080. None of them
