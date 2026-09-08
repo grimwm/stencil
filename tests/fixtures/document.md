@@ -30,6 +30,22 @@ exists to catch.
 
 :::
 
+## Fields on the flow record
+
+The header row is backticked on purpose. Inline code in a `thead` cell lands on
+the darkest fill in the palette, and until `stn-1y7` nothing in this suite
+rendered that pairing -- so `make check-access` measured every surface except
+the one that failed.
+
+| `field`      | Meaning                           | Example    |
+| ------------ | --------------------------------- | ---------- |
+| `arrival_ts` | When the item entered the queue   | `08:15:00` |
+| `wip_limit`  | Items allowed in progress at once | `4`        |
+| `lead_time`  | `departure_ts` minus `arrival_ts` | `36m`      |
+
+: Flow record fields. The caption is backticked too -- `caption` sits on
+`--surface-accent`, a second fill body prose never reaches.
+
 ## References
 
 ::: {#refs}

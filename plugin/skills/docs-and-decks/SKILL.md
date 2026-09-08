@@ -147,17 +147,6 @@ artifact.
 - Roll forward with `git revert` or a follow-up fix commit, again from a normal checkout or
   through the connector. Never `git reset --hard`, and never rewrite already-pushed history.
 
-## Known trap: inline code in a table header
-
-Inline `code` inside a `thead` cell fails WCAG AA in the light theme. `--code-inline` (`#c7254e`) on
-`--surface-accent-on` (`#d2def2`) measures 4.07:1. That colour clears 4.5:1 on every other surface
-in the theme — white 5.52, even rows 5.15, caption 4.73, code blocks 5.19 — so the header fill is
-the only place it fails. The dark pairing (`#ff9ab0` on `#2f4680`) passes at 4.55:1, a 0.05 margin.
-
-Until the palette changes, **do not put backticks in a markdown table header row**; put the literal
-values in the body cells instead. The upstream fix is `--code-inline: #b01f45` (4.95:1 on the header,
-6.71:1 on white, indistinguishable to the eye) or a scoped `th code {}` rule; tracked as `stn-1y7`.
-
 ## Course content from an adopted textbook
 
 When a course adopts a third-party textbook, use it to decide *what* to teach and in what order.
