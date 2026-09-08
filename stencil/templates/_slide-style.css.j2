@@ -192,6 +192,14 @@
        content instead, so two stay two and four sit in a row. wide-left and
        wide-right still work: they name two explicit tracks, which is exactly
        what a biased two-column split is. */
+    /* The gap paints space with no character behind it -- the shape that broke
+       the header before 0.13.0. Measured in a real PDF for stn-avj: fine, and
+       for a different reason than the header's fix. The columns are block
+       boxes, so they become separate text objects and an extractor recovers
+       the boundary from the advance. The tightest same-baseline arrangement
+       reachable was 31px against the 28px declared here; one more character
+       wraps the line and takes them off one baseline entirely.
+       tests/test_painted_gaps.py holds it. */
     .columns {
       display: grid;
       grid-auto-flow: column;

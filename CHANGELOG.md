@@ -9,6 +9,60 @@ and the closed epics in `.beads/issues.jsonl` are the readable index.
 How the version gets bumped is written down in
 [AGENTS.md](AGENTS.md#cutting-a-release), not here.
 
+## 0.33.0
+
+- **The other four painted gaps, measured rather than assumed.** 0.13.0 fixed
+  the document and deck headers, where a whitespace-only text node between two
+  inline boxes never reached the PDF text layer and "Author Ada Lovelace"
+  printed as "AuthorAda Lovelace". Four more places paint a gap with nothing
+  behind it — `.side-by-side`, deck `.columns`, the `header.doc-title` grid,
+  and the facts line — and none of them had ever been looked at in a PDF.
+  `stn-avj` asked for a measurement first, not a fix.
+
+  All four are fine, and the reason is worth writing down because it is *not*
+  the reason the header is fine. None of them has a character behind the gap:
+  pandoc emits a whitespace-only text node between the boxes and flex and grid
+  both discard it, which is exactly the 0.13.0 shape. What saves them is that
+  these are **block** boxes. Chromium emits each side as its own text object
+  with its own `Tm` origin, and every extractor recovers the boundary from the
+  advance — the same way it does between any two paragraphs or table cells in
+  any PDF.
+
+  Measured at the tightest arrangement each site can actually paint: deck
+  columns bottom out at a 31.0px same-baseline gap against the 28px declared
+  (one more character wraps the line and takes them off one baseline);
+  `.side-by-side` is a flat 58px, being 2rem plus a table cell's padding on
+  each side, and content wide enough to close that wraps to a stack; the
+  header's two grid columns never land adjacent in the content stream at all,
+  including with a wrapping title and no byline, which is as close as they get.
+
+- **The facts line's accessibility boundary is now enforced, not just
+  described.** `.doc-facts` being a flex container blockifies its `<span>`
+  children, and that — rather than any character — is what separates "Sep 05"
+  from the next fact's label in the accessibility tree, since the separators
+  are `aria-hidden` and contribute no whitespace. The stylesheet had said so
+  in a comment since 0.11.0 and nothing checked it.
+
+  `tests/test_painted_gaps.py` reads the *used* display of those children in
+  Chromium, so `display: block` on `.doc-facts` — which satisfies a stylesheet
+  grep while leaving the spans inline — now fails. Verified by mutation: it
+  does. Nothing else would have caught it: the PDF text layer stays correct
+  either way, because the separators carry real characters, and neither pa11y
+  engine behind `check-access` has a rule for adjacent text with no
+  separating whitespace.
+
+  Not fixed, deliberately: putting a character inside each flex item would
+  shift the `space-between` distribution, which is a rendered change to every
+  handout's header in exchange for a boundary that already exists.
+
+- **What the new sweeps do and do not catch, also measured by mutation.**
+  Narrowing a gap does not produce a jam — with `.columns { gap: 0 }` every
+  variant still extracted with a space, because two text objects stay two text
+  objects however close they are. Turning `.columns` into inline flow *does*
+  fail, through the non-vacuity check that requires at least one variant to
+  land on a single extracted line. Recorded in the test's own docstring so the
+  next reader knows what the guard is worth.
+
 ## 0.31.0
 
 - **Nothing a generated package installs was pinned.** `Dockerfile.browser`

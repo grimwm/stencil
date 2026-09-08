@@ -222,6 +222,13 @@
        wider than the page -- the flex row this replaces would have wrapped
        instead. A zero minimum lets the context wrap inside its column, which
        is the behaviour worth keeping. */
+    /* The column-gap paints space with no character behind it. Measured for
+       stn-avj, including the arrangement that brings the two columns closest
+       -- a wrapping title with no byline, so the context follows the subtitle
+       immediately in the content stream: they still extract apart, because
+       source order is identity, byline, context while grid placement puts
+       context back on row one, and the y jump between them is backwards.
+       tests/test_painted_gaps.py holds that case. */
     header.doc-title {
       display: grid;
       grid-template-columns: minmax(18rem, 1fr) minmax(0, auto);
@@ -610,7 +617,16 @@
       min-height: 100px;
     }
 
-    /* Side-by-side tables */
+    /* Side-by-side tables.
+
+       The gap paints space with no character behind it, which is the shape
+       that broke the header before 0.13.0. Measured in a real PDF for stn-avj:
+       it is fine here, and for a different reason than the header's fix. These
+       are block boxes, so the two tables become separate text objects and
+       every extractor recovers the boundary from the advance. The narrowest
+       glyph-to-glyph distance this can paint is 58px -- the 2rem below plus a
+       cell's padding on each side -- and content wide enough to close that
+       wraps to a stack instead. tests/test_painted_gaps.py holds it. */
     .side-by-side {
       display: flex;
       justify-content: center;
@@ -982,7 +998,15 @@
          label in the accessibility tree -- the fact separators are
          aria-hidden, so they contribute no whitespace of their own. Change
          this to inline flow and the facts line runs together for a screen
-         reader, silently, the way the author list did before 0.13.0. */
+         reader, silently, the way the author list did before 0.13.0.
+
+         stn-avj measured it and now enforces it:
+         tests/test_painted_gaps.py::test_the_facts_line_children_are_block_boxes
+         reads the USED display of these children in Chromium, so `display:
+         block` here -- which satisfies a stylesheet grep while leaving the
+         spans inline -- fails rather than shipping. The PDF text layer is
+         unaffected either way, because the separators carry real characters;
+         that is exactly why nothing else catches this. */
       display: flex;
       flex-wrap: wrap;
       align-items: baseline;

@@ -308,6 +308,12 @@ def test_the_document_pdf_header_extracts_as_words(header_pdf):
     # stay apart in the text layer because they are far apart in the content
     # stream, not because a character separates them. Asserted so that if that
     # ever stops being true it is a test failure rather than a printout.
+    #
+    # stn-avj measured what this had only assumed, including the arrangement
+    # that brings the two columns closest -- a wrapping title with no byline,
+    # where the context follows the subtitle immediately in the content stream.
+    # They still extract apart. tests/test_painted_gaps.py holds that case, and
+    # the other three painted gaps outside this header along with it.
     assert "SimulationCS 425.001" not in text, header_line(text, "Simulation")
 
     for jam in DOC_JAMS:
