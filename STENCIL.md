@@ -233,23 +233,25 @@ accessed in your templates.
 
 ## Makefile Targets
 
-These are the targets stencil writes into a generated package's `Makefile`. The generator itself
-is `stencil gen <package>`; the generated `Makefile` carries no target for it. A consuming
+These are the targets stencil writes into a generated package's `Makefile`. `doc`, `slide`, `pdf`,
+`check-access` and `check-pdf` exist only for a package with `docs:`, `slides:` or
+`package_sources`, and `slide` only when there are `slides:`. The generator itself is
+`stencil gen <package>`; the generated `Makefile` carries no target for it. A consuming
 repository may wrap `stencil gen` in a target of its own, and that wrapper is the repository's
 convention rather than stencil's.
 
-| Target         | Description                                                 |
-| -------------- | ----------------------------------------------------------- |
-| `help`         | Show available targets                                      |
-| `doc`          | Generate all HTML (add `WITH=hidden` for extras)            |
-| `slide`        | Generate HTML slide decks only                              |
-| `pdf`          | Print the generated HTML to PDF/UA-1 files                  |
-| `check-access` | Check the generated HTML against WCAG 2.1 AA (pa11y)        |
-| `check-pdf`    | Check the generated PDFs for PDF/UA-1 conformance (veraPDF) |
-| `format-md`    | Format markdown files with prettier                         |
-| `pkg`          | Build the package's submission zip or combined PDF          |
-| `clean`        | Remove generated files                                      |
-| `clean-pkg`    | Remove package-specific generated files                     |
+| Target         | Description                                                                                                       |
+| -------------- | ----------------------------------------------------------------------------------------------------------------- |
+| `help`         | Show available targets                                                                                            |
+| `doc`          | Generate all HTML (add `WITH=hidden` for extras)                                                                  |
+| `slide`        | Generate HTML slide decks only                                                                                    |
+| `pdf`          | Print the generated HTML to PDF/UA-1 files                                                                        |
+| `check-access` | Check the generated HTML against WCAG 2.1 AA (pa11y)                                                              |
+| `check-pdf`    | Check the generated PDFs for PDF/UA-1 conformance (veraPDF)                                                       |
+| `format-md`    | Format markdown files with prettier                                                                               |
+| `pkg`          | `zip` packages: the submission archive; `doc` packages with `package_sources`: the combined PDF. Absent otherwise |
+| `clean`        | Remove generated files                                                                                            |
+| `clean-pkg`    | Remove package-specific generated files                                                                           |
 
 ## Extending Stencil
 

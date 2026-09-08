@@ -95,11 +95,20 @@ print-to-PDF.
 ```bash
 mkdir -p /workspace && cd /workspace
 # copy the BUILT html and html-to-pdf.js here; the script hardcodes file:///workspace/
+# Take the puppeteer and pdf-lib versions from the package's Dockerfile.browser
+# (the `npm install --global` line), so this runs the same code as `make pdf`.
 export PUPPETEER_SKIP_DOWNLOAD=1
-npm init -y >/dev/null && npm install --no-audit --no-fund puppeteer pdf-lib
-export PUPPETEER_EXECUTABLE_PATH=/opt/pw-browsers/chromium-*/chrome-linux/chrome
+npm init -y >/dev/null
+npm install --no-audit --no-fund --ignore-scripts puppeteer@<pinned> pdf-lib@<pinned>
+chrome=(/opt/pw-browsers/chromium-*/chrome-linux/chrome)   # a glob does not expand inside an assignment
+test -x "${chrome[0]}"
+export PUPPETEER_EXECUTABLE_PATH="${chrome[0]}"
 node html-to-pdf.js Deck.html Deck.pdf
 ```
+
+`--ignore-scripts` keeps a dependency's install hook from running against the files just copied
+in; nothing in this pair needs one, since Chromium is supplied rather than downloaded. Do not
+substitute floating versions: the pins are what make the result comparable to `make pdf`.
 
 Success prints the repairs applied. Verify with pdf-lib that `StructTreeRoot` and `Metadata` are
 present and the page geometry is right — letter landscape 792x612pt for decks, portrait for
@@ -115,21 +124,23 @@ artifact.
 - **Never run `git status` or `git diff` there.** They refresh the index, then roll the refresh back
   by unlinking `.git/index.lock` — the one forbidden call. The lock survives and wedges every later
   `git add`, `commit` and `stash`, for the human in their own terminal as much as for the agent.
-  Recovery is `rm .git/index.lock`, which the agent cannot perform.
+  Recovery is for the human to remove the stale `.git/index.lock` from their own terminal, after
+  confirming no git process is still running (`pgrep -x git` prints nothing); the agent cannot
+  perform it, and removing a lock that a live git process holds can corrupt the index.
 - **Do not run git write commands there either.** `git commit` strands `.git/HEAD.lock`,
   `.git/objects/maintenance.lock` and `tmp_obj_*` files. A stranded `HEAD.lock` makes every later
   `git switch` and `git commit` fail with `fatal: unable to update HEAD`, and a switch that dies
   that way can rewrite the index while leaving HEAD behind — which surfaces as one file reported
-  both staged and unstaged. The repair is `git restore --staged <file>`; HEAD and the working tree
-  are fine, only the index is stale.
+  both staged and unstaged. The repair is `git restore --staged <file>`, run from a normal
+  checkout rather than the mount; HEAD and the working tree are fine, only the index is stale.
 - Safe to read: `git log`, `git show`, `git rev-list`, `git cat-file`, `git ls-files`,
   `git hash-object`, `git rev-parse`.
 - **Prefer a GitHub connector for anything that writes.** Creating branches, commits and pull
   requests through the API happens server-side, takes no local lock, and needs no SSH key in a
   sandbox. Never ask for a private key to be placed in one. Where no connector exists, prepare the
   files and let the human run git.
-- Roll forward with `git revert` or a follow-up fix commit. Never `git reset --hard`, and never
-  rewrite already-pushed history.
+- Roll forward with `git revert` or a follow-up fix commit, again from a normal checkout or
+  through the connector. Never `git reset --hard`, and never rewrite already-pushed history.
 
 ## Known trap: inline code in a table header
 

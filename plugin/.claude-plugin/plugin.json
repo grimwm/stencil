@@ -7,6 +7,6 @@
   },
   "homepage": "https://github.com/grimwm/stencil",
   "repository": "https://github.com/grimwm/stencil",
-  "license": "See LICENSE in the stencil repository",
+  "license": "MIT",
   "keywords": ["stencil", "pandoc", "slides", "pdf-ua", "accessibility", "cowork"]
 }
