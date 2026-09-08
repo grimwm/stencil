@@ -9,6 +9,132 @@ and the closed epics in `.beads/issues.jsonl` are the readable index.
 How the version gets bumped is written down in
 [AGENTS.md](AGENTS.md#cutting-a-release), not here.
 
+## 0.34.0
+
+- **An exact version pinned three packages and left 44 floating.** The browser
+  image ran `npm install --global --prefix /opt/tools pa11y@10.0.0 pdf-lib@1.17.1 puppeteer@25.10.0`, which fixes those three and the exact
+  puppeteer-core puppeteer declares. Everything below that — 44 of the 47
+  packages in the resolved tree — still resolved within a range at build time,
+  so a rebuild months apart installed different code, and nothing checked the
+  bytes of any of it. `stn-5hv`, raised by the adversarial review of `stn-ba9`.
+
+  Both installs now go through a committed lockfile and `npm ci`:
+  `stencil/assets/browser-package-lock.json` and
+  `stencil/assets/format-package-lock.json`, resolved once by a maintainer
+  running `python3 scripts/vendor_npm_locks.py` and shipped into every
+  generated package. `stencil gen` still touches no network — this is the
+  shape `stencil/assets.py` and `scripts/vendor_page_assets.py` already used
+  for the page assets, applied to npm.
+
+  The guarantee is a hash rather than a version number. Every one of the 47
+  entries carries a sha512 `integrity`, and npm verifies each tarball against
+  it: flipping one character of one hash fails the build with `npm error code EINTEGRITY`, measured rather than assumed.
+
+- **`npm ci` has no `--global`, so /opt/tools stopped being a prefix.**
+  `--global --prefix /opt/tools` put modules under `lib/node_modules` and
+  binaries under `bin`. The install is now an ordinary local one rooted at
+  `/opt/tools`, so `NODE_PATH` moves to `/opt/tools/node_modules` and `PATH` to
+  the `node_modules/.bin` symlinks npm writes itself — no hand-made symlink for
+  `pa11y` any more. Both paths are rendered from `stencil/pipeline.py`, and
+  `tests/test_compose_check_access.py` runs the real service through
+  `docker compose`, so a rewiring that leaves `pa11y` or `require("puppeteer")`
+  unresolvable fails there rather than in somebody's handout.
+
+- **A generated package gains two files**, `browser-package-lock.json` and
+  `format-package-lock.json`. `stencil clean` removes them and the managed
+  `.gitignore` section covers them. The `package.json` each install needs is
+  *derived* from the pins and written inline by the Dockerfile and the
+  format-md entrypoint, so there is still exactly one place a version is
+  written down, and a consumer's package directory gains two files rather than
+  four.
+
+  The browser lockfile travels with `Dockerfile.browser`, for any package that
+  renders markdown — the two must arrive together, because the Dockerfile
+  `COPY`s it. The format-md one is emitted for **every** package, with no
+  predicate, and that is the interesting half. Three predicates were tried and
+  each left a case behind: `has_pages` missed a package whose config-level
+  `templates:` produces a compose file anyway; the compose file's own name
+  missed a renamed `dest:`; adding the conventional spellings still missed a
+  consumer whose composition template has a name of its own and pulls the
+  partial in by include — which nothing outside a template body can see. The
+  file is 1.3 KB and `stencil clean` removes it, so shipping it to a package
+  that does not use it costs a small unused file, against a `make format-md`
+  that fails for a consumer who did nothing wrong. The service also checks for
+  it now and says what to run, rather than dying on `cp: can't stat`.
+
+- **Both `npm ci` invocations pass `--ignore-scripts`.** A lifecycle script
+  runs as root at image build time, with network, before any test looks — and
+  a transitive package that *gains* a `postinstall` arrives in a 48-entry JSON
+  diff as one added boolean. It costs nothing here: measured on npm 11.19.0,
+  `--ignore-scripts` still installs all 47 packages and still leaves `pa11y`
+  and `puppeteer` in `node_modules/.bin`, because bin symlinks are the
+  linker's work rather than a script's. The only install script in either tree
+  is puppeteer's, whose job `PUPPETEER_SKIP_DOWNLOAD` already cancels, and
+  `tests/test_pins.py` freezes that set so a new one is a failing test.
+
+- **`stencil clean` and the managed `.gitignore` now read the same list
+  `stencil gen` renders from.** They were two hand-maintained spellings of one
+  list, and the comment recording what that cost — a `package_sources`-only
+  doc package with five generated files nothing could remove — was sitting
+  directly above the second one while this change added entries to both. The
+  guard that outlives the refactor is a property test: generate a package,
+  look at what is on disk, and require `get_generated_files` to name every
+  file. It catches the next injected file, whoever adds it.
+
+- **`tests/test_compose_format_md.py` runs the format-md service** rather than
+  reading it, the way `tests/test_compose_check_access.py` does for
+  check-access. Its entrypoint went from one `npm install` that needed nothing
+  on disk to a `printf`, a `cp` and an `npm ci` whose behaviour depends on the
+  mount, the working directory and the YAML block scalar — none of which a
+  text assertion can see. One case formats a real file; the other plants a
+  `package.json` in the workspace naming a dependency that does not exist, and
+  proves `npm ci` never read it.
+
+- **A bumped pin with a stale lockfile is now a loud failure.**
+  `tests/test_pins.py` fails when the lockfile's root dependencies stop
+  equalling the pin maps, when an entry carries no integrity hash, when one
+  resolves from anywhere but registry.npmjs.org, and when the browser tree
+  grows a second puppeteer — that last one used to require building an image
+  and is now a fact about a file. `npm ci` refuses independently, with
+  `npm error code EUSAGE`, `Invalid: lock file's pdf-lib@1.17.1 does not satisfy pdf-lib@1.17.0`.
+
+  The container tier goes further: it compares *every* installed package
+  against the lockfile entry for its path, in both directions. Three pinned
+  names being right was never the claim in question.
+
+- **Breaking for a consumer that copied `docker-compose-html.yml.j2` rather
+  than including it.** The partial's context interface changed:
+  `format_npm_specs` is gone, replaced by `format_manifest`,
+  `format_lockfile_name` and `format_tools_dir`. A composition template that
+  includes the partial gets the new service and needs no edit.
+
+  **A copy is not a supported configuration and must be migrated.** It keeps
+  rendering, and what it renders is a service that installs prettier by name —
+  no lockfile, no integrity check, the whole tree below those two versions
+  re-resolved on every run. That is precisely the state this release exists to
+  end, and nothing in stencil can detect it, because a copy reads none of
+  stencil's context keys and `StrictUndefined` therefore has nothing to
+  complain about. Replace the copy with an include, or port the three keys and
+  the `npm ci` invocation into it;
+  `tests/test_template_contract.py` records the set a composition must
+  provide.
+
+- Filed rather than folded in: `stn-8vi`. `NODE_IMAGE`, `PANDOC_IMAGE` and
+  `VERAPDF_IMAGE` are pinned by tag, and a registry tag is mutable. That is the
+  same class of gap one layer further out, it affects all three images, and
+  pinning one of them by digest while the other two float would make the
+  convention inconsistent for whoever bumps the next one.
+
+- Also filed rather than fixed: `stn-86y`. The image resolves its tools
+  through `NODE_PATH`, which is Node's *last-resort* lookup — so a
+  `node_modules` directory in the consumer's own package folder outranks it.
+  Measured in the built image: a decoy resolves as `0.0.0-decoy` from
+  `/workspace/node_modules`. That predates this release and is not made worse
+  by it (`NODE_PATH` was already the mechanism; only its value moved), but it
+  is the one path by which something other than the locked tree renders a
+  handout, so it is written down with the measurement rather than left to be
+  rediscovered.
+
 ## 0.33.0
 
 Takes 0.33.0 rather than 0.32.0, which was in flight on another branch while

@@ -82,9 +82,22 @@ CONTRACT = {
     # this partial gets the pins; one that copied it keeps a service that
     # reformats every markdown file in the package with whatever prettier npm
     # served that morning.
+    #
+    # stn-5hv REPLACED format_npm_specs with three keys, and that is a breaking
+    # change to this interface rather than a rename. The service no longer
+    # installs from a list of names at all: it writes format_manifest as a
+    # package.json, copies the lockfile stencil generated beside the compose
+    # file, and runs `npm ci`. A consumer whose own composition template
+    # includes this partial gets all of that; one that COPIED the partial keeps
+    # a service that installs by name -- which still works, and still leaves
+    # prettier's own dependencies re-resolving on every run. StrictUndefined
+    # cannot tell them so, because a copy reads none of these keys. Say it in
+    # the release notes instead.
     "docker-compose-html.yml.j2": {
         "check_access_script",
-        "format_npm_specs",
+        "format_lockfile_name",
+        "format_manifest",
+        "format_tools_dir",
         "has_slides",
         "node_image",
         "package_id",
