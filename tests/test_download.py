@@ -284,17 +284,26 @@ def test_the_download_include_is_wrapped_in_the_show_download_conditional(templa
         "all, so the control would render on every page regardless of front "
         "matter"
     )
-    start = text.index("$if(show_download)$")
-    assert "$endif$" in text[start:], (
-        f"{template} opens $if(show_download)$ and never closes it"
+    # Anchor on the INCLUDE and work outwards, rather than taking the first
+    # conditional in the file and its first $endif$. Those coincide today, and
+    # would stop coinciding the moment either template grew a second pandoc
+    # conditional before this one -- at which point the test would be reading
+    # some other conditional's body and reporting on it confidently.
+    assert DOWNLOAD_INCLUDE in text, (
+        f"{template} does not include _download.html.j2 at all"
     )
-    end = text.index("$endif$", start)
-    guarded = text[start:end]
-    assert DOWNLOAD_INCLUDE in guarded, (
+    download_at = text.index(DOWNLOAD_INCLUDE)
+    start = text.rfind("$if(show_download)$", 0, download_at)
+    assert start != -1, (
         f"{template} includes _download.html.j2 outside "
         "$if(show_download)$ ... $endif$, so the control would render "
         "whatever the front matter says"
     )
+    assert "$endif$" in text[download_at:], (
+        f"{template} opens $if(show_download)$ and never closes it"
+    )
+    end = text.index("$endif$", download_at)
+    guarded = text[start:end]
     # The second failure the docstring above names, which the membership
     # check alone does not catch: a conditional closed AFTER the page-scripts
     # include swallows the page's own scripts whenever show_download is off.
@@ -346,17 +355,25 @@ MATRIX_CONFIG = {
 }
 
 
-def config_with(config_show_download, package_show_download) -> dict:
-    """MATRIX_CONFIG, with show_download optionally set at each level.
+#: "leave the key out entirely", as distinct from None, which is what PyYAML
+#: hands over for `show_download:` with nothing after it. Those are two
+#: different inputs -- absent and blank -- and the whole point of the blank
+#: case is that they resolve the SAME way, so a helper that cannot express
+#: both cannot test the claim. None used to double as "absent" here, which
+#: forced the blank test to bypass this helper and build its config by hand.
+UNSET = object()
 
-    None means "leave the key unset" at that level, not "set it to None" --
-    show_download is never legitimately Python None once it reaches this
-    resolution, so the sentinel cannot collide with a real case.
+
+def config_with(config_show_download=UNSET, package_show_download=UNSET) -> dict:
+    """MATRIX_CONFIG, with show_download set at either level, or left out.
+
+    Pass UNSET (the default) to leave the key absent at that level, and None
+    to write it blank -- `show_download:` with no value.
     """
     config = copy.deepcopy(MATRIX_CONFIG)
-    if config_show_download is not None:
+    if config_show_download is not UNSET:
         config["show_download"] = config_show_download
-    if package_show_download is not None:
+    if package_show_download is not UNSET:
         config["packages"]["demo"]["show_download"] = package_show_download
     return config
 
@@ -387,8 +404,8 @@ def render_matrix(generate_package, config: dict, kind: str, text: str):
 @pytest.mark.parametrize(
     "config_value,package_value,extra_front_matter,expect_button",
     [
-        pytest.param(None, None, "", True, id="nothing-set-anywhere"),
-        pytest.param(False, None, "", False, id="config-wide-false"),
+        pytest.param(UNSET, UNSET, "", True, id="nothing-set-anywhere"),
+        pytest.param(False, UNSET, "", False, id="config-wide-false"),
         pytest.param(
             False, True, "", True, id="package-true-outranks-config-false"
         ),
@@ -397,20 +414,20 @@ def render_matrix(generate_package, config: dict, kind: str, text: str):
         ),
         pytest.param(
             False,
-            None,
+            UNSET,
             "show_download: true\n",
             True,
             id="front-matter-true-overrides-config-false",
         ),
         pytest.param(
-            None,
+            UNSET,
             False,
             "show_download: true\n",
             True,
             id="front-matter-true-overrides-package-false",
         ),
         pytest.param(
-            None,
+            UNSET,
             True,
             "show_download: false\n",
             False,
@@ -482,7 +499,7 @@ def test_yaml_1_1_no_is_false_at_the_config_level(generate_package, kind, build)
     """
     parsed = yaml.safe_load("show_download: no\n")["show_download"]
     assert parsed is False, "sanity: PyYAML should parse unquoted `no` as False"
-    config = config_with(parsed, None)
+    config = config_with(config_show_download=parsed)
     soup = render_matrix(generate_package, config, kind, build('title: "T"\n'))
     assert not has_download_control(soup), (
         "show_download: no at the config level should hide the control"
@@ -505,13 +522,14 @@ def test_a_blank_config_value_is_the_same_as_an_absent_one():
     Blank falls through to the wider scope, so a blank package-level key
     still lets a config-wide setting decide.
     """
-    blank_everywhere = config_with(None, None)
-    blank_everywhere["show_download"] = None
-    blank_everywhere["packages"]["demo"]["show_download"] = None
+    blank_everywhere = config_with(
+        config_show_download=None, package_show_download=None
+    )
     assert get_template_context("demo", blank_everywhere)["config_show_download"] is True
 
-    blank_package_over_config_false = config_with(False, None)
-    blank_package_over_config_false["packages"]["demo"]["show_download"] = None
+    blank_package_over_config_false = config_with(
+        config_show_download=False, package_show_download=None
+    )
     context = get_template_context("demo", blank_package_over_config_false)
     assert context["config_show_download"] is False, (
         "a blank package-level show_download should defer to the config-wide "
@@ -532,7 +550,7 @@ def test_a_non_boolean_config_value_is_an_error():
     about intent the config side is not entitled to make, so it must refuse
     and name the key rather than pick a side.
     """
-    config = config_with("no", None)
+    config = config_with(config_show_download="no")
     with pytest.raises(ValueError, match="show_download"):
         get_template_context("demo", config)
 
@@ -735,7 +753,11 @@ async function probeOne(browser, kind, filename, downloadRoot) {
   var page = await browser.newPage();
   var pageErrors = [];
   page.on("pageerror", function (err) { pageErrors.push(String(err)); });
-  var client = await page.target().createCDPSession();
+  // Browser-target session, not the page's. Browser.setDownloadBehavior and
+  // the Browser.download* events belong to the browser domain; a page-target
+  // session happens to work because Chrome forwards them today, which is the
+  // kind of thing a Chromium bump takes away without warning.
+  var client = await browser.target().createCDPSession();
 
   await page.goto("file:///workspace/" + filename, { waitUntil: "networkidle0" });
 
@@ -759,8 +781,11 @@ async function probeOne(browser, kind, filename, downloadRoot) {
     return {
       cytoscapeStylePresent:
         document.getElementById("__________cytoscape_stylesheet") !== null,
-      firstHeadChild: document.head.children.length
-        ? document.head.children[0].tagName
+      // The ID, not the tag name. Any <style> landing first would satisfy a
+      // tagName check, including the page's own inlined stylesheet, which
+      // would make the prepend assertion pass for the wrong reason.
+      firstHeadChildId: document.head.children.length
+        ? document.head.children[0].id || null
         : null,
     };
   });
@@ -808,7 +833,7 @@ async function probeOne(browser, kind, filename, downloadRoot) {
     pageErrors: pageErrors,
     mermaidReady: mermaidReady,
     cytoscapeStylePresent: headState.cytoscapeStylePresent,
-    firstHeadChild: headState.firstHeadChild,
+    firstHeadChildId: headState.firstHeadChildId,
     containerChildren: structure.containerChildren,
     buttonFound: structure.buttonFound,
     insideRadiogroup:
@@ -847,7 +872,7 @@ async function probeOne(browser, kind, filename, downloadRoot) {
       });
       result.download.buttonFoundOnDownload = buttonOnDownload;
       if (buttonOnDownload) {
-        var client2 = await page2.target().createCDPSession();
+        var client2 = await browser.target().createCDPSession();
         var dir2 = path.join(downloadRoot, kind + "-2");
         var second = await downloadViaClick(page2, client2, dir2, ".download-button");
         result.download.secondFilename = second.filename;
@@ -1451,10 +1476,10 @@ def test_the_runtime_prepends_a_stylesheet_to_the_head(download_runtime, kind):
             "so every assertion about reverting head mutation is now vacuous "
             "-- restore a mindmap to RUNTIME_DOCUMENT"
         )
-        assert state["firstHeadChild"] == "STYLE", (
+        assert state["firstHeadChildId"] == "__________cytoscape_stylesheet", (
             "the cytoscape stylesheet is no longer the FIRST head child, so it "
             "is no longer a prepend -- re-read _download.html.j2's revert, "
-            f"which exists because it is one. Got {state['firstHeadChild']!r}"
+            f"which exists because it is one. Got {state['firstHeadChildId']!r}"
         )
     else:
         assert state["cytoscapeStylePresent"] is False, (
