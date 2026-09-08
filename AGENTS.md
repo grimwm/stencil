@@ -184,6 +184,32 @@ This applies to every change including documentation, tracker bookkeeping, and
 tooling setup. If a tool auto-commits to `main` on your behalf, say so and move the
 work onto a branch before pushing.
 
+### Agents may do this work themselves, in a worktree
+
+This repository **explicitly opts in** to the team-maintainer profile described in the
+managed Beads block above. An agent may create branches, commit, push, and open pull
+requests as part of normal work, without asking permission first.
+
+That opt-in does not relax the rule above it. `main` is still off limits and the route
+to it is still a pull request; what changes is only that an agent no longer needs to
+hand the commands back to a human to run.
+
+Work in a worktree rather than the shared checkout, so an interrupted session never
+leaves the main working tree dirty or parked on the wrong branch:
+
+```bash
+git worktree add .claude/worktrees/<branch> -b <branch>
+```
+
+`.claude/worktrees/` is gitignored for exactly this purpose.
+
+Roll forward from a mistake: `git revert`, or a follow-up commit that fixes it. Never
+`git reset --hard`, and never rewrite a branch that has already been pushed.
+
+If the environment has no `bd` — a cloud sandbox usually does not — do not commit a
+stale `.beads/issues.jsonl`. Say so in the pull request and leave the export to a
+session that can reach the tracker.
+
 ### Export beads before the last commit, not after it
 
 `.beads/issues.jsonl` is a passive export of a Dolt database that git does not
