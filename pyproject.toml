@@ -40,6 +40,12 @@ markers = [
     "integration: needs a container runtime; deselect with -m 'not integration'",
 ]
 
+# Named rather than discovered. With plugin/ beside stencil/ at the top level,
+# setuptools' flat-layout discovery sees two candidate packages and refuses to
+# build at all, which fails `pip install -e .` before a single test runs.
+[tool.setuptools]
+packages = ["stencil"]
+
 [tool.setuptools.dynamic]
 version = {attr = "stencil.__version__"}
 

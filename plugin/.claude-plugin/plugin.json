@@ -1,0 +1,12 @@
+{
+  "name": "stencil-tool",
+  "version": "0.1.0",
+  "description": "Build, verify and troubleshoot stencil-generated documents and slide decks, including from Cowork where Docker is unavailable.",
+  "author": {
+    "name": "William Grim"
+  },
+  "homepage": "https://github.com/grimwm/stencil",
+  "repository": "https://github.com/grimwm/stencil",
+  "license": "MIT",
+  "keywords": ["stencil", "pandoc", "slides", "pdf-ua", "accessibility", "cowork"]
+}

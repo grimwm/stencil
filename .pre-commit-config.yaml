@@ -35,4 +35,4 @@ repos:
         # into `______`, and -- worst, because it is invisible -- LaTeX escaped
         # to `\\lambda` and `\\frac`. Formatting a fixture would silently change
         # what the test renders. Do not format course content with mdformat.
-        exclude: ^(\.beads/|\.agents/|CLAUDE\.md$|tests/fixtures/)
+        exclude: ^(\.beads/|\.agents/|CLAUDE\.md$|plugin/skills/|tests/fixtures/)
