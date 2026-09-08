@@ -11,6 +11,10 @@ How the version gets bumped is written down in
 
 ## 0.33.0
 
+Takes 0.33.0 rather than 0.32.0: that number is claimed by an in-flight branch
+(`stn-1y7`, inline-code contrast) which had not merged when this was written.
+Nothing is missing between 0.31.0 and here.
+
 - **The other four painted gaps, measured rather than assumed.** 0.13.0 fixed
   the document and deck headers, where a whitespace-only text node between two
   inline boxes never reached the PDF text layer and "Author Ada Lovelace"
@@ -24,17 +28,34 @@ How the version gets bumped is written down in
   pandoc emits a whitespace-only text node between the boxes and flex and grid
   both discard it, which is exactly the 0.13.0 shape. What saves them is that
   these are **block** boxes. Chromium emits each side as its own text object
-  with its own `Tm` origin, and every extractor recovers the boundary from the
+  with its own `Tm` origin, and an extractor recovers the boundary from the
   advance — the same way it does between any two paragraphs or table cells in
   any PDF.
 
-  Measured at the tightest arrangement each site can actually paint: deck
-  columns bottom out at a 31.0px same-baseline gap against the 28px declared
-  (one more character wraps the line and takes them off one baseline);
-  `.side-by-side` is a flat 58px, being 2rem plus a table cell's padding on
-  each side, and content wide enough to close that wraps to a stack; the
-  header's two grid columns never land adjacent in the content stream at all,
-  including with a wrapping title and no byline, which is as close as they get.
+- **The threshold that recovery depends on, since "the extractor handles it"
+  is not a measurement.** Built by hand: two Helvetica runs on one baseline,
+  no space glyph, only the second run's x varying. Both extractors jam at a
+  zero gap, and both break the word above a fraction of an em that does not
+  depend on point size — roughly **0.15 em** for pypdf and **0.12 em** for
+  poppler's `pdftotext`, holding at 9, 11, 14 and 24pt.
+
+  Against that, measured in the real print PDFs: `header.doc-title` 1.06 em
+  (~7×), `.columns` 2.8 em (~18×), `.side-by-side` 3.5 em (~23×). The header
+  is the narrow one, which is why it is the one that now has a guard that can
+  fail rather than an assertion that cannot.
+
+  In em rather than px on purpose. `@media print` rescales the root font to
+  9.78pt, so a gap quoted in screen pixels — as an earlier draft of this entry
+  did — describes a different document than the one being extracted.
+
+- **The header guard could not have failed, and now can.** The assertion in
+  `tests/test_pdf.py` since 0.13.0 said the identity and context columns must
+  not run together, with a comment conceding it had never been checked whether
+  an arrangement exists in which they could. There is one, and finding it
+  needs three things at once: no byline, no subtitle, and a single-line title
+  nearly filling the identity track. Anything else in the identity column is
+  emitted between the two, and pypdf breaks on the y change before it ever
+  compares x. The columns still extract apart in that arrangement.
 
 - **The facts line's accessibility boundary is now enforced, not just
   described.** `.doc-facts` being a flex container blockifies its `<span>`
@@ -43,25 +64,40 @@ How the version gets bumped is written down in
   are `aria-hidden` and contribute no whitespace. The stylesheet had said so
   in a comment since 0.11.0 and nothing checked it.
 
-  `tests/test_painted_gaps.py` reads the *used* display of those children in
-  Chromium, so `display: block` on `.doc-facts` — which satisfies a stylesheet
-  grep while leaving the spans inline — now fails. Verified by mutation: it
-  does. Nothing else would have caught it: the PDF text layer stays correct
-  either way, because the separators carry real characters, and neither pa11y
-  engine behind `check-access` has a rule for adjacent text with no
-  separating whitespace.
+  The new test reads the computed display of the `.doc-fact` elements
+  themselves rather than of `.doc-facts`'s children, so both ways of losing
+  the boundary are caught: `display: block` on the container, which satisfies
+  a stylesheet grep while leaving the spans inline, and grouping facts in a
+  wrapper div, which would satisfy a check on the container's children. A
+  second test pins the separators' `aria-hidden`, which is the premise the
+  whole argument rests on. Both verified by mutation.
+
+  Nothing else would have caught either: the PDF text layer stays correct
+  throughout, because the separators carry real characters, and neither pa11y
+  engine behind `check-access` has a rule for adjacent text with no separating
+  whitespace.
 
   Not fixed, deliberately: putting a character inside each flex item would
   shift the `space-between` distribution, which is a rendered change to every
   handout's header in exchange for a boundary that already exists.
 
-- **What the new sweeps do and do not catch, also measured by mutation.**
-  Narrowing a gap does not produce a jam — with `.columns { gap: 0 }` every
-  variant still extracted with a space, because two text objects stay two text
-  objects however close they are. Turning `.columns` into inline flow *does*
-  fail, through the non-vacuity check that requires at least one variant to
-  land on a single extracted line. Recorded in the test's own docstring so the
-  next reader knows what the guard is worth.
+- **What the sweeps do and do not catch, established by mutation.** Setting
+  `.columns { gap: 0 }` does not fail them — and that is evidence the mutation
+  failed, not that the tests are insensitive. Zeroing the CSS gap leaves the
+  left column's line-breaking slack in place, so the glyph-to-glyph distance
+  never approaches zero. A narrowing control has to walk the last glyph to the
+  track edge, which the fill sweeps do and a gap edit does not. Turning
+  `.columns` into inline flow *does* fail, through the non-vacuity check that
+  requires at least one variant to land on a single extracted line.
+
+- **Two extractors, two models, and the stylesheets no longer overstate one.**
+  pypdf follows the content stream and breaks on any y change; poppler does
+  geometric column detection. On the deck columns poppler emits a paragraph
+  break where pypdf emits a space — both correct, neither a jam. The header is
+  where they genuinely disagree: poppler reorders it and puts the context after
+  the body text. So the "far apart in the content stream" argument that stood
+  in `_page-style.css.j2` was pypdf-specific, and the comment now says what
+  both models actually rely on, which is the gap width.
 
 ## 0.31.0
 

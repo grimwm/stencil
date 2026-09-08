@@ -196,10 +196,18 @@
        the header before 0.13.0. Measured in a real PDF for stn-avj: fine, and
        for a different reason than the header's fix. The columns are block
        boxes, so they become separate text objects and an extractor recovers
-       the boundary from the advance. The tightest same-baseline arrangement
-       reachable was 31px against the 28px declared here; one more character
-       wraps the line and takes them off one baseline entirely.
-       tests/test_painted_gaps.py holds it. */
+       the boundary from the advance, which it does above a threshold of
+       roughly 0.15 em (pypdf) or 0.12 em (poppler).
+
+       The tightest same-baseline arrangement reachable measures 2.8 em in the
+       print PDF, about 18x that; one more character wraps the line and takes
+       the two columns off one baseline entirely.
+       tests/test_painted_gaps.py holds it.
+
+       Do NOT reach for `gap: 0` as a way to check this: the columns reflow, so
+       the glyph-to-glyph distance never approaches zero and the experiment
+       measures nothing. Walk the fill instead, one character at a time, which
+       is what the test does. */
     .columns {
       display: grid;
       grid-auto-flow: column;
