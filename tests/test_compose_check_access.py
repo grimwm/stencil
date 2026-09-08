@@ -71,6 +71,7 @@ from __future__ import annotations
 
 import subprocess
 import uuid
+import warnings
 from pathlib import Path
 
 import pytest
@@ -96,8 +97,18 @@ SUMMARY = "Checked 1 HTML file(s) at WCAG 2.1 AA, light and dark."
 
 
 def image_id(tag: str) -> str:
-    """The local id of ``tag``, or "" when the runtime does not hold it."""
+    """The local id of ``tag``, or "" when the runtime does not hold it.
+
+    Asks the RUNTIME, not compose, because the question is whether the build
+    stanza left a usable image behind under the name the compose file gives it
+    -- which is what `compose run` will go looking for on a machine that has
+    not built the pdf service first.
+    """
     runtime = pipeline.container_runtime()
+    assert runtime is not None, (
+        "no container runtime; this case is marked integration and should have "
+        "been skipped by conftest before reaching here"
+    )
     probe = subprocess.run(
         [runtime, "images", "-q", tag], capture_output=True, text=True, timeout=120
     )
@@ -167,13 +178,25 @@ def compose(compose_impl):
         # The image is left alone deliberately. It is minutes of Chromium and
         # npm, its layers are the cache the next run reads, and the repository
         # already leaves BROWSER_IMAGE_TAG in place for the same reason.
-        pipeline.compose(
+        removed = pipeline.compose(
             ["down", "--remove-orphans", "--volumes"],
             workdir=package,
             project=project,
             command=compose_impl,
             timeout=600,
         )
+        # WARN RATHER THAN RAISE. A teardown that raises from a finalizer
+        # replaces the assertion error the test was reporting, so the run says
+        # "could not remove a network" about a failure that was actually the
+        # service being broken. But a teardown that says nothing leaks a
+        # compose network per run and nobody finds out until docker refuses to
+        # make another one.
+        if removed.returncode != 0:
+            warnings.warn(
+                f"compose down left project {project} behind "
+                f"(exit {removed.returncode}): {removed.stderr[-500:]}",
+                stacklevel=1,
+            )
 
 
 @integration
