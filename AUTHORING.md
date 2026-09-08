@@ -148,23 +148,24 @@ date: 2026-09-02
 A document renders these as a page header; a deck renders them as a generated title slide. Every key
 the pipeline reads, and what each one does on each side:
 
-| Key           | In a document                                   | In a deck                                       |
-| ------------- | ----------------------------------------------- | ----------------------------------------------- |
-| `title`       | Page header, and the browser tab                | Title slide, and the browser tab                |
-| `subtitle`    | Under the title                                 | Under the title on the title slide              |
-| `brand`       | Top right, above `program`                      | Above the title on the title slide              |
-| `brand-alt`   | Alt text; **required** when `brand` is an image | Same                                            |
-| `program`     | Top right, opposite the title                   | Above the title, and prefixes the browser tab   |
-| `section`     | Top right, after `program`                      | Above the title, after `program`                |
-| `term`        | Top right, its own line                         | Above the title, after `section`                |
-| `points`      | Badge beside the title                          | Badge beside the title on the title slide       |
-| `author`      | Second row, under the title                     | Byline on the title slide                       |
-| `date`        | Second row, labelled `Issued`                   | Byline, labelled `Issued`, after the author     |
-| `due`         | Second row, under `Issued`                      | Byline, after `Issued`                          |
-| `show_date`   | Stamps the build date as `date`                 | Same                                            |
-| `lang`        | `<html lang>` (default `en`)                    | Same                                            |
-| `dir`         | `<html dir>`, only when set                     | Same                                            |
-| `slide-level` | Ignored                                         | Heading level that starts a slide (default `2`) |
+| Key             | In a document                                   | In a deck                                                   |
+| --------------- | ----------------------------------------------- | ----------------------------------------------------------- |
+| `title`         | Page header, and the browser tab                | Title slide, and the browser tab                            |
+| `subtitle`      | Under the title                                 | Under the title on the title slide                          |
+| `brand`         | Top right, above `program`                      | Above the title on the title slide                          |
+| `brand-alt`     | Alt text; **required** when `brand` is an image | Same                                                        |
+| `program`       | Top right, opposite the title                   | Above the title, and prefixes the browser tab               |
+| `section`       | Top right, after `program`                      | Above the title, after `program`                            |
+| `term`          | Top right, its own line                         | Above the title, after `section`                            |
+| `points`        | Badge beside the title                          | Badge beside the title on the title slide                   |
+| `author`        | Second row, under the title                     | Byline on the title slide                                   |
+| `date`          | Second row, labelled `Issued`                   | Byline, labelled `Issued`, after the author                 |
+| `due`           | Second row, under `Issued`                      | Byline, after `Issued`                                      |
+| `show_date`     | Stamps the build date as `date`                 | Same                                                        |
+| `show_download` | Download button beside the theme control        | Download button beside the theme control, left of `Present` |
+| `lang`          | `<html lang>` (default `en`)                    | Same                                                        |
+| `dir`           | `<html dir>`, only when set                     | Same                                                        |
+| `slide-level`   | Ignored                                         | Heading level that starts a slide (default `2`)             |
 
 `author` takes one name or a list of them:
 
@@ -334,6 +335,56 @@ rather than the container's UTC one. Running pandoc directly passes nothing, and
 back to the date inside the container — UTC — which can be a day off from yours either side of
 midnight. Either way it is date-only: the clock reading when the build ran says nothing about the
 document.
+
+#### `show_download`
+
+Puts a download button beside the theme control — right of it in a document, and left of `Present`
+in a deck. Clicking it saves the page itself: a generated page is already a self-contained file
+(assets inlined at `stencil gen`, images base64'd by `embed-images.lua`), so the download makes no
+network request and works offline.
+
+It **defaults to on** — every generated page carries the button unless something turns it off. That
+is the opposite of `show_date` above, and the reason is the button rather than the key: withholding
+today's date is the safe default, but a page that already contains everything it needs has nothing to
+gain by hiding its own save button.
+
+```markdown
+---
+title: "Sprint Report"
+show_download: false
+---
+```
+
+`true`, `false`, `yes`, `no`, `on` and `off` all work, spelled in any case; `0` and `none` also mean
+off. A blank value, `null` and `~` all mean the same as leaving the key out — which for this key
+means the button stays on, not that it turns off.
+
+The key overrides a package-level default rather than a hardcoded one: a whole project or one package
+can turn the button off once, and a document's own front matter still wins over that setting in
+*either* direction, so one handout can turn it back on. See [STENCIL.md](STENCIL.md) for the
+package-level setting.
+
+What it downloads is a faithful copy of the page as it was built — not the file byte for byte. The
+browser's own serializer rewrites some markup on the way out (`&#160;` becomes `&nbsp;`, `<path/>`
+becomes `<path></path>`), so the saved bytes are not identical to what `stencil gen` wrote, but they
+are semantically the same page and stay so on a second save from the downloaded copy. It never
+appears in a PDF — the print stylesheet hides it, and `make pdf` never runs a browser session a
+reader could click in.
+
+The button exposes nothing that the reader's own Ctrl+S does not: `hidden-filter.lua` deletes
+withheld content from the document before the HTML ever exists, so there is nothing hidden left in
+the page for a download — or a save — to carry. That is also why `show_download: false` is worth
+setting on an instructor build: `make` with `WITH=hidden` renders an answer key from the same
+templates, and a one-click save-and-send affordance is friction worth keeping on the one artifact
+where losing it was doing quiet work. The key exists partly for that.
+
+Embedded in an LMS iframe without `allow-downloads`, the click silently does nothing — Canvas and
+Moodle both sandbox handouts this way, and there is no reliable way to detect it from the page. Safari
+opened from a `file://` URL has also historically ignored the download attribute on blob URLs, which
+looks the same from the reader's side.
+
+A deck with no slides gets no button — the toolbar it would sit in is never built for an empty deck.
+That is a documented edge case, not a bug to route around.
 
 #### `lang` and `dir`
 

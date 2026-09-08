@@ -9,6 +9,97 @@ and the closed epics in `.beads/issues.jsonl` are the readable index.
 How the version gets bumped is written down in
 [AGENTS.md](AGENTS.md#cutting-a-release), not here.
 
+## 0.35.0
+
+- **Every generated page now carries a self-download button, on by default.** A
+  document gets it beside the theme control; a deck gets it in the toolbar,
+  between the theme group and `Present`. `show_download: false` in a
+  document's front matter turns it off. The default is *true* rather than
+  the polarity every other switch in this repository uses — `show_date`
+  withholds by default — because the thing being defaulted on is different in
+  kind: a generated page is already fully self-contained, assets inlined at
+  `stencil gen` and images base64'd by `embed-images.lua`, so there is
+  nothing to gain by hiding a control that just saves the page a reader
+  already has. `hidden-filter.lua` deletes withheld content from the
+  document before the HTML writer ever runs, so the button cannot expose
+  anything a reader's own Ctrl+S could not already reach.
+
+- **The default is configurable per package, and it ships here rather than
+  waiting.** A package or a whole config can set `show_download: false` once
+  in `.config.yaml`, exactly where `brand` and `lang` already resolve
+  package-then-config-then-built-in, and a document's own front matter still
+  overrides that setting in *either* direction. `stn-cqv`, filed to defer
+  this half of the feature, is closed as superseded — the first course to
+  ask deserved to find it already written down rather than filing the issue
+  itself.
+
+  The knob deliberately did **not** go into `docker-compose-html.yml.j2` as
+  a `--metadata show_download=false`. Pandoc metadata supplied on the
+  command line outranks a document's own front matter, which would have made
+  the package default impossible to override per document — exactly
+  backwards from what a course needs when one handout should behave
+  differently from the rest. The default is baked into the generated Lua
+  filter instead, as `CONFIG_SHOW_DOWNLOAD`, so `truthy()` sees it as just
+  another fallback and front matter keeps the final word.
+
+  Coercing it took more than reusing `show_date`'s table: pandoc's actual
+  boolean resolution was measured directly against the pinned pandoc rather
+  than assumed, and most spellings — `true`/`false`/`yes`/`no`/`on`/`off`, any
+  case — already arrive as real booleans. Only `0` and `none` arrive as
+  strings, and a blank value, `null` and `~` all collapse into the same
+  indistinguishable empty string. That last case is the one a default-true
+  key cannot get from the existing table unchanged: the false-ish table maps
+  blank to "off", which is correct when absent already means off, and
+  backwards when absent is supposed to mean on. `truthy()` gained an
+  optional `default` argument so a blank value falls back to *that* rather
+  than to `false`, and every existing call site that passes no default is
+  unchanged.
+
+- **The downloaded bytes are the parsed document, not a serialization of the
+  live DOM.** By the time a reader can click the button, `highlight.js` has
+  rewritten every code block into spans, Mermaid has replaced `<pre>` with
+  rendered SVG, and the tab builder has moved content into panes it built —
+  transformations a naive `outerHTML` capture cannot undo by removing nodes,
+  only by never having recorded them. The button's partial is included
+  between `_theme-toggle.html.j2` and `_page-scripts.html.j2` so it runs at
+  parse time, before any of that happens, and captures what it needs then.
+
+  `<head>` is deliberately **not** captured as markup. Holding a second copy
+  of it would cost a measured 1.44 MB of inlined base64 fonts and CSS on every
+  page, for the life of the tab. (The raw assets sum to about 2.4 MB; a
+  rendered page's `<head>` holds less because 0.31.0's `merge_duplicate_faces`
+  collapses the duplicated font blocks first.)
+
+  What replaced it went through one wrong answer first, and the wrong answer
+  is worth recording because it looked right. Capturing
+  `document.head.childNodes.length` and trimming the clone's head back to that
+  count reverts an *append* for the price of one integer — and every head
+  mutation on this page was believed to be one. It is not: the vendored
+  Mermaid bundle **prepends** its Cytoscape stylesheet,
+  `a.insertBefore(h, a.children[0])`, ahead of even the charset meta. Trimming
+  the tail therefore removes the wrong node. On these templates the node it
+  removed was the whitespace before `</head>`, so the damage was a lost
+  newline and a retained stylesheet — invisible, and the entire margin was one
+  text node. On a consumer whose head ends `</style></head>` it would have
+  been the page's own inlined stylesheet, and the downloaded file would open
+  unstyled with no exception and no failing test.
+
+  So both `<head>` and `<body>` are reverted by marking instead: every element
+  child is stamped with `data-stencil-pristine` at parse time, the clone keeps
+  the marked ones — plus `<script>`, because the page's own trailing scripts
+  are not in the DOM yet when the stamping happens — and the markers are
+  stripped before serializing. A marker does not care what order anything
+  arrives in, and it does not care what a consumer calls their wrapper, which
+  the previous body rule (a whitelist of *this* repository's class names) did.
+
+  `.container`, by contrast, **is** captured as a string rather than a
+  detached clone, and that half is the less obvious one: Chrome live-loads
+  `<img>` elements even inside a detached tree, so cloning an image-heavy
+  container would decode every base64 image on the page a second time for no
+  reason. A string capture defers that work to the moment it is actually
+  needed — assigned back into `outerHTML` on click — rather than paying it on
+  every page load.
+
 ## 0.34.0
 
 - **An exact version pinned three packages and left 44 floating.** The browser

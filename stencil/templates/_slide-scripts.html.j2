@@ -34,6 +34,26 @@
       }
     }
 
+$if(show_download)$
+    /* Download sits left of Present, same reasoning as the theme group
+       above: the destructive-ish action -- leaving the reading view for
+       full-screen presentation mode -- stays last.
+
+       This whole block, comment included, is wrapped in show_download's own
+       pandoc conditional, matching the two places html-template.html.j2 and
+       slide-template.html.j2 include the download partial: the mount
+       function this calls exists only when that partial was included for
+       this page, and gating this block the same way keeps its name out of a
+       page that never defines it, rather than spelling it here unguarded by
+       the same condition and relying on the runtime check alone. */
+    if (window.mountDownloadButton) {
+      var downloadButton = window.mountDownloadButton(toolbar);
+      if (downloadButton) {
+        toolbar.insertBefore(downloadButton, toolbar.querySelector('.deck-present'));
+      }
+    }
+$endif$
+
     var position = toolbar.querySelector('.deck-position');
     var button = toolbar.querySelector('.deck-present');
 

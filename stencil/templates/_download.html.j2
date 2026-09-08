@@ -1,0 +1,417 @@
+{# The self-download control, shared by documents and decks.
+
+   WHAT DOWNLOADS. A generated page is already fully self-contained -- assets
+   inlined at `stencil gen`, images base64'd by embed-images.lua -- so this
+   button saves the page back to disk with no network fetch. It does not
+   build a PDF; see AGENTS.md on why html-to-pdf.js is a separate, container-
+   driven step that this control cannot reach into.
+
+   WHY A PARSE-TIME CAPTURE RATHER THAN STRIPPING THE LIVE DOM ON CLICK. By
+   the time a reader clicks, hljs has rewritten every code block into spans,
+   mermaid has replaced <pre> with rendered SVG, the tab builder has MOVED
+   content into panes it created, and a deck has appended a whole toolbar to
+   <body>. Those are transformations and insertions a click handler cannot
+   cleanly undo by removing nodes. So this partial captures the page's
+   pristine head count, the .container element's markup and the two things a
+   deck or a Bootstrap component may mutate on <html>/<body> -- all BEFORE
+   any of that runs -- and the click handler replaces rather than repairs.
+
+   POSITION IS LOAD-BEARING. Included strictly between _theme-toggle.html.j2
+   and _page-scripts.html.j2 in both composition templates:
+     - it must run before _page-scripts.html.j2's hljs.highlightAll() and its
+       mermaid <pre> -> <div> swap, both of which fire at PARSE time, not on
+       DOMContentLoaded -- this is the last moment the body is what pandoc
+       wrote (tests/test_download.py's test_download_is_included_between_
+       theme_toggle_and_page_scripts pins this);
+     - it must run after _theme-toggle.html.j2 so this file's DOMContentLoaded
+       listener registers second, which is what puts the download button
+       after the theme group in a document's mount host -- listener order,
+       not an insertBefore.
+
+   THE PANDOC-LEVEL OBLIGATION THE JINJA CONTRACT TABLE CANNOT SEE.
+   tests/test_template_contract.py records the JINJA context keys a shared
+   partial reads, and this one reads none -- but its include in both
+   composition templates must still sit inside the show_download conditional
+   (pandoc's own if/endif around the show_download variable), or the control
+   ships on every page regardless of front matter, or a missing closing
+   endif silently swallows the includes that follow it. Neither mistake shows
+   up in the Jinja contract table, because both are about pandoc's template
+   syntax around the include, not about a Jinja variable this file reads.
+
+   THE CSS THIS PARTIAL DEPENDS ON, AND WHERE IT LIVES. .download-button,
+   .download-button__label, .theme-toggle-host (its display: flex rule) and
+   the @media print entry that hides all three controls are defined in
+   _page-style.css.j2, not here. A consuming project that overrides that
+   stylesheet while still including this partial gets a visible, unstyled
+   downwards-arrow button in the top-right corner of every document -- and,
+   because the print rule lives there too, NOT hidden in a printed handout.
+
+   THE GLYPH IS U+2193 (DOWNWARDS ARROW), not a substitute. html-to-pdf.js
+   collects the page's rendered text and fails the build on any character its
+   inlined fonts cannot draw, and it runs in screen media, where this button
+   is visible, so @media print does not shield it there. U+2193 was measured
+   against that gate directly and is close to universal in readers' system
+   fonts, unlike the rarer arrow glyphs.
+
+   No dollar sign anywhere in this file -- see _theme-toggle.html.j2, which
+   this mirrors, and tests/test_download.py's
+   test_the_partial_contains_no_pandoc_variable_syntax. That is a CONVENTION,
+   not a rule pandoc enforces: a literal dollar in a pandoc template is
+   written as a doubled pair, and _page-scripts.html.j2 uses that escape
+   deliberately in two regexes. Avoiding it here just means nobody writing
+   JavaScript in this file has to notice they are inside a context where a
+   single dollar needs doubling -- so no template literals, and no
+   end-anchored regex (filename suffix checks below use slice() instead).
+
+   Two mount points, mirroring the theme toggle: a document gets the fixed
+   container in html-template.html.j2; a deck's toolbar is built by JS at
+   runtime, so _slide-scripts.html.j2 calls mountDownloadButton() once it has
+   inserted the theme group, the same way it already calls
+   mountThemeToggle(). #}
+  <script>
+  (function () {
+    /* CAPTURED ONCE, AT PARSE TIME, before anything below this partial can
+       mutate the page. `download` stays null -- and the button never mounts
+       -- if `.container` is missing, which a consumer's own composition
+       template is free to spell differently (AGENTS.md documents that
+       override). A missing button beats a pageerror, which html-to-pdf.js
+       turns into a failed build for every consumer, and beats a button that
+       would go on to write a corrupt file. */
+    var download = null;
+    var PRISTINE = 'data-stencil-pristine';
+
+    try {
+      var containerEl = document.querySelector('.container');
+      if (containerEl) {
+        var liveBodyAttrs = document.body.attributes;
+        var bodyAttrs = [];
+        for (var i = 0; i < liveBodyAttrs.length; i++) {
+          bodyAttrs.push([liveBodyAttrs[i].name, liveBodyAttrs[i].value]);
+        }
+        /* Captured BEFORE the markers below are stamped, so no marker
+           lands inside the string that gets restored on click.
+
+           A STRING, not a detached clone. Chrome live-loads <img> in a
+           detached tree, so cloning an image-heavy container would decode
+           every base64 image a second time. */
+        var containerHtml = containerEl.outerHTML;
+
+        /* MARK what pandoc wrote, rather than counting it or naming its
+           classes. Both of the obvious alternatives were tried and both are
+           wrong:
+
+           - A child COUNT for <head>, reverted by trimming the tail, assumes
+             every later mutation appends. It does not. The vendored mermaid
+             bundle prepends its cytoscape stylesheet --
+             `a.insertBefore(h, a.children[0])` -- so trimming the tail
+             removes the wrong node. Today that node happens to be the
+             whitespace before </head> and the damage is invisible; on a
+             consumer whose head ends `</style></head>` it is the page's
+             entire inlined stylesheet, and the downloaded file opens
+             unstyled with no exception and nothing failing.
+           - A CLASS whitelist for <body> ties the revert to this
+             repository's own markup. AGENTS.md documents composition
+             templates as a consumer interface, so a consumer's own wrapper
+             would be deleted from every downloaded copy.
+
+           A marker survives cloneNode, does not care in what order anything
+           arrives, and is stripped from the clone before it is serialized.
+           Scripts are the exception, because the page's own trailing script
+           tags are not in the DOM yet at this point -- that is the same fact
+           that rules out a child count for <body>. */
+        var i;
+        var headKids = document.head.children;
+        for (i = 0; i < headKids.length; i++) {
+          headKids[i].setAttribute(PRISTINE, '');
+        }
+        var bodyKids = document.body.children;
+        for (i = 0; i < bodyKids.length; i++) {
+          bodyKids[i].setAttribute(PRISTINE, '');
+        }
+
+        /* Every attribute on <html> EXCEPT the two the head bootstrap in
+           _page-head.html.j2 has already set by now. Snapshotting those two
+           as well would freeze the reader's theme into the download, which
+           is the thing being reverted. */
+        var rootAttrs = [];
+        var liveRootAttrs = document.documentElement.attributes;
+        for (i = 0; i < liveRootAttrs.length; i++) {
+          var rootName = liveRootAttrs[i].name;
+          if (rootName === 'data-theme' || rootName === 'data-theme-pref') continue;
+          rootAttrs.push([rootName, liveRootAttrs[i].value]);
+        }
+
+        download = {
+          containerHtml: containerHtml,
+          rootAttrs: rootAttrs,
+          bodyAttrs: bodyAttrs,
+        };
+      }
+    } catch (error) {
+      download = null;
+    }
+
+    /* The filename Chrome's Save dialog would otherwise pick from the
+       downloaded blob's own address (none -- it is a blob: URL), derived
+       instead from the page's own location so "deck.html" downloads as
+       "deck.html" rather than a generated blob id. */
+    function byteLength(text) {
+      try {
+        return new TextEncoder().encode(text).length;
+      } catch (error) {
+        /* No TextEncoder is not a case any browser this ships to hits, and
+           nothing here may throw. Characters are the conservative guess:
+           never fewer than the byte count would allow. */
+        return text.length;
+      }
+    }
+
+    /* Trim to a byte budget without splitting a surrogate pair. Iterating
+       code points rather than UTF-16 units is what keeps an emoji whole. */
+    function truncateToBytes(text, limit) {
+      if (byteLength(text) <= limit) return text;
+      var chars = typeof Array.from === 'function' ? Array.from(text) : text.split('');
+      var out = '';
+      for (var i = 0; i < chars.length; i++) {
+        if (byteLength(out + chars[i]) > limit) break;
+        out += chars[i];
+      }
+      return out;
+    }
+
+    function downloadFilename() {
+      var pathname = location.pathname;
+      try {
+        /* Decode BEFORE splitting on '/'. Splitting first and decoding the
+           basename after would let a served %2e%2e%2f path reintroduce a
+           path separator post-split. */
+        pathname = decodeURIComponent(pathname);
+      } catch (error) {
+        /* A malformed percent-encoding is left undecoded rather than
+           thrown -- nothing here may throw. */
+      }
+
+      var slashAt = pathname.lastIndexOf('/');
+      var name = slashAt >= 0 ? pathname.slice(slashAt + 1) : pathname;
+
+      /* Strip control characters, the reserved path characters, and the
+         bidi control characters that could otherwise reorder how the
+         filename renders in a file manager. */
+      var reserved = '/\\:*?"<>|';
+      var cleaned = '';
+      for (var i = 0; i < name.length; i++) {
+        var ch = name.charAt(i);
+        var code = name.charCodeAt(i);
+        var isControl = code <= 0x1F || code === 0x7F;
+        var isBidi = (code >= 0x202A && code <= 0x202E) ||
+                     (code >= 0x2066 && code <= 0x2069);
+        if (isControl || isBidi || reserved.indexOf(ch) !== -1) continue;
+        cleaned += ch;
+      }
+
+      var start = 0;
+      while (start < cleaned.length && cleaned.charAt(start) === '.') start++;
+      cleaned = cleaned.slice(start);
+
+      /* A directory-index URL, or a name that was nothing but dots and
+         reserved characters, yields an empty string here -- and '' plus
+         the appended suffix below would save as "html.html". */
+      if (cleaned === '') cleaned = 'document';
+
+      /* The suffix check uses slice(), never indexOf(): indexOf only finds
+         ".html" somewhere in the string, so a name that already ends in
+         ".html" would still match and pass through unchanged, but a name
+         like "html-notes" would falsely look suffixed too. slice() reads
+         the actual end of the string, which is the only place a regex
+         end-anchor would normally go -- and an end-anchor is the one thing
+         off limits in a file with no dollar sign. */
+      /* Split any extension the name already carries off the stem rather
+         than leaving it attached. Capping a name that ALREADY ends .html
+         eats that extension just as surely as capping one this function
+         appended -- the suffix has to be out of the way before the stem is
+         trimmed, either way. Slicing it off rather than re-spelling it also
+         keeps the author's own case, so a .HTML stays .HTML. */
+      var lower = cleaned.toLowerCase();
+      var suffix = '.html';
+      if (lower.slice(-5) === '.html') {
+        suffix = cleaned.slice(-5);
+        cleaned = cleaned.slice(0, -5);
+      } else if (lower.slice(-4) === '.htm') {
+        suffix = cleaned.slice(-4);
+        cleaned = cleaned.slice(0, -4);
+      }
+
+      /* Measured against real Chrome: a name over roughly 255 BYTES makes
+         the download get silently canceled -- the click appears to do
+         nothing and nothing anywhere reports an error. 200 bytes leaves
+         headroom under that.
+
+         The cap goes on the STEM, before the suffix is appended. Capping
+         the finished name instead truncates the extension it just added: a
+         210-character path yields a 200-character name ending in no
+         extension at all, which does not open in a browser on a double
+         click and gives the reader nothing to go on. Measured, deterministic
+         and ASCII-only -- it needs nothing more exotic than a long filename.
+
+         Bytes rather than characters, and trimmed on a code point boundary,
+         because 90 CJK characters is 275 UTF-8 bytes -- already past the
+         threshold this cap exists to stay under -- and a character-wise
+         slice can leave a lone surrogate at the end. */
+      return truncateToBytes(cleaned, 200 - byteLength(suffix)) + suffix;
+    }
+
+    /* The click handler. Nothing in here may throw -- html-to-pdf.js treats
+       an uncaught pageerror as a failed build, and show_download now
+       defaults to on, so every consumer's build depends on this. */
+    function downloadSelf() {
+      if (!download) return;
+      try {
+        /* Clone document.documentElement FIRST, before creating the
+           transient anchor below -- cloning after would serialize that
+           anchor into the copy. */
+        var clone = document.documentElement.cloneNode(true);
+
+        /* Restore <html>'s attributes wholesale from the snapshot. That
+           drops data-theme and data-theme-pref (deliberately excluded when
+           the snapshot was taken), drops the `presenting` class a deck adds,
+           and also drops whatever some future library decides to put here --
+           which naming the two theme attributes explicitly would not. */
+        var cloneRootAttrs = Array.prototype.slice.call(clone.attributes);
+        cloneRootAttrs.forEach(function (attr) {
+          clone.removeAttribute(attr.name);
+        });
+        download.rootAttrs.forEach(function (pair) {
+          clone.setAttribute(pair[0], pair[1]);
+        });
+
+        /* Keep the head elements pandoc wrote, drop the rest. Text nodes are
+           left alone: only an element can carry the marker, and only
+           elements get injected. */
+        var cloneHead = clone.querySelector('head');
+        if (cloneHead) {
+          Array.prototype.slice.call(cloneHead.children).forEach(function (child) {
+            if (!child.hasAttribute(PRISTINE)) cloneHead.removeChild(child);
+          });
+        }
+
+        var cloneBody = clone.querySelector('body');
+        if (cloneBody) {
+          /* A WHITELIST, not a denylist, and measured rather than
+             defensive: mermaid appends a div.mermaidTooltip directly to
+             <body> on every page that draws a diagram, outside .container
+             and outside <head>. A deck's toolbar lands here too, as a
+             consequence of the same rule rather than a special case, and so
+             will whatever a future release appends. Truncating the body by
+             a child count -- the trick used for <head> above -- would be
+             wrong here: this partial runs mid-parse, so _page-scripts.html.j2
+             and _slide-scripts.html.j2 are not yet in the DOM, and the count
+             would be short -- truncating would strip the page's own scripts
+             out of the downloaded copy. */
+          var children = Array.prototype.slice.call(cloneBody.children);
+          children.forEach(function (child) {
+            /* Marked, or a script. The page's own trailing script tags were
+               not in the DOM when the markers were stamped -- this partial
+               runs mid-parse -- which is exactly why <body> cannot be
+               reverted by a child count the way <head> once was. */
+            var keep = child.hasAttribute(PRISTINE) || child.tagName === 'SCRIPT';
+            if (!keep) {
+              cloneBody.removeChild(child);
+            } else if (child.classList.contains('theme-toggle-host')) {
+              /* Empty even when it survives: show_download's own control
+                 mounts into this same host. */
+              while (child.firstChild) child.removeChild(child.firstChild);
+            }
+          });
+
+          /* Replace the container AFTER the marker sweep above, never
+             before it. The captured markup was taken before the markers
+             were stamped, so it carries none -- splice it in first and the
+             sweep sees an unmarked body child and deletes the entire
+             document. That is not hypothetical: it is what the first
+             version of this did, and the downloaded deck came out with no
+             slides at all.
+
+             The setter works on this detached clone because the element
+             still has a parent -- the cloned body -- so it does not throw,
+             and it does not execute any script in the replacement markup. */
+          var cloneContainer = cloneBody.querySelector('.container');
+          if (cloneContainer) {
+            cloneContainer.outerHTML = download.containerHtml;
+          }
+
+          /* Restore exactly what pandoc wrote, dropping whatever runtime
+             code added -- a Bootstrap component that sets class="modal-open"
+             and an inline padding-right on <body> is the case nothing else
+             here would catch. */
+          var currentBodyAttrs = Array.prototype.slice.call(cloneBody.attributes);
+          currentBodyAttrs.forEach(function (attr) {
+            cloneBody.removeAttribute(attr.name);
+          });
+          download.bodyAttrs.forEach(function (pair) {
+            cloneBody.setAttribute(pair[0], pair[1]);
+          });
+        }
+
+        /* The markers are this partial's bookkeeping, not the page's.
+           Strip them from the clone so the downloaded file is what pandoc
+           wrote, and so downloading again from that copy behaves the same. */
+        Array.prototype.slice.call(clone.querySelectorAll('[' + PRISTINE + ']'))
+          .forEach(function (marked) {
+            marked.removeAttribute(PRISTINE);
+          });
+
+        var html = '<!DOCTYPE html>\n' + clone.outerHTML;
+        var filename = downloadFilename();
+        var blob = new Blob([html], { type: 'text/html;charset=utf-8' });
+        var url = URL.createObjectURL(blob);
+        var link = document.createElement('a');
+        try {
+          link.href = url;
+          link.download = filename;
+          document.body.appendChild(link);
+          link.click();
+        } finally {
+          /* Both cleanups in the finally, not after the click. A throw
+             between here and there would otherwise pin a multi-megabyte blob
+             for the life of the tab, and leave a stray anchor in the live
+             DOM for the next capture to trip over. */
+          if (link.parentNode) link.parentNode.removeChild(link);
+          URL.revokeObjectURL(url);
+        }
+      } catch (error) {
+        /* Nothing may throw out of a click handler on a page html-to-pdf.js
+           might load. */
+      }
+    }
+
+    window.mountDownloadButton = function (container) {
+      if (!container || !download || container.querySelector('.download-button')) return;
+
+      var button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'download-button';
+      button.title = 'Download';
+      /* The glyph is decorative -- the same pattern _theme-toggle.html.j2
+         uses for its three segments -- so the accessible name comes from
+         the visually-hidden label rather than a character nobody can
+         pronounce. */
+      button.innerHTML =
+        '<span aria-hidden="true">↓</span>' +
+        '<span class="download-button__label">Download</span>';
+      button.addEventListener('click', downloadSelf);
+
+      container.appendChild(button);
+      return button;
+    };
+
+    /* Documents mount immediately, into the same host the theme toggle
+       uses. Registered AFTER _theme-toggle.html.j2's own listener, which is
+       what puts this button after the theme group -- listener order, not an
+       insertBefore. A deck has no such host; _slide-scripts.html.j2 calls
+       mountDownloadButton() itself once its toolbar exists. */
+    document.addEventListener('DOMContentLoaded', function () {
+      var host = document.querySelector('.theme-toggle-host');
+      if (host) window.mountDownloadButton(host);
+    });
+  })();
+  </script>

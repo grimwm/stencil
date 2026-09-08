@@ -957,11 +957,19 @@
       font-family: var(--font-sans);
     }
 
+    /* display: flex is not required to hold two children -- .theme-toggle is
+       inline-flex and .download-button is inline-block, so both already sit
+       side by side inside this shrink-wrapped position: fixed box. flex is
+       here for the gap and to align the two controls' baselines, not because
+       the layout would otherwise break. */
     .theme-toggle-host {
       position: fixed;
       top: 1rem;
       right: 1rem;
       z-index: 10;
+      display: flex;
+      align-items: center;
+      gap: 0.4rem;
     }
 
     .theme-toggle__option {
@@ -1010,10 +1018,68 @@
       border: 0;
     }
 
+    /* A pill matching .theme-toggle's chrome -- same border, radius and
+       min sizes as .theme-toggle__option -- so the two controls in a
+       document read as one family and stand at the same height. The min
+       sizes also keep the icon-only button above 24x24 (2rem x 1.9rem
+       is 32 x 30.4 at a 16px root). Nothing in this project's gate would
+       catch it shrinking below that: the 24x24 floor is 2.5.8 Target Size
+       (Minimum), which is AA in WCAG 2.2, while check-access measures WCAG
+       2.1 AA -- where the only target-size criterion is 2.5.5, at AAA. pa11y
+       checks neither. Sized by construction rather than by measurement, so
+       it stays correct if the standard is ever raised to 2.2.
+
+       This is one of two appearances the control has, deliberately. In a
+       deck, `.deck-toolbar button` (specificity 0,1,1) beats this rule
+       (0,1,0) and repaints it with --on-accent on --accent-fill instead --
+       the pair the Present button already passes WCAG AA on. A document has
+       no accent-filled toolbar for the button to match, and a deck has no
+       bare surface for this pill to sit on, so both palettes are correct for
+       where they apply rather than one being a bug. */
+    .download-button {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-width: 2rem;
+      min-height: 1.9rem;
+      padding: 0 0.4rem;
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      background: var(--surface);
+      color: var(--text);
+      font-size: 0.95rem;
+      line-height: 1;
+      cursor: pointer;
+    }
+
+    .download-button:focus-visible {
+      outline: 3px solid var(--focus-ring);
+      outline-offset: 1px;
+    }
+
+    /* A second, identical copy of the visually-hidden recipe above rather
+       than a shared .visually-hidden class. That sharing is deliberately out
+       of scope: it would mean editing _theme-toggle.html.j2's
+       theme-toggle__label to point at the shared class, and this change is
+       not allowed to touch that file. Two small identical blocks are the
+       cost of that boundary, not an oversight to "fix" by merging them. */
+    .download-button__label {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      padding: 0;
+      margin: -1px;
+      overflow: hidden;
+      clip-path: inset(50%);
+      white-space: nowrap;
+      border: 0;
+    }
+
     @media print {
       /* A control that cannot be operated on paper is furniture. */
       .theme-toggle,
-      .theme-toggle-host {
+      .theme-toggle-host,
+      .download-button {
         display: none !important;
       }
     }

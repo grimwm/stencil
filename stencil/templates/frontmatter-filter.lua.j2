@@ -57,6 +57,18 @@ local FALSE = {
 local CONFIG_BRAND = {{ (config_brand | tojson) if config_brand else "nil" }}
 local CONFIG_BRAND_ALT = {{ (config_brand_alt | tojson) if config_brand_alt else "nil" }}
 
+-- What an absent show_download means for this package: the default a
+-- document's front matter falls back to when it says nothing itself.
+-- config_show_download is derived and always a real Python bool (see
+-- show_download_default() in generate.py), never absent, so this needs
+-- neither the nil-guard above nor a `| default(...)` -- there is nothing for
+-- StrictUndefined to catch. tojson renders True/False as `true`/`false`,
+-- which is already Lua's spelling, so no quoting dance either. Kept on its
+-- own line for the same reason CONFIG_BRAND is: trim_blocks eats the newline
+-- after a block tag, and two declarations sharing a line here would risk the
+-- same `nillocal` accident recorded above.
+local CONFIG_SHOW_DOWNLOAD = {{ config_show_download | tojson }}
+
 local CONTEXT = { "program", "section", "term" }
 
 -- Every key whose blank form must be indistinguishable from its absent form.
@@ -125,16 +137,32 @@ local function text_of(value)
   return text
 end
 
---- Whether a metadata value means yes. Absent means no.
-local function truthy(value)
+--- Whether a metadata value means yes. `default` is what a nil or blank
+--- value takes, and defaults to false itself -- so every existing call site
+--- that passes only `value` is byte-for-byte unchanged.
+---
+--- Nil and blank are two different reasons to fall back to `default`, and
+--- both have to land there rather than at `false`. show_date wants blank to
+--- agree with absent (both off), which the old hardcoded `false` already
+--- gave it; a default-true key wants the same agreement in the other
+--- direction, and pandoc hands this filter an empty MetaInlines for a blank
+--- value rather than nil -- so `text_of` returning nil for that case is what
+--- has to be caught here, not left to fall through to `not FALSE[""]`.
+local function truthy(value, default)
+  if default == nil then
+    default = false
+  end
   if value == nil then
-    return false
+    return default
   end
   if type(value) == "boolean" then
     return value
   end
   local text = text_of(value)
-  return text ~= nil and not FALSE[text:lower()]
+  if text == nil then
+    return default
+  end
+  return not FALSE[text:lower()]
 end
 
 local MONTHS = {
@@ -291,6 +319,15 @@ function Meta(meta)
     -- a fact about the document.
     meta.date = text_of(meta["build-date"]) or os.date("%Y-%m-%d")
   end
+
+  -- Unlike show_date, absent means the CONFIGURED default rather than a
+  -- hardcoded false: a generated page is already fully self-contained, so
+  -- the download control is meant to be there unless a document or its
+  -- package explicitly turns it off. Written back as a real boolean for the
+  -- same reason show_date is -- so $if(show_download)$ answers the question
+  -- this filter resolved, not the author's raw spelling of it.
+  local show_download = truthy(meta.show_download, CONFIG_SHOW_DOWNLOAD)
+  meta.show_download = show_download or nil
 
   local has_date = stamp_keys(meta, "date")
   local has_due = stamp_keys(meta, "due")
