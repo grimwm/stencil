@@ -1,0 +1,305 @@
+"""The generated check-access SERVICE, run rather than read.
+
+stn-8j4, and the half of it that 0.31.0 deliberately left open.
+
+``make check-access`` could not pass at all for a package that sets
+``output_dir``. The service's entrypoint looped over ``/out/*.html`` and then
+asked Chromium for ``file:///workspace/$f``, so every page came back
+
+    Error: net::ERR_FILE_NOT_FOUND at file:///workspace//out/document.html
+
+It shipped in 0.30.0 and nothing caught it, because every test in the
+repository read the compose file's TEXT and none ran it.
+
+0.31.0 moved the script into ``stencil/pipeline.py`` and
+``tests/test_check_access.py`` now runs that script, in the real image, over
+both layouts. THAT IS NOT THE SAME CLAIM AS "the service works". The script is
+one line of a service definition. The build stanza, the image tag, the mount
+list and the argument that tells the script WHICH DIRECTORY to search are the
+other lines, and the bug was in the last of those -- a disagreement between
+where the products are mounted and where the loop was told to look. A test
+that assembles the mounts itself, in Python, cannot see that disagreement: it
+supplies the correct answer as an argument and then confirms the script uses
+it.
+
+So this file runs ``compose build check-access`` and ``compose run --rm
+check-access`` against a real generated package, which is what
+``make check-access`` does, and asserts on what the service printed. Nothing
+else in the repository has ever run compose.
+
+WHY BOTH LAYOUTS ARE HERE. A package without ``output_dir`` puts its products
+under the single ``/workspace`` mount, and that layout was never broken -- so a
+test that covers only it proves nothing about the defect. The second layout,
+where products are on a separate mount at ``/out`` because a sibling directory
+is ``..`` away and ``..`` escapes a bind mount, is the one that could not pass.
+
+WHY NO PORT IS BOUND, AND WHY THAT IS ASSERTED. Bringing compose into the
+container tier is the point at which a generated service could start taking a
+port a developer is already using -- 3000, 5173, 8000, 8080. None of them
+declares one today; ``test_no_generated_service_binds_a_host_port`` is in the
+fast tier so that stays true without a container to find out. Each run also
+gets a compose project name of its own and is torn down afterwards, so two
+packages that both generate as ``demo`` under a tmp_path cannot share
+containers or a network.
+"""
+
+from __future__ import annotations
+
+import subprocess
+import uuid
+from pathlib import Path
+
+import pytest
+import yaml
+
+from stencil import pipeline
+
+# NOT a module-level mark. The port assertion at the bottom reads the generated
+# compose file and needs no container, so it belongs in the fast tier -- which
+# is where a service that started binding a port should be caught, not behind a
+# Chromium build.
+integration = pytest.mark.integration
+
+SOURCE = "document.md"
+RENDERED = "document.html"
+
+# What the service prints when it has actually opened a page. The count is part
+# of the assertion: the generated package also carries html-template.html and
+# slide-template.html, which the script skips by basename, and a service that
+# checked three files would mean pa11y had been pointed at stencil's own
+# scaffolding.
+SUMMARY = "Checked 1 HTML file(s) at WCAG 2.1 AA, light and dark."
+
+
+def image_id(tag: str) -> str:
+    """The local id of ``tag``, or "" when the runtime does not hold it."""
+    runtime = pipeline.container_runtime()
+    probe = subprocess.run(
+        [runtime, "images", "-q", tag], capture_output=True, text=True, timeout=120
+    )
+    return probe.stdout.strip()
+
+
+def outcome(label: str, result: subprocess.CompletedProcess) -> str:
+    """Both streams, for a failure message worth reading.
+
+    compose splits itself across them -- the service's own output arrives on
+    stdout while compose's progress and any build error arrive on stderr -- so
+    reporting one of the two is how a failure becomes "exit 1" and nothing else.
+    """
+    return (
+        f"{label} exited {result.returncode}\n"
+        f"stdout:\n{result.stdout[-4000:]}\n"
+        f"stderr:\n{result.stderr[-4000:]}"
+    )
+
+
+@pytest.fixture(scope="session")
+def compose_impl():
+    """The compose implementation to drive, or a skip.
+
+    Separate from the runtime skip in conftest: a machine can have docker and
+    not the compose plugin, and the container tier promises a skip rather than
+    a failure for anything it needs and cannot find.
+    """
+    command = pipeline.compose_command()
+    if command is None:
+        pytest.skip(
+            "no compose implementation found "
+            "(docker compose, podman compose, docker-compose, podman-compose)"
+        )
+    return command
+
+
+@pytest.fixture
+def compose(compose_impl):
+    """Drive a generated package's compose file in a project of its own.
+
+    Hands back a callable so a test reads as the Makefile does --
+    ``compose("build", "check-access")``, then ``compose("run", "--rm", "-T",
+    "check-access")``. Every project it opens is torn down when the test ends,
+    passing or failing, so a run leaves no container and no network behind.
+    """
+    opened: list[tuple[Path, str]] = []
+
+    def _for(package: Path):
+        project = f"stencil-test-{uuid.uuid4().hex[:12]}"
+        opened.append((package, project))
+
+        def _compose(*args: str, timeout: float | None = None):
+            return pipeline.compose(
+                list(args),
+                workdir=package,
+                project=project,
+                command=compose_impl,
+                timeout=timeout,
+            )
+
+        return _compose
+
+    yield _for
+
+    for package, project in opened:
+        # The image is left alone deliberately. It is minutes of Chromium and
+        # npm, its layers are the cache the next run reads, and the repository
+        # already leaves BROWSER_IMAGE_TAG in place for the same reason.
+        pipeline.compose(
+            ["down", "--remove-orphans", "--volumes"],
+            workdir=package,
+            project=project,
+            command=compose_impl,
+            timeout=600,
+        )
+
+
+@integration
+def test_the_service_checks_products_beside_their_sources(
+    demo_config, generate_package, install_sources, compose
+):
+    """The default layout: no output_dir, so the products are under /workspace.
+
+    This one was never broken, and it is here to say so. Without it a failure
+    in the output_dir case below cannot be told apart from "the service does
+    not work at all" -- which is a different bug with a different fix.
+    """
+    config = demo_config
+    config["packages"] = {"beside": config["packages"].pop("demo")}
+    package = generate_package(config, "beside")
+    install_sources(package)
+
+    run = compose(package)
+
+    built = run("build", "check-access", timeout=2400)
+    assert built.returncode == 0, outcome("compose build check-access", built)
+    assert image_id("localhost/beside_browser:latest"), (
+        "the build stanza did not produce the tag the compose file names, so "
+        "`compose run` would be running some other image or none"
+    )
+
+    rendered = run("run", "--rm", "-T", "doc", SOURCE, "-o", f"./{RENDERED}",
+                   timeout=900)
+    assert rendered.returncode == 0, outcome("compose run doc", rendered)
+    assert (package / RENDERED).is_file(), (
+        "the doc service reported success and the page is not in the package"
+    )
+
+    checked = run("run", "--rm", "-T", "check-access", timeout=1800)
+    output = checked.stdout + checked.stderr
+
+    assert "ERR_FILE_NOT_FOUND" not in output, (
+        "the service found HTML and then asked the browser for a path that is "
+        f"not there:\n{output[-4000:]}"
+    )
+    assert checked.returncode == 0, outcome("compose run check-access", checked)
+    assert SUMMARY in output, (
+        f"the service did not report having checked the page:\n{output[-4000:]}"
+    )
+
+
+@integration
+def test_the_service_checks_an_output_directory(
+    demo_config, generate_package, install_sources, compose, tmp_path
+):
+    """THE ONE THAT COULD NOT PASS, driven through the service that shipped it.
+
+    A package with an ``output_dir`` gets a second mount at ``/out``, and the
+    check-access service is handed ``/out`` as its argument rather than
+    ``/workspace``. Those two lines are the wiring: the mount decides where the
+    products are, the argument decides where the script looks, and 0.30.0
+    shipped a pair that disagreed.
+
+    Both halves are exercised here rather than described. The doc service
+    writes through the ``/out`` mount, the check-access service reads through
+    its own, and the page only turns up if the compose file gave the two
+    services the same directory.
+    """
+    config = demo_config
+    config["packages"] = {"elsewhere": config["packages"].pop("demo")}
+    config["packages"]["elsewhere"]["output_dir"] = "build/elsewhere"
+    package = generate_package(config, "elsewhere")
+    install_sources(package)
+
+    # The Makefile's `out-dir` target, which every build target depends on. It
+    # is not housekeeping: a bind mount whose source does not exist is created
+    # by the daemon and owned by root, and then nothing on the host can write
+    # to it.
+    out_host = tmp_path / "build" / "elsewhere"
+    out_host.mkdir(parents=True)
+
+    # The host directory this test created and the one the compose file mounts
+    # have to be the same one, or everything below measures a layout the
+    # generated package does not have.
+    service = yaml.safe_load((package / "docker-compose.yml").read_text())[
+        "services"
+    ]["check-access"]
+    mounted = [v for v in service["volumes"] if v.endswith(":/out:z")]
+    assert len(mounted) == 1, f"check-access has no single /out mount: {service}"
+    assert (package / mounted[0].split(":")[0]).resolve() == out_host.resolve()
+
+    run = compose(package)
+
+    built = run("build", "check-access", timeout=2400)
+    assert built.returncode == 0, outcome("compose build check-access", built)
+    assert image_id("localhost/elsewhere_browser:latest"), (
+        "the build stanza did not produce the tag the compose file names, so "
+        "`compose run` would be running some other image or none"
+    )
+
+    rendered = run("run", "--rm", "-T", "doc", SOURCE, "-o", f"/out/{RENDERED}",
+                   timeout=900)
+    assert rendered.returncode == 0, outcome("compose run doc", rendered)
+    assert (out_host / RENDERED).is_file(), (
+        "the doc service reported success and the page is not in the output "
+        "directory -- the /out mount does not reach the host"
+    )
+    assert not (package / RENDERED).exists(), (
+        "the page landed beside the sources, so this is not the layout under "
+        "test and the case below would pass for the wrong reason"
+    )
+
+    checked = run("run", "--rm", "-T", "check-access", timeout=1800)
+    output = checked.stdout + checked.stderr
+
+    # The exact shape of the shipped defect, and the first thing to look at
+    # when this file goes red: the loop found the file and the URL pointed
+    # somewhere else.
+    assert "ERR_FILE_NOT_FOUND" not in output, (
+        "the service found HTML and then asked the browser for a path that is "
+        f"not there:\n{output[-4000:]}"
+    )
+    # The other shape, which is silent: a service pointed at the wrong
+    # directory checks nothing, and a glob that matches nothing would exit 0
+    # if the script did not refuse.
+    assert "found no HTML to check" not in output, (
+        "the service searched a directory the products are not in -- the /out "
+        f"mount and the argument disagree:\n{output[-4000:]}"
+    )
+    assert checked.returncode == 0, outcome("compose run check-access", checked)
+    assert SUMMARY in output, (
+        f"the service did not report having checked the page:\n{output[-4000:]}"
+    )
+
+
+def test_no_generated_service_binds_a_host_port(doc_package):
+    """Nothing a generated package starts may take a port someone is using.
+
+    The fast tier, on purpose. This file is the first thing in the repository
+    to run compose, so it is also the first thing that would start a service
+    that published a port -- and 3000, 5173, 8000 and 8080 are exactly the
+    ports a developer already has something on. A `ports:` key added to any
+    service in docker-compose-html.yml.j2 should fail here, on every
+    interpreter and with no container runtime, rather than by locking someone
+    out of their own dev server on the day they run `make`.
+    """
+    services = yaml.safe_load((doc_package / "docker-compose.yml").read_text())[
+        "services"
+    ]
+    published = {
+        name: service["ports"]
+        for name, service in services.items()
+        if service.get("ports")
+    }
+    assert not published, (
+        "a generated service publishes a host port, which takes it from "
+        f"whoever is already listening on it: {published}"
+    )

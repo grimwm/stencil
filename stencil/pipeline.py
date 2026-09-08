@@ -319,6 +319,98 @@ def container_runtime() -> str | None:
     return None
 
 
+# The compose implementations a generated package can be driven by, in the
+# order the generated Makefile prefers them: `DC ?= docker compose` is its
+# default and `DC="podman compose"` the override it documents, and the
+# standalone binaries are the fallback for a machine that has one of those
+# without the plugin.
+COMPOSE_IMPLEMENTATIONS = (
+    ("docker", "compose"),
+    ("podman", "compose"),
+    ("docker-compose",),
+    ("podman-compose",),
+)
+
+
+def compose_command() -> list[str] | None:
+    """The compose implementation to drive, or None when there is none.
+
+    PROBED BY RUNNING `<impl> version`, not by asking shutil.which whether the
+    first word exists. `docker compose` is a CLI plugin: docker can be
+    installed, on PATH and perfectly functional while `docker compose` exits
+    125 with "unknown docker command". A which() check reports that machine as
+    having compose, which turns a missing plugin into a failing test rather
+    than the skip the container tier promises.
+    """
+    for command in COMPOSE_IMPLEMENTATIONS:
+        if shutil.which(command[0]) is None:
+            continue
+        try:
+            probe = subprocess.run(
+                [*command, "version"], capture_output=True, text=True, timeout=120
+            )
+        except (OSError, subprocess.SubprocessError):
+            continue
+        if probe.returncode == 0:
+            return list(command)
+    return None
+
+
+def compose(
+    args: list[str],
+    *,
+    workdir: Path,
+    project: str,
+    command: list[str] | None = None,
+    timeout: float | None = None,
+) -> subprocess.CompletedProcess:
+    """Run a compose subcommand against the docker-compose.yml in ``workdir``.
+
+    This is the counterpart to ``render`` and ``check_access`` one level up. In
+    those, a test drives the same image, script and mounts the compose file
+    declares -- assembled here, in Python. This drives the compose file itself,
+    so the build stanza, the image tag, the mount list and the arguments a
+    service is handed are executed rather than read. Everything between the
+    script and the argv was, until stn-8j4, asserted only as text.
+
+    ``-f`` IS ABSOLUTE AND THE PROJECT DIRECTORY FOLLOWS IT. Compose resolves a
+    relative volume source and a `.` build context against the project
+    directory, which defaults to the directory holding the file -- exactly what
+    a package's own `- .:/workspace:z` and `- ../../build/demo:/out:z` need. A
+    relative -f from some other cwd would silently resolve both somewhere else.
+
+    ``project`` IS REQUIRED, AND IS THE ISOLATION. Compose otherwise names the
+    project after the directory basename, so two generated packages that happen
+    to share one -- which every `demo` under a tmp_path does -- would share
+    containers and a network. Pass a unique name per run and tear it down with
+    ``down``; the generated services bind no host port, so nothing here can
+    take a port a developer is using, and tests/test_compose_check_access.py
+    asserts that stays true.
+
+    stdin is /dev/null because `compose run` attaches it by default, and a
+    service that read from a terminal would otherwise hang a test run rather
+    than fail it.
+    """
+    command = command or compose_command()
+    if command is None:
+        raise RuntimeError(
+            "no compose implementation found "
+            "(looked for docker compose, podman compose, docker-compose, "
+            "podman-compose)"
+        )
+
+    workdir = Path(workdir).resolve()
+
+    return subprocess.run(
+        [*command, "-f", str(workdir / "docker-compose.yml"), "-p", project, *args],
+        cwd=workdir,
+        stdin=subprocess.DEVNULL,
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+    )
+
+
 def render(
     kind: str,
     source: str,
