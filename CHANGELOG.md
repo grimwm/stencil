@@ -64,16 +64,33 @@ How the version gets bumped is written down in
   between `_theme-toggle.html.j2` and `_page-scripts.html.j2` so it runs at
   parse time, before any of that happens, and captures what it needs then.
 
-  `<head>` is deliberately **not** captured as markup — only
-  `document.head.childNodes.length`, one integer. Restoring it later means
-  truncating the live head back to that count, which reverts the only
-  mutation anything makes to it (a stylesheet Cytoscape injects for
-  diagram-backed decks) for free. Capturing the head's actual markup instead
-  would have meant holding a second copy of it for the life of the tab — a
-  measured 1.44 MB of inlined base64 fonts and CSS on a rendered page — to
-  guard against one append. (The raw assets sum to about 2.4 MB; what a
-  generated page's `<head>` actually holds is smaller because 0.31.0's
-  `merge_duplicate_faces` collapses the duplicated font blocks first.)
+  `<head>` is deliberately **not** captured as markup. Holding a second copy
+  of it would cost a measured 1.44 MB of inlined base64 fonts and CSS on every
+  page, for the life of the tab. (The raw assets sum to about 2.4 MB; a
+  rendered page's `<head>` holds less because 0.31.0's `merge_duplicate_faces`
+  collapses the duplicated font blocks first.)
+
+  What replaced it went through one wrong answer first, and the wrong answer
+  is worth recording because it looked right. Capturing
+  `document.head.childNodes.length` and trimming the clone's head back to that
+  count reverts an *append* for the price of one integer — and every head
+  mutation on this page was believed to be one. It is not: the vendored
+  Mermaid bundle **prepends** its Cytoscape stylesheet,
+  `a.insertBefore(h, a.children[0])`, ahead of even the charset meta. Trimming
+  the tail therefore removes the wrong node. On these templates the node it
+  removed was the whitespace before `</head>`, so the damage was a lost
+  newline and a retained stylesheet — invisible, and the entire margin was one
+  text node. On a consumer whose head ends `</style></head>` it would have
+  been the page's own inlined stylesheet, and the downloaded file would open
+  unstyled with no exception and no failing test.
+
+  So both `<head>` and `<body>` are reverted by marking instead: every element
+  child is stamped with `data-stencil-pristine` at parse time, the clone keeps
+  the marked ones — plus `<script>`, because the page's own trailing scripts
+  are not in the DOM yet when the stamping happens — and the markers are
+  stripped before serializing. A marker does not care what order anything
+  arrives in, and it does not care what a consumer calls their wrapper, which
+  the previous body rule (a whitelist of *this* repository's class names) did.
 
   `.container`, by contrast, **is** captured as a string rather than a
   detached clone, and that half is the less obvious one: Chrome live-loads
