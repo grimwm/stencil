@@ -317,6 +317,13 @@ def test_format_md_installs_from_the_pinned_manifest_and_lockfile(doc_package):
         f"cp {pipeline.FORMAT_LOCKFILE} "
         f"{pipeline.FORMAT_TOOLS_DIR}/package-lock.json" in compose
     )
+    # And says what to do when the lockfile is absent. stencil emits it for
+    # every compose file it can recognise, but a consumer template with a name
+    # of its own that includes the partial is invisible from outside a template
+    # body -- so the one case stencil cannot detect gets a message rather than
+    # `cp: can't stat`.
+    assert f"if [ ! -f {pipeline.FORMAT_LOCKFILE} ]" in compose
+    assert "Run 'stencil gen' for" in compose
     assert (
         f"(cd {pipeline.FORMAT_TOOLS_DIR} && npm ci --ignore-scripts" in compose
     ), (

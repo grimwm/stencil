@@ -15,6 +15,16 @@
   # package.json of its own. Running npm from there is asking which manifest it
   # resolves; running it from /tmp/fmt is not asking. The subshell keeps the
   # prettier invocation below in /workspace, where the `**/*.md` glob belongs.
+  #
+  # THE LOCKFILE GUARD IS FOR THE ONE CASE STENCIL CANNOT SEE. generate.py
+  # emits the lockfile when a package renders a compose file, recognised by
+  # stencil's own template name or by a conventional compose filename -- which
+  # covers overriding docker-compose.yml.j2 through the search path, the
+  # composition pattern AGENTS.md documents. What it cannot see is a template
+  # with a name of its own that includes this partial, because an include
+  # statement lives inside a template body. That consumer would otherwise get
+  # `cp: can't stat`, which is true and says nothing. It gets a message naming
+  # the file and what to do instead.
   format-md:
     image: {{ node_image }}
     volumes:
@@ -33,6 +43,16 @@
       - -c
       - |
         echo "Formatting markdown files..."
+        if [ ! -f {{ format_lockfile_name }} ]; then \
+          echo "format-md: {{ format_lockfile_name }} is not here." >&2; \
+          echo "stencil writes it beside this compose file. Run 'stencil gen' for" >&2; \
+          echo "this package. If your own composition template includes stencil's" >&2; \
+          echo "docker-compose-html partial under a filename stencil does not" >&2; \
+          echo "recognise as a compose file, stencil could not tell the lockfile" >&2; \
+          echo "was needed -- name it docker-compose.yml.j2, or render it to one of" >&2; \
+          echo "docker-compose.yml, docker-compose.yaml, compose.yml, compose.yaml." >&2; \
+          exit 1; \
+        fi && \
         mkdir -p {{ format_tools_dir }} && \
         printf '%s\n' '{{ format_manifest }}' > {{ format_tools_dir }}/package.json && \
         cp {{ format_lockfile_name }} {{ format_tools_dir }}/package-lock.json && \
