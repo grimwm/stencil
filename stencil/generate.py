@@ -119,6 +119,42 @@ def brand_image_path(value: str | None) -> str | None:
 _UNSAFE_IN_PATH = re.compile(r"[$`;|&<>\\\n]")
 
 
+def show_download_default(package: dict, config: dict) -> bool:
+    """Whether a package's pages carry the download button unless a
+    document says otherwise. Package first, then config-wide, then on.
+
+    Membership tests, not `or`, and that is the whole reason this is not a
+    one-liner like `lang` above. `lang` can fall back with
+    `package.get('lang') or config.get('lang') or 'en'` because nothing on
+    its chain is a meaningful False; this key's whole point is that False is
+    the one spelling a package or config has to opt out with, and
+    `package.get('show_download') or config.get(...)` would read that False
+    as "unset" and fall through to the wider scope -- exactly backwards.
+    """
+    for scope in (package, config):
+        if "show_download" in scope:
+            value = scope["show_download"]
+            if value is None:
+                # `show_download:` with nothing after it. AUTHORING.md's rule
+                # for front matter is that a blank key is the same as an
+                # absent one, and the front-matter half of this very feature
+                # follows it, so the config half agrees rather than raising on
+                # a spelling that means "I have not decided" in one file and
+                # "this is broken" in the other. Fall through to the wider
+                # scope, and then to the default.
+                continue
+            if not isinstance(value, bool):
+                raise ValueError(
+                    f"show_download must be true or false, not {value!r}. "
+                    ".config.yaml is read as YAML 1.1, so an unquoted "
+                    "no/off/false is already a real boolean -- a value that "
+                    "is neither means it was quoted, or is a number. Write "
+                    "show_download: true or show_download: false, unquoted."
+                )
+            return value
+    return True
+
+
 def check_config_path(package_id: str, where: str, value) -> str:
     """Refuse a configured path that would not behave like a filename."""
     text = str(value)
@@ -382,6 +418,12 @@ def get_template_context(package_id: str, config: dict) -> dict:
             else brand_of(package, config)[0]
         ),
         "config_brand_alt": brand_of(package, config)[1],
+        # The show_download a document falls back to when its front matter
+        # names none: package first, then config-wide, then on. Always set,
+        # so StrictUndefined has nothing to complain about and no
+        # `| default(...)` is needed at the call site -- see AGENTS.md on why
+        # papering over an undeclared key with a default is worse than this.
+        "config_show_download": show_download_default(package, config),
         "package_name": package_name,
         "package_dir": package.get("dir", f"{package_id}"),
         "package_type": package_type,
