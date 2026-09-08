@@ -96,7 +96,7 @@ print-to-PDF.
 mkdir -p /workspace && cd /workspace
 # copy the BUILT html and html-to-pdf.js here; the script hardcodes file:///workspace/
 # Take the puppeteer and pdf-lib versions from the package's Dockerfile.browser
-# (the `npm install --global` line), so this runs the same code as `make pdf`.
+# (the `npm install --global` line), so the direct dependencies match `make pdf`.
 export PUPPETEER_SKIP_DOWNLOAD=1
 npm init -y >/dev/null
 npm install --no-audit --no-fund --ignore-scripts puppeteer@<pinned> pdf-lib@<pinned>
@@ -108,7 +108,12 @@ node html-to-pdf.js Deck.html Deck.pdf
 
 `--ignore-scripts` keeps a dependency's install hook from running against the files just copied
 in; nothing in this pair needs one, since Chromium is supplied rather than downloaded. Do not
-substitute floating versions: the pins are what make the result comparable to `make pdf`.
+substitute floating versions: the pins are what make the result comparable to `make pdf`. They
+are also the limit of the comparison. Only the direct dependencies are pinned, here and in
+`Dockerfile.browser` alike; neither install carries a lockfile, so the transitive tree below
+puppeteer and pdf-lib can resolve differently from one day to the next (`stn-5hv` in stencil's
+tracker). This is a review build with the same direct versions, not a reproduction of the
+image.
 
 Success prints the repairs applied. Verify with pdf-lib that `StructTreeRoot` and `Metadata` are
 present and the page geometry is right — letter landscape 792x612pt for decks, portrait for
