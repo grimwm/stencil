@@ -802,8 +802,8 @@ async function probeOne(browser, kind, filename, downloadRoot) {
   var downloadRoot = "/workspace/_download-probe";
   var out = {};
   try {
-    out.doc = await probeOne(browser, "doc", "document.html", downloadRoot);
-    out.slide = await probeOne(browser, "slide", "deck.html", downloadRoot);
+    out.doc = await probeOne(browser, "doc", "download-runtime-doc.html", downloadRoot);
+    out.slide = await probeOne(browser, "slide", "download-runtime-deck.html", downloadRoot);
   } finally {
     await browser.close();
   }
@@ -821,28 +821,39 @@ def download_runtime(pdf_workspace):
 
     The rendered HTML is snapshotted into the returned payload's "_sources"
     key right after render() returns, rather than left for a test to re-read
-    off disk later. pdf_workspace is session-scoped and shared with every
-    other test module in this suite -- test_check_access.py and
-    test_present_mode.py both render into "document.html"/"deck.html" of
-    their own -- so a lazy re-read could race a different module's fixture
-    rewriting the same two names. Reading immediately after this module's own
-    render() call cannot.
+    off disk later.
+
+    THE NAMES ARE THIS MODULE'S OWN, and that is not fussiness. pdf_workspace
+    is SESSION-scoped and shared with every other container-backed module, and
+    "document.md"/"deck.md" in it are the fixture sources those modules render.
+    Writing this module's richer pages over those two names clobbers them for
+    the whole session: tests/test_pdf.py's deck test then PDFs THIS file's deck
+    while counting slides in the real fixture's, and reports a repagination
+    that never happened. That is not hypothetical -- it happened, it passed in
+    isolation, and it only failed in a full run, which is the worst way to find
+    it.
     """
-    (pdf_workspace / "document.md").write_text(RUNTIME_DOCUMENT)
-    (pdf_workspace / "deck.md").write_text(RUNTIME_DECK)
+    (pdf_workspace / "download-runtime-doc.md").write_text(RUNTIME_DOCUMENT)
+    (pdf_workspace / "download-runtime-deck.md").write_text(RUNTIME_DECK)
 
     doc_built = pipeline.render(
-        "doc", "document.md", "document.html", workdir=pdf_workspace
+        "doc", "download-runtime-doc.md", "download-runtime-doc.html",
+        workdir=pdf_workspace,
     )
-    assert doc_built.returncode == 0, f"pandoc failed on document.md\n{doc_built.stderr}"
+    assert doc_built.returncode == 0, (
+        f"pandoc failed on download-runtime-doc.md\n{doc_built.stderr}"
+    )
     deck_built = pipeline.render(
-        "slide", "deck.md", "deck.html", workdir=pdf_workspace
+        "slide", "download-runtime-deck.md", "download-runtime-deck.html",
+        workdir=pdf_workspace,
     )
-    assert deck_built.returncode == 0, f"pandoc failed on deck.md\n{deck_built.stderr}"
+    assert deck_built.returncode == 0, (
+        f"pandoc failed on download-runtime-deck.md\n{deck_built.stderr}"
+    )
 
     sources = {
-        "doc": (pdf_workspace / "document.html").read_text(),
-        "slide": (pdf_workspace / "deck.html").read_text(),
+        "doc": (pdf_workspace / "download-runtime-doc.html").read_text(),
+        "slide": (pdf_workspace / "download-runtime-deck.html").read_text(),
     }
 
     result = pipeline.run_in_browser(RUNTIME_PROBE, workdir=pdf_workspace, timeout=300)
@@ -1038,8 +1049,9 @@ def test_deck_download_is_named_deck_html(download_runtime_slide):
     """
     download = download_runtime_slide["download"]
     _require_attempted_download(download, "deck")
-    assert download.get("filename") == "deck.html", (
-        f"expected the download named deck.html, got {download.get('filename')!r}"
+    assert download.get("filename") == "download-runtime-deck.html", (
+        "expected the download named download-runtime-deck.html, got "
+        f"{download.get('filename')!r}"
     )
 
 
@@ -1047,8 +1059,9 @@ def test_deck_download_is_named_deck_html(download_runtime_slide):
 def test_document_download_is_named_document_html(download_runtime_doc):
     download = download_runtime_doc["download"]
     _require_attempted_download(download, "document")
-    assert download.get("filename") == "document.html", (
-        f"expected the download named document.html, got {download.get('filename')!r}"
+    assert download.get("filename") == "download-runtime-doc.html", (
+        "expected the download named download-runtime-doc.html, got "
+        f"{download.get('filename')!r}"
     )
 
 
