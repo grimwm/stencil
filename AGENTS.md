@@ -159,6 +159,17 @@ still gets a useful run — but a template change is not verified until they hav
 run, because reading a template and reasoning about it is how the citeproc
 ordering bugs got in.
 
+Some of them also drive **compose** — `tests/test_compose_check_access.py` runs
+the generated `check-access` service the way `make check-access` does, rather
+than assembling its mounts in Python. `pipeline.compose_command()` finds the
+implementation the generated Makefile would use, preferring `docker compose`
+(its `DC` default) and falling back through `podman compose` and the standalone
+binaries; it probes by running `<impl> version`, because `docker compose` is a
+plugin and docker can be installed and working while the plugin is absent.
+Missing compose is a skip locally and a hard failure in CI, since a tier that
+silently stops running is the failure mode this repository already learned from
+its pre-push hook.
+
 ## Architecture Overview
 
 **stencil is a scaffolding generator, not a renderer.** It never invokes pandoc.
