@@ -231,6 +231,23 @@
        wider than the page -- the flex row this replaces would have wrapped
        instead. A zero minimum lets the context wrap inside its column, which
        is the behaviour worth keeping. */
+    /* The column-gap paints space with no character behind it, and this is the
+       narrowest of the four such gaps -- so it is the one worth knowing the
+       number for. Measured for stn-avj in the print PDF: 1.06 em at the
+       tightest arrangement the header can reach, against an extractor
+       word-break threshold of roughly 0.15 em. About 7x, where the other
+       painted gaps have 18-23x.
+
+       Reaching that arrangement needs no byline AND no subtitle AND a
+       single-line title nearly filling the identity track: source order is
+       identity, byline, context, so anything else in the identity column is
+       emitted between the two and the extractor breaks on the y change before
+       it ever compares x. tests/test_painted_gaps.py builds it.
+
+       The "they are far apart in the content stream" argument that used to sit
+       here is pypdf's behaviour specifically. poppler reorders the header
+       geometrically and puts the context after the body text. What both models
+       actually rely on is the gap width above. */
     header.doc-title {
       display: grid;
       grid-template-columns: minmax(18rem, 1fr) minmax(0, auto);
@@ -619,7 +636,28 @@
       min-height: 100px;
     }
 
-    /* Side-by-side tables */
+    /* Side-by-side tables.
+
+       The gap paints space with no character behind it, which is the shape
+       that broke the header before 0.13.0. Measured in a real PDF for stn-avj:
+       it is fine here, and for a different reason than the header's fix. These
+       are block boxes, so the two tables become separate text objects and an
+       extractor recovers the boundary from the advance -- which it does above
+       a threshold of roughly 0.15 em (pypdf) or 0.12 em (poppler), measured.
+
+       The narrowest this paints, measured in the print PDF rather than on
+       screen, is 3.5 em: the 2rem below plus the padding and border a table
+       cell carries on each side. Roughly 23x the threshold, and content wide
+       enough to close it wraps to a stack instead. A `.side-by-side` holding
+       bare divs rather than tables gets the 2rem alone -- narrower, still an
+       order of magnitude clear. tests/test_painted_gaps.py holds it.
+
+       Quote gaps here in em, not px: the print block below rescales the root
+       font to 9.78pt, so a screen px figure describes a different document
+       than the one being read, and the extractor threshold is em-relative
+       anyway. (Spelled "the print block" rather than the at-rule's own name on
+       purpose -- tests/test_title_block.py finds that block by searching for
+       it, and prose carrying the literal is picked up instead.) */
     .side-by-side {
       display: flex;
       justify-content: center;
@@ -995,7 +1033,21 @@
          label in the accessibility tree -- the fact separators are
          aria-hidden, so they contribute no whitespace of their own. Change
          this to inline flow and the facts line runs together for a screen
-         reader, silently, the way the author list did before 0.13.0. */
+         reader, silently, the way the author list did before 0.13.0.
+
+         stn-avj measured it and now enforces it:
+         tests/test_painted_gaps.py::test_the_facts_are_block_boxes reads the
+         computed display of the `.doc-fact` elements THEMSELVES in Chromium.
+         Of the children of this container, deliberately: grouping facts in a
+         wrapper div would leave those children block-level while putting the
+         facts back into one inline flow inside it.
+
+         So `display: block` here -- which satisfies a stylesheet grep while
+         leaving the spans inline -- fails rather than shipping. The PDF text
+         layer is unaffected either way, because the separators carry real
+         characters; that is exactly why nothing else catches this. The
+         separators' aria-hidden, which is what makes the box structure the
+         only boundary, is pinned by the test beside it. */
       display: flex;
       flex-wrap: wrap;
       align-items: baseline;
