@@ -111,18 +111,26 @@ def runtime_behind(command: list[str]) -> str:
 
     Every implementation name says which store it means: `podman compose` and
     `podman-compose` reach podman's, `docker compose` and `docker-compose`
-    reach docker's. The fallback is for the case where compose is a standalone
-    binary and the CLI it implies is not installed at all.
+    reach docker's.
+
+    NO FALLBACK TO ANOTHER RUNTIME WHEN THAT CLI IS ABSENT. A standalone
+    `docker-compose` is a separate binary that reaches the Docker socket
+    directly, so it can build into docker's store on a machine that has no
+    `docker` CLI at all -- and `podman compose` failing its probe while podman
+    itself is installed is enough to select it. Asking the only runtime left on
+    PATH would then query podman about an image docker holds, get "" back, and
+    report a build that worked as a build that produced nothing. A wrong store
+    is not a weaker answer to this question; it is a different question whose
+    answer looks like failure. Skip instead, which is what the container tier
+    promises for anything it needs and cannot find.
     """
     wanted = "podman" if command[0].startswith("podman") else "docker"
-    if shutil.which(wanted):
-        return wanted
-    fallback = pipeline.container_runtime()
-    assert fallback is not None, (
-        f"compose resolved to {' '.join(command)} but neither {wanted} nor any "
-        "other runtime is on PATH, so there is no image store to ask"
-    )
-    return fallback
+    if shutil.which(wanted) is None:
+        pytest.skip(
+            f"compose resolved to {' '.join(command)}, but {wanted} is not on "
+            f"PATH, so its image store cannot be queried directly"
+        )
+    return wanted
 
 
 def image_id(tag: str, runtime: str) -> str:

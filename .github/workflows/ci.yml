@@ -5,6 +5,14 @@ on:
     branches: [main]
   pull_request:
 
+# This repository is public and `pull_request` builds a fork's code, so the
+# token every job gets is the one a malicious PR would be handed. Nothing here
+# writes: the jobs run pytest and pre-commit and report through the checks API.
+# Declared at the top level so a job added later inherits read-only rather than
+# whatever the repository default happens to be that year.
+permissions:
+  contents: read
+
 # A force-push should not leave the previous run burning a runner.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
