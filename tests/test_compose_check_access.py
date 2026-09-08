@@ -69,6 +69,7 @@ containers or a network.
 
 from __future__ import annotations
 
+import shutil
 import subprocess
 import uuid
 import warnings
@@ -96,7 +97,35 @@ RENDERED = "document.html"
 SUMMARY = "Checked 1 HTML file(s) at WCAG 2.1 AA, light and dark."
 
 
-def image_id(tag: str) -> str:
+def runtime_behind(command: list[str]) -> str:
+    """The image store the compose implementation writes into.
+
+    NOT ``pipeline.container_runtime()``, which is a different question with a
+    different answer. That one reports the runtime this repository's OTHER
+    container helpers drive, and it prefers docker. The compose implementation
+    is chosen separately and can be podman -- so on a machine holding both
+    CLIs where compose resolves to ``podman compose`` or ``podman-compose``,
+    asking container_runtime() would look for the image in docker's store while
+    compose had just built it into podman's, and the build assertion below
+    would fail on a build that worked perfectly.
+
+    Every implementation name says which store it means: `podman compose` and
+    `podman-compose` reach podman's, `docker compose` and `docker-compose`
+    reach docker's. The fallback is for the case where compose is a standalone
+    binary and the CLI it implies is not installed at all.
+    """
+    wanted = "podman" if command[0].startswith("podman") else "docker"
+    if shutil.which(wanted):
+        return wanted
+    fallback = pipeline.container_runtime()
+    assert fallback is not None, (
+        f"compose resolved to {' '.join(command)} but neither {wanted} nor any "
+        "other runtime is on PATH, so there is no image store to ask"
+    )
+    return fallback
+
+
+def image_id(tag: str, runtime: str) -> str:
     """The local id of ``tag``, or "" when the runtime does not hold it.
 
     Asks the RUNTIME, not compose, because the question is whether the build
@@ -104,11 +133,6 @@ def image_id(tag: str) -> str:
     -- which is what `compose run` will go looking for on a machine that has
     not built the pdf service first.
     """
-    runtime = pipeline.container_runtime()
-    assert runtime is not None, (
-        "no container runtime; this case is marked integration and should have "
-        "been skipped by conftest before reaching here"
-    )
     probe = subprocess.run(
         [runtime, "images", "-q", tag], capture_output=True, text=True, timeout=120
     )
@@ -144,6 +168,12 @@ def compose_impl():
             "(docker compose, podman compose, docker-compose, podman-compose)"
         )
     return command
+
+
+@pytest.fixture(scope="session")
+def compose_runtime(compose_impl):
+    """The image store to ask about a tag compose just built."""
+    return runtime_behind(compose_impl)
 
 
 @pytest.fixture
@@ -201,7 +231,7 @@ def compose(compose_impl):
 
 @integration
 def test_the_service_checks_products_beside_their_sources(
-    demo_config, generate_package, install_sources, compose
+    demo_config, generate_package, install_sources, compose, compose_runtime
 ):
     """The default layout: no output_dir, so the products are under /workspace.
 
@@ -218,7 +248,7 @@ def test_the_service_checks_products_beside_their_sources(
 
     built = run("build", "check-access", timeout=2400)
     assert built.returncode == 0, outcome("compose build check-access", built)
-    assert image_id("localhost/beside_browser:latest"), (
+    assert image_id("localhost/beside_browser:latest", compose_runtime), (
         "the build stanza did not produce the tag the compose file names, so "
         "`compose run` would be running some other image or none"
     )
@@ -245,7 +275,8 @@ def test_the_service_checks_products_beside_their_sources(
 
 @integration
 def test_the_service_checks_an_output_directory(
-    demo_config, generate_package, install_sources, compose, tmp_path
+    demo_config, generate_package, install_sources, compose, compose_runtime,
+    tmp_path,
 ):
     """THE ONE THAT COULD NOT PASS, driven through the service that shipped it.
 
@@ -287,7 +318,7 @@ def test_the_service_checks_an_output_directory(
 
     built = run("build", "check-access", timeout=2400)
     assert built.returncode == 0, outcome("compose build check-access", built)
-    assert image_id("localhost/elsewhere_browser:latest"), (
+    assert image_id("localhost/elsewhere_browser:latest", compose_runtime), (
         "the build stanza did not produce the tag the compose file names, so "
         "`compose run` would be running some other image or none"
     )
