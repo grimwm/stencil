@@ -544,6 +544,89 @@ def test_on_accent_text_is_legible_on_the_accent_fill(theme):
     )
 
 
+# Inline code is the one text colour with no single background to be measured
+# against. TEXT_TOKENS all sit on --surface; `code` follows prose onto every
+# fill prose can land on, and the token has to clear 4.5:1 on the WORST of
+# them rather than on the page.
+#
+# One list for both themes rather than two: every fill here is a token that
+# both palettes define, and a surface that only carries code in one theme
+# still has to be measured in the other -- the token is shared.
+#
+# Not listed: --print-deck-bg and the --deck-accent-from/-to gradient, which
+# are the title slide's fill. It only ever holds front matter, but pandoc
+# renders $title$ as inline markdown, so a backticked `title:` does reach it --
+# and fails on the old colour and the new one alike, 1.78:1 then 1.47:1 on the
+# gradient's dark end and 1.06:1 on its light one. No value of --code-inline
+# fixes that: the fill is dark and inline code is ink, so it needs a scoped
+# rule inheriting the on-accent colour. Pre-existing, and stn-7i8 has it.
+CODE_SURFACES = [
+    "--surface",              # body prose
+    "--surface-muted",        # even table rows
+    "--surface-accent",       # table caption
+    "--surface-accent-on",    # thead -- the pairing that failed, at 4.07:1
+    "--card-bg",              # callout card
+    "--deck-quote-bg",        # a slide's blockquote and .takeaway
+    # Headroom rather than a live pairing, and kept for that reason. Code in
+    # a `pre` inherits --text, and nothing generated here carries Bootstrap's
+    # .table-striped -- but the dark block maps --bs-table-striped-bg onto
+    # this fill, so a table that ever gets the class makes it a live one.
+    "--surface-sunken",
+]
+
+# Print never matches @media screen, so these take the LIGHT --code-inline
+# whatever the reader's theme is. --print-th-bg is the header fill again, and
+# it sat at 4.51:1 -- inside rounding of the threshold it is meant to clear.
+PRINT_CODE_SURFACES = [
+    "--print-th-bg",
+    "--print-stripe-bg",
+    "--print-card-bg",
+    "--print-deck-quote-bg",
+]
+
+
+@pytest.mark.parametrize("theme", ["light", "dark"])
+@pytest.mark.parametrize("surface", CODE_SURFACES)
+def test_inline_code_is_legible_on_every_surface_prose_reaches(theme, surface):
+    """stn-1y7. `--code-inline` #c7254e measured 5.52:1 on white and 4.07:1 on
+    the table-header fill, so a backticked column name in a `thead` failed AA
+    while every other appearance of the same colour passed.
+
+    Only `make check-access` could see it, and only for a page that happens to
+    put code in a header -- the fixture did not, so pa11y never rendered the
+    case either. Measuring the token against its own worst surface here is
+    what makes the next one of these fail in `pytest -m 'not integration'`.
+    """
+    css = strip_comments(source("_page-style.css.j2"))
+    table = dict(tokens(css))
+    if theme == "dark":
+        table.update(
+            dict(re.findall(r"(--[a-z0-9-]+)\s*:\s*([^;]+);", dark_block(css)))
+        )
+    fg = resolve(table["--code-inline"], table)
+    bg = resolve(table[surface], table)
+    ratio = contrast(fg, bg)
+    assert ratio >= 4.5, (
+        f"{theme}: --code-inline ({fg}) on {surface} ({bg}) is "
+        f"{ratio:.2f}:1, under 4.5:1"
+    )
+
+
+@pytest.mark.parametrize("surface", PRINT_CODE_SURFACES)
+def test_inline_code_is_legible_on_every_printed_surface(surface):
+    """The same question for the handout, which is the artefact that gets
+    read on paper and cannot be re-themed by whoever is reading it."""
+    css = strip_comments(source("_page-style.css.j2"))
+    table = dict(tokens(css))
+    fg = resolve(table["--code-inline"], table)
+    bg = resolve(table[surface], table)
+    ratio = contrast(fg, bg)
+    assert ratio >= 4.5, (
+        f"print: --code-inline ({fg}) on {surface} ({bg}) is "
+        f"{ratio:.2f}:1, under 4.5:1"
+    )
+
+
 def test_nothing_fills_with_the_ink_token():
     """A background painted with --accent is the bug above, reintroduced."""
     for template in STYLESHEETS:

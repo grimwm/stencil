@@ -53,6 +53,30 @@ def test_deck_exercises_the_layout_fences(render_soup):
     assert len(slides) > 1, "the deck should split into several slides"
 
 
+def test_the_document_puts_inline_code_in_a_table_header(render_soup):
+    """stn-1y7, and the reason it went unseen for four releases.
+
+    `make check-access` runs pa11y over whatever the fixture renders, so it
+    measures a colour pairing only if some element actually produces it. No
+    fixture had a table, let alone a backticked one, so `--code-inline` on the
+    `thead` fill -- 4.07:1, the one pairing in the palette that failed AA --
+    was never put in front of the checker. The token is guarded by measurement
+    in tests/test_theme.py; this is the half that makes pa11y look.
+
+    A `thead code` and a `caption code`, because they are two different fills:
+    --surface-accent-on and --surface-accent.
+    """
+    soup = render_soup("doc", "document.md")
+
+    assert soup.select_one("thead code") is not None, (
+        "the fixture lost its backticked table header; check-access no longer "
+        "renders the pairing stn-1y7 was about"
+    )
+    assert soup.select_one("caption code") is not None, (
+        "the fixture lost its backticked caption"
+    )
+
+
 def test_hidden_content_is_dropped_by_default(render_soup):
     """The default build is the handout, not the answer key."""
     soup = render_soup("doc", "document.md")
