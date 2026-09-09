@@ -10,8 +10,10 @@
 # build time, so a file created after this Makefile was generated resolves too.
 PKG_SOURCE_SPECS = {{ package_sources | join(' ') }}
 {% if package_type == "zip" %}
-# zip -r walks a directory itself (dotfiles included), so a directory entry is
-# handed over whole rather than expanded into its children here.
+# Both archivers walk a directory themselves, dotfiles and hidden files
+# included, so a directory entry is handed over whole rather than expanded into
+# its children here. Which archiver runs is not a detail on Windows -- see the
+# pkg target below.
 pkg_expand = $(if $(findstring *,$(1)),$(sort $(wildcard $(1))),$(1))
 {% else %}
 # pandoc reads files, not directories, so a directory entry is expanded into
@@ -35,16 +37,36 @@ PKG_SOURCES = $(foreach s,$(PKG_SOURCE_SPECS),$(call pkg_expand,$(s)))
 
 {% endif %}
 {% if package_type == "zip" %}
-# Compress-Archive -Path takes a comma-separated list. Defined here rather than
-# borrowed from the doc template, which a zip package need not include.
-pkg_empty :=
-pkg_space := $(pkg_empty) $(pkg_empty)
-pkg_comma := ,
+# `?=` rather than `=`: a consumer may override Makefile.j2 and define PKG in
+# its own composition before including this partial, and that definition wins.
+# Without a default here at all, a package generated from the bundled templates
+# alone had an empty $(PKG) -- `clean-pkg` cleaned nothing and the archiver was
+# handed no name to write to.
+PKG ?= {{ package_name }}
 
 ifeq ($(OS),Windows_NT)
+# bsdtar, shipped as tar.exe since Windows 10 1803 -- not Compress-Archive,
+# which cannot archive a hidden file at all. `git init` on Windows sets the
+# Hidden attribute on .git (git's core.hideDotFiles defaults to dotGitOnly, so
+# .git gets the bit and other dot-names do not), and Compress-Archive expands a
+# directory with Get-ChildItem WITHOUT -Force, so it drops the whole subtree --
+# silently, absent even from -Verbose. A student who ran `git init` inside the
+# packaged directory submitted an archive with no repository in it, while the
+# same layout on Unix archived one, because `zip -r` has no notion of hidden.
+#
+# --format zip, and NOT -a, which infers format and compression from the
+# suffix. Both of -a's mistakes are silent ones:
+#
+#   * In Git Bash and MSYS2 $(OS) is still Windows_NT but `tar` is GNU tar,
+#     whose -a does not know .zip: it exits 0 and writes a POSIX tar archive
+#     under the .zip name. --format zip is an error there, so make stops.
+#   * package_name need not end in .zip, and -a gzips the zip when it does not.
+#
+# An explicit format is a zip whatever the archive is called, which is what the
+# `zip -r` below already did, and a loud failure wherever it cannot be.
 pkg: ## Create submission zip file
 	@echo Creating submission zip file...
-	powershell.exe -Command "Compress-Archive -Path $(subst $(pkg_space),$(pkg_comma),$(PKG_SOURCES)) -DestinationPath \"$(PKG)\" -Force"
+	tar --format zip -cf "$(PKG)" $(PKG_SOURCES)
 	@echo Created $(PKG)
 	@echo Upload $(PKG) to the course website.
 else

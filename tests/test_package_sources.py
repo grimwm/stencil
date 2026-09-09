@@ -11,6 +11,8 @@ producing a plausible-looking archive with the wrong contents in it.
 
 from __future__ import annotations
 
+import subprocess
+
 import pytest
 
 from stencil.generate import (
@@ -149,6 +151,95 @@ def test_zip_hands_a_directory_over_whole(makefile):
     # Not recipe(): the pkg body is split across an ifeq/else, and the helper
     # stops at the first line that is not a tab-indented recipe line.
     assert "zip -r $(PKG) $(PKG_SOURCES)" in text
+
+
+# --- the zip pkg target, and the hidden .git it has to carry ----------------
+#
+# A course that grades the repository needs the repository in the submission,
+# and Compress-Archive cannot put it there. `git init` on Windows sets the
+# Hidden attribute on .git, Compress-Archive expands a directory with
+# Get-ChildItem and no -Force, and the subtree is dropped without a word --
+# not even under -Verbose. So a student who initialized a repo inside the
+# packaged directory submitted an archive with no .git on Windows and a
+# complete one on Unix. Windows uses bsdtar now, which has no notion of hidden.
+
+
+def test_windows_does_not_archive_with_compress_archive(makefile):
+    """It silently drops every hidden entry and has no switch to stop it.
+
+    Over the recipe lines rather than the whole file, because the comment
+    above the target explains at length what is wrong with the cmdlet and
+    would otherwise be the thing keeping this test green.
+    """
+    text = makefile(package_type="zip", package_name="hs3.zip")
+    recipes = [line for line in text.splitlines() if line.startswith("\t")]
+    assert not [line for line in recipes if "Compress-Archive" in line]
+
+
+def test_windows_archives_with_tar(makefile):
+    """bsdtar, tar.exe since Windows 10 1803. Not recipe(): the pkg body is
+    split across an ifeq/else, and the helper stops at the first line that is
+    not a tab-indented recipe line."""
+    text = makefile(package_type="zip", package_name="hs3.zip")
+    assert 'tar --format zip -cf "$(PKG)" $(PKG_SOURCES)' in text
+
+
+def test_the_archive_format_is_explicit_rather_than_inferred(makefile):
+    """-a reads the format off the suffix, and gets it wrong quietly twice.
+
+    In Git Bash and MSYS2 $(OS) is Windows_NT but `tar` is GNU tar, whose -a
+    does not know .zip: measured on GNU tar 1.35, `tar -a -cf out.zip dir`
+    exits 0 and writes a POSIX tar archive under the .zip name. --format zip is
+    'Invalid archive format' there, exit 2, so make stops instead. And
+    package_name is not required to end in .zip -- bsdtar 3.8.3 given
+    `-a --format zip -cf d.tar.gz` writes a GZIP-compressed zip, where the
+    format alone writes a zip whatever the archive is called.
+    """
+    text = makefile(package_type="zip", package_name="hs3.zip")
+    assert "--format zip" in text
+    assert "tar -a" not in text, "-a would infer the format from the suffix"
+
+
+def test_the_archive_has_a_name_without_a_consumers_help(makefile):
+    """The bundled zip branch never defined PKG -- only a consumer's own
+    Makefile.j2 did -- so a package generated from the bundled templates alone
+    had an empty $(PKG): `clean-pkg` removed nothing, and `tar -cf ""` writes
+    the archive to stdout where Compress-Archive had at least refused an empty
+    -DestinationPath. `?=` so a composition that sets PKG first still wins.
+    """
+    text = makefile(package_type="zip", package_name="hs3.zip")
+    assert "PKG ?= hs3.zip" in text
+    assert "PKG = hs3.zip" not in text, "a consumer's own PKG must survive"
+
+
+def test_a_consumers_pkg_survives_the_bundled_default(makefile, tmp_path):
+    """`?=` is a promise the text cannot keep on its own; make has to be the
+    one to say a composition's PKG wins. A wrapper that sets PKG and then
+    includes the generated Makefile is evaluated on both sides of the OS
+    split, and the archiver must be handed the composition's name with the
+    bundled default nowhere in the recipe."""
+    (tmp_path / "Makefile").write_text(
+        makefile(package_type="zip", package_name="hs3.zip")
+    )
+    (tmp_path / "composition.mk").write_text("PKG = mine.zip\ninclude Makefile\n")
+    for os_name, archiver in (
+        ("Windows_NT", 'tar --format zip -cf "mine.zip" htdocs'),
+        ("Darwin", "zip -r mine.zip htdocs"),
+    ):
+        printed = subprocess.run(
+            ["make", "-n", "-f", "composition.mk", "pkg", f"OS={os_name}"],
+            cwd=tmp_path, capture_output=True, text=True, check=True,
+        ).stdout
+        assert archiver in printed, printed
+        assert "hs3.zip" not in printed, printed
+
+
+def test_the_comma_joining_left_with_the_cmdlet_that_needed_it(makefile):
+    """Compress-Archive -Path took a comma-separated list; tar takes a plain
+    argument list, so nothing is left to subst spaces in."""
+    text = makefile(package_type="zip", package_name="hs3.zip")
+    for helper in ("pkg_empty", "pkg_space", "pkg_comma"):
+        assert helper not in text
 
 
 def test_specs_keep_the_order_they_were_listed_in(makefile):

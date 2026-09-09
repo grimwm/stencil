@@ -9,6 +9,54 @@ and the closed epics in `.beads/issues.jsonl` are the readable index.
 How the version gets bumped is written down in
 [AGENTS.md](AGENTS.md#cutting-a-release), not here.
 
+## 0.36.0
+
+- **A zip package's `pkg` target archives with `tar` on Windows, so a hidden
+  `.git` reaches the submission.** `Compress-Archive` cannot put one there.
+  `git init` on Windows sets the real `FILE_ATTRIBUTE_HIDDEN` bit on `.git`
+  — git's `core.hideDotFiles` defaults to `dotGitOnly`, so `.git` gets the
+  attribute and no other dot-name does — and `Compress-Archive` expands a
+  directory handed to `-Path` with `Get-ChildItem` and no `-Force`, which
+  drops every hidden entry silently: not in the archive, and not mentioned
+  under `-Verbose` either. No parameter turns it off; it is a long-standing
+  limitation of `Microsoft.PowerShell.Archive` 1.x, which is what ships with
+  both PS 5.1 and PS 7.x. So a student who ran `git init` inside the packaged
+  directory submitted an archive with no repository in it, while the same
+  layout on Linux or macOS submitted a complete one, because `zip -r` has no
+  notion of hidden. For a course that grades the repository, the Windows half
+  of the class was silently handing in nothing gradeable. Windows now runs
+  `tar`, the bsdtar shipped as `tar.exe` since Windows 10 1803, which walks
+  the tree as it is.
+
+  The flag is `--format zip` rather than `-a`, and that is the load-bearing
+  half. `-a` infers format and compression from the archive's suffix, and
+  both of the ways it gets that wrong are quiet. `$(OS)` is still
+  `Windows_NT` inside Git Bash and MSYS2, but `tar` there is GNU tar, whose
+  `-a` does not know `.zip`: measured on GNU tar 1.35, `tar -a -cf out.zip dir` exits 0 and writes a POSIX tar archive under the `.zip` name.
+  `--format zip` is `Invalid archive format` on that tar, exit 2, so make
+  stops rather than shipping a mislabelled archive. And `package_name` is
+  only required to *exist* for a zip package, never to end in `.zip` —
+  bsdtar 3.8.3 given `-a --format zip -cf d.tar.gz` writes a GZIP-compressed
+  zip, where the explicit format alone writes a plain zip whatever the
+  archive is called. That is also what the `zip -r` branch already did, so
+  the two platforms now agree on the name-independent contract as well as on
+  the hidden files. `stn-m2h`.
+
+  The `pkg_empty`/`pkg_space`/`pkg_comma` helpers left with the cmdlet that
+  needed them: `Compress-Archive -Path` took a comma-separated list, and
+  `tar` takes an ordinary argument list.
+
+- **A zip package's `PKG` now has a default, so the bundled templates alone
+  produce a working `pkg`.** Nothing in stencil's own templates defined it —
+  only a consuming project's override of `Makefile.j2` did, which is why no
+  course noticed — so a package generated from the bundled set had an empty
+  `$(PKG)`: `clean-pkg` removed nothing, and the archiver was handed no name
+  to write to. It is `PKG ?= <package_name>`, with `?=` rather than `=` so a
+  composition that defines `PKG` before including the partial keeps its own
+  value. Found while verifying the `tar` change end-to-end: an empty name is
+  a refusal from `Compress-Archive`, which validates `-DestinationPath`
+  against the empty string, but `tar -cf ""` writes the archive to stdout.
+
 ## 0.35.0
 
 - **A config mistake now fails the command instead of quietly dropping the
