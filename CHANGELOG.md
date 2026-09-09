@@ -59,6 +59,48 @@ How the version gets bumped is written down in
 
 ## 0.35.0
 
+- **A config mistake now fails the command instead of quietly dropping the
+  package it appears in.** `show_download_default` and a dozen other checks
+  raise on a bad value, and two call sites — the `when:` key validator and the
+  builder that feeds `stencil install` and `stencil clean` — caught that and
+  moved on. So a quoted `show_download: "no"` did not fail anything: it
+  removed that package from the managed `.gitignore` section, from what
+  `clean` removed, and from a `gen --all` that still exited 0, and nothing
+  said so. The section then went stale silently, which is the worst way for a
+  generated file to be wrong. One aggregating pre-flight now reads every
+  package before anything is written, and reports **every** problem it finds
+  in one message rather than the first — fixing a config one error per run,
+  when they were all visible on the first pass, is a bad trade for an author
+  with a dozen packages.
+
+  The fail-open was never specific to `show_download`; that key only widened
+  the ways to trip it. Everything those paths could hit was swallowed too,
+  including `check_config_path`'s refusals — the guard that stops a configured
+  filename acting like a command in a generated Make recipe. Type mistakes
+  (`docs: 7`, a `packages:` written as a list) were not swallowed but were not
+  caught either, and reached the terminal as a Python traceback; they are
+  reported now as well.
+
+  Brand validation joins the same pre-flight, which is what removes the last
+  raw traceback: a `brand` pointing at a file that does not exist used to
+  raise *after* the package had been half-generated. Whether the logo file
+  exists is checked by `gen` alone, because only `gen` copies it — the
+  `.gitignore` entry and the clean list are both derived from the brand
+  string, so a missing file cannot make either wrong, and checking for it
+  everywhere would take `clean` away for no benefit. A missing `brand-alt`
+  needs no filesystem and is reported by every command.
+
+  Two consequences worth knowing before you meet them. A mistake anywhere
+  fails every command, including package-scoped ones: `stencil gen hs1`
+  refuses while `hs9` is broken, which is how `template_env` and `when:`
+  mistakes have always behaved and is now the rule for the rest of the config
+  rather than there being two kinds. And `clean` refuses too — most wanted
+  exactly when the config has drifted and generated files are still on disk.
+  Refusing is still right, because running a deletion pass from a config
+  stencil cannot read is worse than not running one, so the message says the
+  way out: fix the config, or remove the generated directory by hand.
+  `stn-k73`.
+
 - **Every generated page now carries a self-download button, on by default.** A
   document gets it beside the theme control; a deck gets it in the toolbar,
   between the theme group and `Present`. `show_download: false` in a
@@ -147,6 +189,40 @@ How the version gets bumped is written down in
   reason. A string capture defers that work to the moment it is actually
   needed — assigned back into `outerHTML` on click — rather than paying it on
   every page load.
+
+- **The documented reason `show_date` needs coercing was wrong, and is now
+  measured rather than asserted** (`stn-38o`). `frontmatter-filter.lua`'s
+  header comment, `AUTHORING.md` and two test docstrings all said pandoc reads
+  YAML 1.2, where `true` and `false` are the only booleans, so `show_date: no`
+  reaches the template as the *string* `"no"`. Measured against the pinned
+  pandoc, it does not: `no` arrives as a real boolean. The obvious explanation
+  — documentation that drifted when the pandoc pin moved under it — is not
+  what happened: `PANDOC_IMAGE` was pinned to the image it still names the day
+  *before* `frontmatter-filter.lua` was written, and has not moved since. The
+  comment was wrong when it was written, and stayed wrong because nothing
+  could fail.
+
+  Nothing was broken and nothing changes. `truthy()` checks the boolean branch
+  before consulting its table of false-ish words, so every spelling resolved
+  correctly the whole time — which is exactly why the claim survived: no test
+  could fail.
+
+  The correction turned up something the ticket had not: **"any case" is
+  wrong too.** Pandoc resolves only the boolean spellings YAML 1.1
+  *enumerates* — lowercase, Titlecase and UPPERCASE — so `no`, `No` and `NO`
+  are booleans while `nO` is the plain string `"nO"`. That makes the false-ish
+  table load-bearing for a bigger reason than anyone had written down: it is
+  consulted after lowercasing, and it is the only thing standing between
+  `show_date: nO` and a date the author asked to withhold. Bare `y` and `n`
+  are booleans; `1`, `0` and `none` are not; `null`, `~` and a blank value are
+  indistinguishable from one another.
+
+  The measurement now lives in `tests/test_yaml_resolution.py`, which drives a
+  probe filter through the pinned image and pins every spelling. A pandoc bump
+  that changes resolution fails there instead of silently re-truing a comment.
+  That is the actual fix — the prose was a symptom, and each corrected site
+  now scopes its claim to `PANDOC_IMAGE` and points at the test rather than
+  asserting something timeless about "pandoc" again.
 
 ## 0.34.0
 

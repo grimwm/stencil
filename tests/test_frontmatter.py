@@ -6,12 +6,21 @@ means the header has to know whether *any* of them is set -- a question a
 pandoc template cannot ask, so frontmatter-filter.lua answers it as
 `has-context`.
 
-`show_date` is the interesting one. Pandoc reads YAML 1.2, where `true` and
-`false` are the only booleans, so `show_date: no` arrives as the string "no"
-and `$if(show_date)$` fires on it. Every test below that writes a word rather
-than a bare `true` exists because that word used to mean its own opposite --
-and it failed in the direction that publishes a date the author asked to
-withhold, which is the direction you do not get to find out about later.
+`show_date` is the interesting one. The pinned pandoc hands the filter a real
+boolean for the spellings YAML 1.1 enumerates -- `no`, `No` and `NO` -- and a
+plain string for everything else, mixed case included; `$if(show_date)$` fires
+on any non-empty string. Every test below that writes a word rather than a bare
+`true` exists because that word used to mean its own opposite -- and it failed
+in the direction that publishes a date the author asked to withhold, which is
+the direction you do not get to find out about later.
+
+This docstring used to say pandoc reads YAML 1.2, where `true` and `false` are
+the only booleans, so `show_date: no` arrives as the string "no". It was wrong
+about the pandoc this project pins -- and not because the pin moved under it:
+PANDOC_IMAGE already named the image it names today when that sentence was
+written. Nothing broke, because frontmatter-filter.lua is correct either way.
+tests/test_yaml_resolution.py pins what the pinned image actually resolves;
+this module tests what stencil does with the result.
 """
 
 from __future__ import annotations
