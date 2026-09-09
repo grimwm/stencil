@@ -100,6 +100,40 @@ How the version gets bumped is written down in
   needed — assigned back into `outerHTML` on click — rather than paying it on
   every page load.
 
+- **The documented reason `show_date` needs coercing was wrong, and is now
+  measured rather than asserted** (`stn-38o`). `frontmatter-filter.lua`'s
+  header comment, `AUTHORING.md` and two test docstrings all said pandoc reads
+  YAML 1.2, where `true` and `false` are the only booleans, so `show_date: no`
+  reaches the template as the *string* `"no"`. Measured against the pinned
+  pandoc, it does not: `no` arrives as a real boolean. The obvious explanation
+  — documentation that drifted when the pandoc pin moved under it — is not
+  what happened: `PANDOC_IMAGE` was pinned to the image it still names the day
+  *before* `frontmatter-filter.lua` was written, and has not moved since. The
+  comment was wrong when it was written, and stayed wrong because nothing
+  could fail.
+
+  Nothing was broken and nothing changes. `truthy()` checks the boolean branch
+  before consulting its table of false-ish words, so every spelling resolved
+  correctly the whole time — which is exactly why the claim survived: no test
+  could fail.
+
+  The correction turned up something the ticket had not: **"any case" is
+  wrong too.** Pandoc resolves only the boolean spellings YAML 1.1
+  *enumerates* — lowercase, Titlecase and UPPERCASE — so `no`, `No` and `NO`
+  are booleans while `nO` is the plain string `"nO"`. That makes the false-ish
+  table load-bearing for a bigger reason than anyone had written down: it is
+  consulted after lowercasing, and it is the only thing standing between
+  `show_date: nO` and a date the author asked to withhold. Bare `y` and `n`
+  are booleans; `1`, `0` and `none` are not; `null`, `~` and a blank value are
+  indistinguishable from one another.
+
+  The measurement now lives in `tests/test_yaml_resolution.py`, which drives a
+  probe filter through the pinned image and pins every spelling. A pandoc bump
+  that changes resolution fails there instead of silently re-truing a comment.
+  That is the actual fix — the prose was a symptom, and each corrected site
+  now scopes its claim to `PANDOC_IMAGE` and points at the test rather than
+  asserting something timeless about "pandoc" again.
+
 ## 0.34.0
 
 - **An exact version pinned three packages and left 44 floating.** The browser
