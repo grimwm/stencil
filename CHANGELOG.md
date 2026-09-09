@@ -11,6 +11,48 @@ How the version gets bumped is written down in
 
 ## 0.35.0
 
+- **A config mistake now fails the command instead of quietly dropping the
+  package it appears in.** `show_download_default` and a dozen other checks
+  raise on a bad value, and two call sites — the `when:` key validator and the
+  builder that feeds `stencil install` and `stencil clean` — caught that and
+  moved on. So a quoted `show_download: "no"` did not fail anything: it
+  removed that package from the managed `.gitignore` section, from what
+  `clean` removed, and from a `gen --all` that still exited 0, and nothing
+  said so. The section then went stale silently, which is the worst way for a
+  generated file to be wrong. One aggregating pre-flight now reads every
+  package before anything is written, and reports **every** problem it finds
+  in one message rather than the first — fixing a config one error per run,
+  when they were all visible on the first pass, is a bad trade for an author
+  with a dozen packages.
+
+  The fail-open was never specific to `show_download`; that key only widened
+  the ways to trip it. Everything those paths could hit was swallowed too,
+  including `check_config_path`'s refusals — the guard that stops a configured
+  filename acting like a command in a generated Make recipe. Type mistakes
+  (`docs: 7`, a `packages:` written as a list) were not swallowed but were not
+  caught either, and reached the terminal as a Python traceback; they are
+  reported now as well.
+
+  Brand validation joins the same pre-flight, which is what removes the last
+  raw traceback: a `brand` pointing at a file that does not exist used to
+  raise *after* the package had been half-generated. Whether the logo file
+  exists is checked by `gen` alone, because only `gen` copies it — the
+  `.gitignore` entry and the clean list are both derived from the brand
+  string, so a missing file cannot make either wrong, and checking for it
+  everywhere would take `clean` away for no benefit. A missing `brand-alt`
+  needs no filesystem and is reported by every command.
+
+  Two consequences worth knowing before you meet them. A mistake anywhere
+  fails every command, including package-scoped ones: `stencil gen hs1`
+  refuses while `hs9` is broken, which is how `template_env` and `when:`
+  mistakes have always behaved and is now the rule for the rest of the config
+  rather than there being two kinds. And `clean` refuses too — most wanted
+  exactly when the config has drifted and generated files are still on disk.
+  Refusing is still right, because running a deletion pass from a config
+  stencil cannot read is worse than not running one, so the message says the
+  way out: fix the config, or remove the generated directory by hand.
+  `stn-k73`.
+
 - **Every generated page now carries a self-download button, on by default.** A
   document gets it beside the theme control; a deck gets it in the toolbar,
   between the theme group and `Present`. `show_download: false` in a

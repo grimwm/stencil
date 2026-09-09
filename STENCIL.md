@@ -207,7 +207,36 @@ resolves package first, then config-wide, then a built-in default; see
 and [AUTHORING.md](AUTHORING.md) for how a document's own front matter overrides whatever is
 configured here. `.config.yaml` is read as YAML 1.1, so `show_download: false` (unquoted) is already
 a real boolean there — a *quoted* `"false"` is a string, and stencil refuses it with an error naming
-the key rather than silently coercing it.
+the key rather than silently coercing it. That refusal stops the run: see
+[When the config is wrong](#when-the-config-is-wrong).
+
+### When the config is wrong
+
+A config mistake stops the command. It does not skip the package it appears in.
+
+That is worth stating because it used to be the other way round: a package with a bad value was
+quietly dropped from the managed `.gitignore` section, from what `clean` removed, and from a
+`stencil gen --all` that still exited 0. The section then went stale and nothing said so.
+
+Three things follow, all deliberate:
+
+- **Every problem is reported at once, not just the first.** Fixing a config one error per run,
+  when the errors were all visible on the first pass, is a bad trade for an author with a dozen
+  packages.
+- **A mistake anywhere fails every command, including package-scoped ones.** `stencil gen hs1`
+  refuses while `hs9` is broken. `stencil` already worked this way for `template_env` and `when:`
+  mistakes, which have always been checked across the whole config; this extends the same rule to
+  the rest of it rather than having two kinds of config error with two behaviours.
+- **`clean` refuses too, which is the awkward one.** It is most wanted exactly when the config has
+  drifted and generated files are still on disk. Refusing is still the right call — running a
+  deletion pass from a config stencil cannot read is worse than not running one — so the error says
+  the way out: fix the config, or remove the generated directory by hand.
+
+The one check that is **not** applied everywhere is whether a `brand` logo's file exists. Only
+`gen` looks, because only `gen` copies it: the `.gitignore` entry and the clean list are both
+derived from the brand *string*, so a missing file cannot make either of them wrong, and checking
+for it would take `clean` away for no benefit. A missing `brand-alt`, which needs no filesystem at
+all, is reported by every command.
 
 ### Documents vs. Slide Decks
 
@@ -245,7 +274,7 @@ slide breaks, layout fences, presenter-only content, present mode and printing -
 | `name`            | No       | Display name (defaults to package ID)                                                                                                                                                   |
 | `lang`            | No       | Language for this package's pages, overriding the config-wide `lang` (default `en`)                                                                                                     |
 | `brand`           | No       | Brand for this package's documents, overriding the config-wide `brand`: a name, or a `file://` path to a logo resolved relative to this config file                                     |
-| `brand-alt`       | No       | Alt text for a `brand` logo. Required when `brand` is an image; `stencil gen` fails without it                                                                                          |
+| `brand-alt`       | No       | Alt text for a `brand` logo. Required when `brand` is an image; `gen`, `install` and `clean` all fail without it. Whether the logo *file* exists is checked by `gen` only               |
 | `show_download`   | No       | Whether pages in this package carry the download button, overriding the config-wide `show_download` (default `true`); a document's own front matter overrides this, in either direction |
 | `dir`             | No       | Output subdirectory (defaults to package ID)                                                                                                                                            |
 | `package_type`    | Yes      | `doc` for HTML documents, `zip` for submissions                                                                                                                                         |
