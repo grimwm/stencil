@@ -22,8 +22,11 @@ so a silent empty alt drops that entirely for a screen reader -- and
 from __future__ import annotations
 
 import re
+import subprocess
+import sys
 
 import pytest
+import yaml
 
 LOGO = "logo.svg"
 LOGO_SVG = (
@@ -444,6 +447,34 @@ def test_a_missing_config_logo_fails_generation(generate_package, config_logo):
         generate_package(
             brand_config(brand="file://img/absent.svg", **{"brand-alt": "X"})
         )
+
+
+def test_a_missing_brand_alt_now_fails_install_too(tmp_path):
+    """stn-ox1: the same brand check that fails `stencil gen` (above) joins
+    the aggregated pre-flight that `stencil install` now runs too, since
+    install's .gitignore section is built from the same package contexts.
+
+    Deliberately the missing-brand-alt case, not the missing-file case: the
+    file-existence check needs a filesystem root (config_dir) that install
+    does not have reason to resolve otherwise, so it stays gen-only. A
+    missing brand-alt needs no filesystem at all, so it has no excuse not to
+    reach install.
+    """
+    config = brand_config(brand=LOGO)
+    (tmp_path / ".config.yaml").write_text(yaml.safe_dump(config))
+
+    result = subprocess.run(
+        [sys.executable, "-m", "stencil.generate", "install"],
+        capture_output=True,
+        text=True,
+        cwd=tmp_path,
+    )
+
+    assert result.returncode != 0, "a missing brand-alt let `stencil install` exit 0"
+    assert "Traceback" not in result.stderr, result.stderr
+    assert "brand-alt" in result.stderr, (
+        f"the error does not name the missing key: {result.stderr!r}"
+    )
 
 
 @pytest.mark.integration

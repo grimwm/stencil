@@ -684,13 +684,25 @@ def referenced_variables(env: Environment, name: str) -> set[str]:
     return scan_template(env, name)[0]
 
 
-def validate_config(config: dict, env: Environment) -> None:
+def validate_config(
+    config: dict, env: Environment, config_dir: Path | None = None
+) -> None:
     """Reject custom keys that cannot do anything, in either direction.
 
     template_env accepts any key and `when:` tests any name, so a typo used to
     be silent both ways: an unknown key was set and read by nothing, and a
     `when:` naming a key nobody set read as None and skipped the template it
     guarded for every package. Neither produced output or an error.
+
+    What a template could legitimately read -- everything stencil derives,
+    plus every custom key any package declares -- now comes from
+    package_contexts, which is itself an aggregating, fail-closed pre-flight:
+    a package that cannot be read, or whose brand is broken, raises one named
+    report instead of silently shrinking the available set the way this
+    function's own loop used to. config_dir is passed through to it so a
+    `stencil gen` (the only caller that has one) also gets brand's
+    file-existence check before anything is written; see package_contexts's
+    own docstring for what running behind it costs the checks below.
     """
     when_keys: set[str] = set()
     for tdef in config.get("templates", []):
@@ -699,15 +711,10 @@ def validate_config(config: dict, env: Environment) -> None:
             continue
         when_keys |= {when} if isinstance(when, str) else set(when)
 
-    # What a template could legitimately read: everything stencil derives, plus
-    # every custom key any package declares. Built per package because a config
-    # error in one should not hide a naming error in another.
+    contexts = package_contexts(config, config_dir)
     available: set[str] = set()
-    for package_id in config.get("packages", {}):
-        try:
-            available |= set(get_template_context(package_id, config))
-        except ValueError:
-            continue
+    for context in contexts.values():
+        available |= set(context)
 
     unknown = sorted(when_keys - available)
     if unknown:
@@ -770,6 +777,55 @@ def build_environment(config: dict, config_dir: Path) -> Environment:
     )
 
 
+def brand_problem(package: dict, config: dict, config_dir: Path | None) -> str | None:
+    """The two ways a package's brand can be broken, or None when it is fine.
+
+    Extracted from copy_brand_image's two raises so the same rule can be
+    checked twice: once here, by the aggregating pre-flight, before anything
+    is written, and again inside copy_brand_image itself, which still RAISES
+    by calling this and treating a returned message as fatal --
+    tests/test_brand.py's two ``pytest.raises(match=...)`` tests are what
+    prove the direct generate_package API keeps that contract.
+
+    config_dir is positional-required rather than optional=None. An
+    existence check that silently skips itself when a caller forgets to pass
+    a root is the same shape of defect this whole change exists to close, so
+    forgetting it has to be a visible choice (an explicit None) rather than a
+    default. Passing None is exactly what get_generated_files,
+    install_gitignore and clean_generated do -- decision d-96da97d8: the
+    existence check is gen-only, because the .gitignore entry and the clean
+    list both derive from the brand STRING (see get_generated_files), never
+    from the file on disk, so a missing file cannot make either list short.
+    Only `stencil gen`, which is about to depend on the file being there,
+    needs to know it exists.
+    """
+    value, alt = brand_of(package, config)
+    relative = brand_image_path(value)
+    if not relative:
+        # A plain name or a remote URL: nothing local to check, and nothing
+        # that needs alt text. Must come before the alt check below, or a
+        # name-only brand with no brand-alt would be reported as broken.
+        return None
+
+    if not alt:
+        return (
+            f"brand is an image ({value}) but brand-alt is not set. Add "
+            "brand-alt: with the text a reader should hear in place of the "
+            "logo, or use a plain string for brand to render it as a name."
+        )
+
+    if config_dir is not None:
+        source = (config_dir / relative).resolve()
+        if not source.is_file():
+            return (
+                f"brand points at {value}, which is not a file. Paths are "
+                f"resolved relative to the config file's directory "
+                f"({config_dir})."
+            )
+
+    return None
+
+
 def copy_brand_image(
     config: dict,
     package: dict,
@@ -787,31 +843,177 @@ def copy_brand_image(
     the cost of each folder standing on its own, and the copies are ignored by
     git for the same reason every other generated file is.
     """
-    value, alt = brand_of(package, config)
+    problem = brand_problem(package, config, config_dir)
+    if problem:
+        raise ValueError(problem)
+
+    value, _alt = brand_of(package, config)
     relative = brand_image_path(value)
     if not relative:
         return
 
-    if not alt:
-        raise ValueError(
-            f"brand is an image ({value}) but brand-alt is not set. Add "
-            "brand-alt: with the text a reader should hear in place of the "
-            "logo, or use a plain string for brand to render it as a name."
-        )
-
     source = (config_dir / relative).resolve()
-    if not source.is_file():
-        raise ValueError(
-            f"brand points at {value}, which is not a file. Paths are resolved "
-            f"relative to the config file's directory ({config_dir})."
-        )
-
     destination = output_dir / source.name
     if dry_run:
         print(f"Would copy: {source} -> {destination}")
         return
     shutil.copyfile(source, destination)
     print(f"Copied: {destination}")
+
+
+def _safe(text: str) -> str:
+    """Config-supplied text is data, not terminal control.
+
+    A package id or brand value can contain anything, including a cursor-up
+    or carriage-return escape sequence -- which, printed raw, could erase or
+    overwrite the very lines reporting the problem. That would defeat the
+    aggregation guarantee package_contexts exists to provide: the terminal
+    would show something other than what the Python string says. Everything
+    that is not printable (and not a plain space or newline, both of which
+    are printable but worth naming explicitly) is replaced by its escaped
+    repr instead of passing through raw.
+    """
+    return "".join(
+        c if c == "\n" or c == " " or c.isprintable() else repr(c)[1:-1]
+        for c in str(text)
+    )
+
+
+def _raise_config_problems(problems: list[str]) -> None:
+    """Turn collected config problems into the one ValueError callers print.
+
+    Deliberately names no file: --config means the path is not always
+    .config.yaml, and nothing down here is told which one it got. Every
+    caller prints this behind an "Error: " prefix, so the first line reads
+    as a continuation of one rather than as a second heading.
+    """
+    unique = list(dict.fromkeys(_safe(p) for p in problems))
+    bullets = "\n".join(f"- {p}" for p in unique)
+    count = "this problem" if len(unique) == 1 else f"these {len(unique)} problems"
+    raise ValueError(
+        f"the config has {count}:\n{bullets}\n\n"
+        "Nothing was generated, removed or written. Fix the config and run "
+        "again -- and if files from an earlier, working config are still on "
+        "disk, remove that directory by hand rather than reaching for "
+        "`clean`, which refuses for the same reason this did."
+    )
+
+
+def package_contexts(config: dict, config_dir: Path | None = None) -> dict[str, dict]:
+    """Every package's template context, read before anything is written.
+
+    Replaces two former call sites -- validate_config's loop and
+    get_generated_files' loop -- that each caught get_template_context's
+    ValueError and silently `continue`d, so a config error in one package
+    dropped that package from the managed .gitignore section, from what
+    `clean` removes, and from a `gen --all` that still exited 0. Nothing said
+    so. This raises instead, and aggregates: every package is checked, every
+    problem is collected, and if anything was collected the single ValueError
+    raised at the end names ALL of them -- not just the first. That
+    preserves, for the class of package errors, what the comment this
+    function replaced (previously at validate_config's old loop) was
+    protecting: "a config error in one should not hide a naming error in
+    another".
+
+    That guarantee does NOT fully extend to validate_config's own `when:` and
+    unread-template_env checks, and this docstring says so rather than
+    claiming otherwise. Those two checks now run BEHIND this pre-flight --
+    deferred by one round of fixing a config -- because they need a complete
+    "available keys" set to report accurately, and that set can only be
+    computed by successfully reading every package's context first. A config
+    that is broken in a way this function reports will not also get a
+    `when:`/template_env report in the same pass; fixing what is reported
+    here and running again is what surfaces those. Nothing was free about
+    this move; it traded one kind of silent gap for a one-round delay in a
+    different, narrower kind of report.
+
+    config_dir gates only brand's file-existence check (see brand_problem):
+    None -- what get_generated_files, install_gitignore and clean_generated
+    pass -- skips it; a real path -- what validate_config's `gen` caller
+    passes -- runs it.
+    """
+    packages = config.get("packages", {})
+    problems: list[str] = []
+    contexts: dict[str, dict] = {}
+
+    if not isinstance(packages, dict):
+        problems.append(
+            f"'packages' must be a mapping of package id to settings, not "
+            f"{type(packages).__name__}"
+        )
+        packages = {}
+
+    # Shapes first, for EVERY package, before a single context is built.
+    #
+    # Not tidiness -- correctness. get_template_context does not read only
+    # the package it was asked about: declared_template_env_keys walks
+    # `packages` in full and calls .get() on each value, so ONE package
+    # whose value is a string makes get_template_context raise for every
+    # package in the config. Interleaved with the context pass, that
+    # attributed the string package's AttributeError to whichever innocent
+    # package happened to be building at the time -- a report naming the
+    # wrong file, which is worse than the silence this whole change
+    # replaced. So: collect every shape problem, and if there are any,
+    # stop here rather than producing a page of spurious failures behind
+    # the one real cause.
+    for package_id, package in packages.items():
+        if not isinstance(package, dict):
+            problems.append(
+                f"Package {package_id}: must be a mapping of settings, not "
+                f"{type(package).__name__}"
+            )
+
+    if problems:
+        _raise_config_problems(problems)
+
+    for package_id, package in packages.items():
+        try:
+            context = get_template_context(package_id, config)
+        except ValueError as e:
+            # Passed through verbatim, with NO class name and NO package
+            # prefix of our own. Two separate reasons.
+            #
+            # No class name: ValueError is the channel get_template_context
+            # deliberately reports config mistakes on, so "ValueError:" in
+            # front of every line would put a Python type into a message
+            # whose whole point is to be readable by someone editing YAML.
+            # Nothing else in this file does it -- load_config prints the
+            # yaml error bare -- and the unexpected classes below are where
+            # a type name earns its place, precisely because it means
+            # something has gone wrong that is NOT an ordinary config error.
+            #
+            # No package prefix: these messages already name where the
+            # problem is, either the package ("Package demo ...") or the
+            # config as a whole ("config: ..."). Adding package_id would
+            # turn one config-wide complaint into a distinct string per
+            # package sharing it, defeating the dedup below.
+            problems.append(str(e))
+            continue
+        except (TypeError, AttributeError, KeyError) as e:
+            # Unlike ValueError above, these never name the package -- e.g.
+            # `docs: 7` raises "'int' object is not iterable" with nothing to
+            # say which package. They are also always package-specific, never
+            # shared across packages the way a config-wide ValueError can be,
+            # so adding the package id here cannot break the dedup guarantee.
+            problems.append(f"Package {package_id}: {type(e).__name__}: {e}")
+            continue
+
+        # Gated on has_pages to match copy_brand_image's own predicate and
+        # get_generated_files' -- a page-less package inheriting a
+        # config-level image brand with no alt renders nothing that brand
+        # could appear on, and must not newly fail because of it.
+        if context.get("has_pages"):
+            problem = brand_problem(package, config, config_dir)
+            if problem:
+                problems.append(f"Package {package_id}: {problem}")
+                continue
+
+        contexts[package_id] = context
+
+    if problems:
+        _raise_config_problems(problems)
+
+    return contexts
 
 
 # The templates stencil injects itself, in render order. ONE list rather than
@@ -1021,19 +1223,24 @@ def get_generated_files(config: dict) -> list[str]:
 
     All entries are prefixed with the package directory. Respects `when` conditions
     on templates by checking against each package's context.
+
+    Raises rather than silently dropping a package it cannot read -- this is
+    the site both `install` and `clean` feed from, so a package that used to
+    vanish here left the managed .gitignore section short and `clean`
+    blind to its files, with nothing said about either. Consumes
+    package_contexts' own contexts rather than building them a second time
+    with its own get_template_context loop, which would double the work
+    every `install` and `clean` do. No config_dir is passed: the brand
+    file-existence check is gen-only (see package_contexts).
     """
     entries = set()
     config_templates = config.get("templates", [])
 
-    # Process each package
-    for package_id, package in config.get("packages", {}).items():
-        pkg_dir = package.get("dir", package_id)
+    contexts = package_contexts(config)
 
-        # Build a minimal context for checking `when` conditions
-        try:
-            context = get_template_context(package_id, config)
-        except ValueError:
-            continue
+    for package_id, context in contexts.items():
+        package = config["packages"][package_id]
+        pkg_dir = package.get("dir", package_id)
 
         # Check each template's `when` condition against this package's context
         for tdef in config_templates:
@@ -1089,14 +1296,23 @@ def clean_generated(
     """Remove files and directories that stencil generates.
 
     If package_id is None, clean all packages; otherwise clean only that package.
+
+    The membership check below runs BEFORE get_generated_files, which now
+    reads and validates every package's config. Reversed, a mistyped
+    package_id on a config that ALSO has a broken sibling would report the
+    config error instead of "Unknown package" -- get_generated_files would
+    raise first, over a package that was never the one asked about. Checking
+    membership first keeps "Unknown package" the message a mistyped package
+    id gets, regardless of what else in the config is wrong.
     """
+    if package_id is not None and package_id not in config.get("packages", {}):
+        print(f"Error: Unknown package {package_id}", file=sys.stderr)
+        list_packages(config)
+        sys.exit(1)
+
     entries = get_generated_files(config)
 
     if package_id is not None:
-        if package_id not in config.get("packages", {}):
-            print(f"Error: Unknown package {package_id}", file=sys.stderr)
-            list_packages(config)
-            sys.exit(1)
         pkg_dir = config["packages"][package_id].get("dir", package_id)
         entries = [e for e in entries if e.startswith(f"{pkg_dir}/")]
         if not entries:
@@ -1290,6 +1506,23 @@ def main():
     config = load_config(config_path)
 
     if args.command == "install":
+        # Narrow on purpose: only the pre-flight read is inside the try, so
+        # install_gitignore itself runs unguarded and any failure past this
+        # point is a real traceback rather than a suppressed one-liner. See
+        # the matching comment on the `clean` branch below.
+        #
+        # package_contexts rather than get_generated_files, though either
+        # would raise: this call exists to VALIDATE, and computing a file
+        # list only to discard it reads like a mistake the next person
+        # would tidy away. install_gitignore then reads the packages a
+        # second time, which is accepted -- a context is microseconds and
+        # the alternative is threading the list through a signature this
+        # ticket deliberately left alone.
+        try:
+            package_contexts(config)
+        except ValueError as e:
+            print(f"Error: {e}", file=sys.stderr)
+            sys.exit(1)
         install_gitignore(config, args.dry_run)
         return
 
@@ -1319,6 +1552,19 @@ def main():
                 "clean requires either --all or a package ID (e.g. stencil clean hs1)"
             )
         package_id = None if args.all else args.pkg
+        # Narrow on purpose: clean_generated unlinks files in a loop and then
+        # rmdirs, so wrapping the whole call in `except ValueError` would
+        # print a bare "Error: ..." with the traceback suppressed AFTER an
+        # unknown number of files were already deleted, if anything below the
+        # pre-flight ever raised one. Suppressing a traceback is right for
+        # "your config is wrong" and wrong for "something failed halfway
+        # through destroying files" -- so only the read is inside the try;
+        # clean_generated itself runs outside it, same as install above.
+        try:
+            package_contexts(config)
+        except ValueError as e:
+            print(f"Error: {e}", file=sys.stderr)
+            sys.exit(1)
         clean_generated(
             output_base, config, package_id=package_id, dry_run=args.dry_run
         )
@@ -1339,7 +1585,7 @@ def main():
         sys.exit(1)
 
     try:
-        validate_config(config, env)
+        validate_config(config, env, config_dir)
     except ValueError as e:
         print(f"Error: {e}", file=sys.stderr)
         sys.exit(1)
