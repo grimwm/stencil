@@ -465,3 +465,46 @@ def test_a_valid_config_with_a_real_brand_file_still_generates(tmp_path):
     assert (tmp_path / "out" / "demo" / "logo.svg").is_file(), (
         "the brand image was not copied into the generated package"
     )
+
+
+# --- findings from the adversarial review of the implementation -------------
+
+
+def test_a_missing_packages_key_does_not_let_install_empty_the_section(tmp_path):
+    """`package:` for `packages:` is a one-letter typo, and it used to be the
+    worst case in the whole ticket: `install` returns before main's own
+    `packages` guard, so a populated managed section was REPLACED with an
+    empty one, "Updated" was printed, and the exit code was 0. Every generated
+    file the section covered silently became committable."""
+    write_config(tmp_path, {"templates": _TEMPLATES, "package": {"typo": {}}})
+
+    gitignore = tmp_path / ".gitignore"
+    original = (
+        f"{generate.GITIGNORE_START}\n"
+        "one/Makefile\n"
+        f"{generate.GITIGNORE_END}\n"
+    )
+    gitignore.write_text(original)
+
+    result = run_cli("install", cwd=tmp_path)
+
+    assert result.returncode != 0, "a missing `packages:` key let install exit 0"
+    assert "Traceback" not in result.stderr, result.stderr
+    assert gitignore.read_text() == original, (
+        "a populated managed section was replaced with an empty one: "
+        f"{gitignore.read_text()!r}"
+    )
+
+
+def test_a_mistyped_package_beats_an_unrelated_broken_sibling(tmp_path):
+    """Both messages are true; only one answers the question asked. Reporting
+    the sibling's problem sends someone to fix a file they were not editing,
+    and never tells them the name they typed does not exist."""
+    write_config(tmp_path, GOOD_AND_BROKEN_CONFIG)
+
+    result = run_cli("clean", "no-such-package", cwd=tmp_path)
+
+    assert result.returncode != 0
+    assert "Unknown package" in result.stderr, (
+        f"a mistyped package id was answered with something else: {result.stderr!r}"
+    )

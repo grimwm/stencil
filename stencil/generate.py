@@ -74,16 +74,39 @@ def load_config(config_path: Path) -> dict:
 BRAND_IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp", ".avif"}
 
 
-def brand_of(package: dict, config: dict) -> tuple[str | None, str | None]:
+def brand_of(
+    package: dict, config: dict, package_id: str = ""
+) -> tuple[str | None, str | None]:
     """The brand and its alt text for a package: its own, else config-wide.
 
     Taken as a pair rather than resolved key by key. A package that sets its
     own brand and no alt means "this logo, no alt yet" -- inheriting the
     config's alt there would silently label one logo with another's name.
     """
-    if package.get("brand"):
-        return package.get("brand"), package.get("brand-alt")
-    return config.get("brand"), config.get("brand-alt")
+    if package.get("brand") is not None:
+        value, where = package.get("brand"), f"package {package_id!r}"
+        alt = package.get("brand-alt")
+    else:
+        value, where = config.get("brand"), "config"
+        alt = config.get("brand-alt")
+
+    # Typed HERE rather than at either call site, because this is the one
+    # place both of them read the key, and because the alternative is where
+    # it used to blow up: brand_image_path calls value.startswith, so an
+    # unquoted `brand: 2024` raised AttributeError from inside the
+    # per-package context build. The pre-flight then reported that against
+    # every package inheriting the config-level brand -- three innocent
+    # files named, and the word `brand` nowhere in the message. Raising
+    # ValueError with the SCOPE in it puts the mistake on the same channel
+    # as every other config error, so it dedups to one line naming `config`.
+    if value is not None and not isinstance(value, str):
+        raise ValueError(
+            f"{where}: brand must be a string -- a name, or a path to a "
+            f"logo -- not {type(value).__name__}. Quote it if it is meant "
+            f"to be a name that looks like a number."
+        )
+
+    return value, alt
 
 
 def brand_image_path(value: str | None) -> str | None:
@@ -418,11 +441,11 @@ def get_template_context(package_id: str, config: dict) -> dict:
         # someone as their own project, so it has to carry the file itself
         # rather than reach back into the repository that produced it.
         "config_brand": (
-            Path(brand_image_path(brand_of(package, config)[0])).name
-            if brand_image_path(brand_of(package, config)[0])
-            else brand_of(package, config)[0]
+            Path(brand_image_path(brand_of(package, config, package_id)[0])).name
+            if brand_image_path(brand_of(package, config, package_id)[0])
+            else brand_of(package, config, package_id)[0]
         ),
-        "config_brand_alt": brand_of(package, config)[1],
+        "config_brand_alt": brand_of(package, config, package_id)[1],
         # The show_download a document falls back to when its front matter
         # names none: package first, then config-wide, then on. Always set,
         # so StrictUndefined has nothing to complain about and no
@@ -799,6 +822,9 @@ def brand_problem(package: dict, config: dict, config_dir: Path | None) -> str |
     Only `stencil gen`, which is about to depend on the file being there,
     needs to know it exists.
     """
+    # brand_of raises ValueError on a non-string brand, which is deliberate
+    # and is why there is no type check here: package_contexts has already
+    # collected that failure from the context build long before this runs.
     value, alt = brand_of(package, config)
     relative = brand_image_path(value)
     if not relative:
@@ -868,14 +894,23 @@ def _safe(text: str) -> str:
     or carriage-return escape sequence -- which, printed raw, could erase or
     overwrite the very lines reporting the problem. That would defeat the
     aggregation guarantee package_contexts exists to provide: the terminal
-    would show something other than what the Python string says. Everything
-    that is not printable (and not a plain space or newline, both of which
-    are printable but worth naming explicitly) is replaced by its escaped
-    repr instead of passing through raw.
+    would show something other than what the Python string says.
+
+    NEWLINE IS ESCAPED TOO, and that is the whole point rather than an
+    oversight. The guarantee being defended is a BULLET LIST, and a newline
+    is the one character that can add lines to it: `package_type` is
+    interpolated bare into its error, so an ordinary YAML config can put
+    "none\n\n- everything is fine" in a value and forge an entry that reads
+    exactly like a real finding. A package id can do it too, while the
+    header above still says "this problem", singular. Every problem is one
+    line; the caller joins them.
+
+    Bidi overrides need no special case -- U+202E, U+200F, U+2066, U+2028,
+    U+0085 and NBSP are all category Cf/Zl/Zs, so isprintable() is already
+    False for them and they escape like any other control.
     """
     return "".join(
-        c if c == "\n" or c == " " or c.isprintable() else repr(c)[1:-1]
-        for c in str(text)
+        c if c == " " or c.isprintable() else repr(c)[1:-1] for c in str(text)
     )
 
 
@@ -936,6 +971,25 @@ def package_contexts(config: dict, config_dir: Path | None = None) -> dict[str, 
     problems: list[str] = []
     contexts: dict[str, dict] = {}
 
+    if "packages" not in config:
+        # Checked HERE rather than in main, which is where it used to live
+        # exclusively -- and `install` returned before reaching it. A typo
+        # like `package:` therefore rewrote a populated managed .gitignore
+        # section as an empty one, printed "Updated", and exited 0: the
+        # exact harm this whole change exists to close, surviving on the
+        # command the change is named after. Putting the rule in the
+        # fail-closed function instead of in main's branch ordering is what
+        # stops the next early-returning command from missing it too.
+        #
+        # An explicitly empty `packages: {}` is a different statement -- "I
+        # have none yet" -- and still passes.
+        problems.append(
+            "'packages' is missing. Nothing can be generated, ignored or "
+            "cleaned without it; check the key is spelled `packages:` at "
+            "the top level."
+        )
+        packages = {}
+
     if not isinstance(packages, dict):
         problems.append(
             f"'packages' must be a mapping of package id to settings, not "
@@ -987,14 +1041,33 @@ def package_contexts(config: dict, config_dir: Path | None = None) -> dict[str, 
             # config as a whole ("config: ..."). Adding package_id would
             # turn one config-wide complaint into a distinct string per
             # package sharing it, defeating the dedup below.
+            #
+            # KNOWN GAP, measured rather than assumed: not every ValueError
+            # reaching here is about the config. pipeline.read_lockfile
+            # raises one when a vendored lockfile does not end in exactly
+            # one newline, which is a broken INSTALL -- the fix is
+            # `python3 scripts/vendor_npm_locks.py`, not editing
+            # .config.yaml -- and it is reported here as a config problem,
+            # with a trailer telling the reader to fix their config and
+            # remove a directory by hand. Wrong advice for the right
+            # failure. Catching it correctly means read_lockfile raising a
+            # type of its own, which is stn-hwo; pipeline.py is outside
+            # this change's boundary.
             problems.append(str(e))
             continue
         except (TypeError, AttributeError, KeyError) as e:
             # Unlike ValueError above, these never name the package -- e.g.
             # `docs: 7` raises "'int' object is not iterable" with nothing to
-            # say which package. They are also always package-specific, never
-            # shared across packages the way a config-wide ValueError can be,
-            # so adding the package id here cannot break the dedup guarantee.
+            # say which package -- so the id is added here.
+            #
+            # That prefix is a trade, not a free win, and the earlier version
+            # of this comment claimed otherwise. A CONFIG-level key read
+            # inside this per-package loop that raises a typed error is
+            # reported once per package, each with a different id, which the
+            # dedup below cannot collapse. `brand` was the reachable case and
+            # is now typed in brand_problem; anything similar added later
+            # should be typed at the point it is read, on the ValueError
+            # channel, the way show_download_default already is.
             problems.append(f"Package {package_id}: {type(e).__name__}: {e}")
             continue
 
@@ -1005,7 +1078,16 @@ def package_contexts(config: dict, config_dir: Path | None = None) -> dict[str, 
         if context.get("has_pages"):
             problem = brand_problem(package, config, config_dir)
             if problem:
-                problems.append(f"Package {package_id}: {problem}")
+                # Scope-aware, because brand_of falls back to the config:
+                # ONE config-level brand mistake is inherited by every
+                # package with pages, and prefixing each with its own
+                # package id would produce N distinct strings that the
+                # dedup below cannot collapse -- N bullets for one typo,
+                # none of them naming the place it actually is.
+                where = (
+                    f"Package {package_id}" if package.get("brand") else "config"
+                )
+                problems.append(f"{where}: {problem}")
                 continue
 
         contexts[package_id] = context
@@ -1297,13 +1379,15 @@ def clean_generated(
 
     If package_id is None, clean all packages; otherwise clean only that package.
 
-    The membership check below runs BEFORE get_generated_files, which now
-    reads and validates every package's config. Reversed, a mistyped
-    package_id on a config that ALSO has a broken sibling would report the
-    config error instead of "Unknown package" -- get_generated_files would
-    raise first, over a package that was never the one asked about. Checking
-    membership first keeps "Unknown package" the message a mistyped package
-    id gets, regardless of what else in the config is wrong.
+    The membership check runs before get_generated_files, which now reads and
+    validates every package. That ordering matters for a DIRECT caller of
+    this function; it is not what protects the CLI, and an earlier version of
+    this docstring wrongly claimed it was. `main` pre-flights the whole config
+    before calling in here, so by this point a broken sibling has already
+    stopped the run -- which is why main does its own membership check first,
+    above that pre-flight. Both exist: this one so the API cannot be made to
+    delete from a config it never checked, that one so a typo gets "Unknown
+    package" rather than a lecture about a package the user did not mention.
     """
     if package_id is not None and package_id not in config.get("packages", {}):
         print(f"Error: Unknown package {package_id}", file=sys.stderr)
@@ -1552,6 +1636,19 @@ def main():
                 "clean requires either --all or a package ID (e.g. stencil clean hs1)"
             )
         package_id = None if args.all else args.pkg
+        # Before the pre-flight, so a mistyped package id is answered as a
+        # mistyped package id. Below it, `stencil clean typo-here` on a
+        # config with an unrelated broken package reported that other
+        # package's problem instead -- true, but not an answer to what was
+        # asked, and it sends someone to fix a file they were not editing.
+        configured = config.get("packages")
+        if package_id is not None and (
+            not isinstance(configured, dict) or package_id not in configured
+        ):
+            print(f"Error: Unknown package {package_id}", file=sys.stderr)
+            if isinstance(configured, dict):
+                list_packages(config)
+            sys.exit(1)
         # Narrow on purpose: clean_generated unlinks files in a loop and then
         # rmdirs, so wrapping the whole call in `except ValueError` would
         # print a bare "Error: ..." with the traceback suppressed AFTER an

@@ -446,3 +446,103 @@ def test_a_malformed_package_is_not_blamed_on_its_innocent_siblings():
         "the raw exception class leaked instead of the shape being caught "
         f"up front: {message!r}"
     )
+
+
+# --- findings from the adversarial review of the implementation -------------
+
+
+def test_a_config_level_brand_problem_is_named_once_against_the_config():
+    """brand_of falls back to the config, so ONE config-level brand mistake is
+    inherited by every package with pages. Prefixing each with its own package
+    id produced N distinct strings the dedup could not collapse: N bullets for
+    one typo, none of them naming the place the typo actually is."""
+    config = {
+        "brand": "logo.svg",  # an image, and no brand-alt anywhere
+        "packages": {
+            "one": package(),
+            "two": package(),
+            "three": package(),
+        },
+    }
+    with pytest.raises(ValueError) as exc:
+        package_contexts(config)
+    message = str(exc.value)
+
+    bullets = [line for line in message.splitlines() if line.startswith("- ")]
+    assert len(bullets) == 1, (
+        f"one config-level brand mistake produced {len(bullets)} bullets, "
+        f"one per inheriting package: {message!r}"
+    )
+    assert bullets[0].startswith("- config:"), (
+        f"the message blames a package for a config-level key: {bullets[0]!r}"
+    )
+    assert "brand-alt" in bullets[0]
+
+
+def test_a_non_string_brand_is_reported_as_a_config_error_not_an_attributeerror():
+    """`brand: 2024` unquoted reaches brand_image_path's .startswith and used
+    to raise AttributeError from inside the per-package loop -- reported
+    against every package inheriting it, three innocent files named and the
+    word `brand` nowhere in the message. Worse than a traceback, which at
+    least had brand_image_path in its top frame."""
+    config = {
+        "brand": 2024,
+        "brand-alt": "Some Institution",
+        "packages": {"one": package(), "two": package(), "three": package()},
+    }
+    with pytest.raises(ValueError) as exc:
+        package_contexts(config)
+    message = str(exc.value)
+
+    assert "brand must be a string" in message, message
+    assert "AttributeError" not in message, (
+        f"the raw exception leaked instead of being typed at the source: {message!r}"
+    )
+    assert message.count("brand must be a string") == 1, (
+        f"one config-level typo produced a bullet per package: {message!r}"
+    )
+
+
+def test_a_newline_in_a_config_value_cannot_forge_a_bullet():
+    """The guarantee _safe defends is a BULLET LIST, and a newline is the one
+    character that can add lines to it. `package_type` is interpolated bare
+    into its error, so an ordinary YAML config -- no exotic key needed -- can
+    put a convincing extra finding into the report, or a reassuring one."""
+    config = {
+        "packages": {
+            "genuine": package(show_download="no"),
+            "sneaky": package(
+                package_type="none\n\n- everything is fine, ignore the above"
+            ),
+        }
+    }
+    with pytest.raises(ValueError) as exc:
+        package_contexts(config)
+    message = str(exc.value)
+
+    bullets = [line for line in message.splitlines() if line.startswith("- ")]
+    assert len(bullets) == 2, (
+        f"expected exactly two bullets, one per real problem, got "
+        f"{len(bullets)}: {message!r}"
+    )
+    assert "\n\n- everything is fine" not in message, (
+        f"a config value forged a line break into the report: {message!r}"
+    )
+
+
+def test_a_missing_packages_key_is_itself_a_config_problem():
+    """`package:` for `packages:` is a one-letter typo. It used to leave
+    install writing an EMPTY managed section over a populated one, printing
+    "Updated", and exiting 0 -- this ticket's exact harm, on this ticket's own
+    command, because install returns before main's own `packages` guard.
+
+    An explicitly empty `packages: {}` is a different statement -- "I have
+    none yet" -- and is checked separately below."""
+    with pytest.raises(ValueError) as exc:
+        package_contexts({"templates": [{"src": "Makefile.j2"}]})
+    assert "packages" in str(exc.value)
+
+
+def test_an_explicitly_empty_packages_mapping_is_allowed():
+    """Saying "none yet" out loud is not the same as forgetting the key."""
+    assert package_contexts({"packages": {}}) == {}
