@@ -11,6 +11,8 @@ producing a plausible-looking archive with the wrong contents in it.
 
 from __future__ import annotations
 
+import subprocess
+
 import pytest
 
 from stencil.generate import (
@@ -208,6 +210,28 @@ def test_the_archive_has_a_name_without_a_consumers_help(makefile):
     text = makefile(package_type="zip", package_name="hs3.zip")
     assert "PKG ?= hs3.zip" in text
     assert "PKG = hs3.zip" not in text, "a consumer's own PKG must survive"
+
+
+def test_a_consumers_pkg_survives_the_bundled_default(makefile, tmp_path):
+    """`?=` is a promise the text cannot keep on its own; make has to be the
+    one to say a composition's PKG wins. A wrapper that sets PKG and then
+    includes the generated Makefile is evaluated on both sides of the OS
+    split, and the archiver must be handed the composition's name with the
+    bundled default nowhere in the recipe."""
+    (tmp_path / "Makefile").write_text(
+        makefile(package_type="zip", package_name="hs3.zip")
+    )
+    (tmp_path / "composition.mk").write_text("PKG = mine.zip\ninclude Makefile\n")
+    for os_name, archiver in (
+        ("Windows_NT", 'tar --format zip -cf "mine.zip" htdocs'),
+        ("Darwin", "zip -r mine.zip htdocs"),
+    ):
+        printed = subprocess.run(
+            ["make", "-n", "-f", "composition.mk", "pkg", f"OS={os_name}"],
+            cwd=tmp_path, capture_output=True, text=True, check=True,
+        ).stdout
+        assert archiver in printed, printed
+        assert "hs3.zip" not in printed, printed
 
 
 def test_the_comma_joining_left_with_the_cmdlet_that_needed_it(makefile):
