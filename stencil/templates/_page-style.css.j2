@@ -696,6 +696,19 @@
       background: var(--on-accent-fill);
     }
 
+    /* Defence in depth, not a live failure. The vendored bootstrap.min.css
+       carries `a>code{color:inherit}` at (0,0,2), which already outranks its
+       own `code{color:var(--bs-code-color)}` at (0,0,1), and
+       _page-scripts.html.j2 adds .nav-link to the author's own <a> rather than
+       rebuilding it -- so a code written as a direct child of a tab link is
+       legible today. This covers the nested case the child combinator misses,
+       <a><strong><code>, and stops the pairing resting on a reboot rule inside
+       a vendored blob that a Bootstrap bump could drop. On --accent-fill the
+       inherited ink measures 9.85:1 light and 9.10:1 dark. */
+    .nav-tabs.problem-tabs .nav-link code {
+      color: inherit;
+    }
+
     .nav-tabs.problem-tabs .nav-link.active {
       background: var(--surface);
       color: var(--accent);

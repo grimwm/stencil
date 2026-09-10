@@ -53,6 +53,36 @@ def test_deck_exercises_the_layout_fences(render_soup):
     assert len(slides) > 1, "the deck should split into several slides"
 
 
+def test_the_deck_puts_inline_code_on_the_title_slide(render_soup):
+    """stn-7i8's pairing, rendered rather than reasoned about.
+
+    The title slide is built entirely from front matter, and
+    frontmatter-filter.lua hands every field to pandoc as Inlines -- so
+    backticks in `title:` and `subtitle:` put a <code> on the accent gradient.
+    Without this the fixture never produced the element and no rendered page
+    in the suite exercised the rule that makes it legible.
+
+    WHAT check-access DOES WITH IT, measured rather than assumed: pa11y does
+    NOT flag the pairing, with the rule reverted, at 1.06:1. .slide--title is
+    painted with `background: linear-gradient(...)`, and the shorthand resets
+    background-color to transparent -- so the checker walks up for a colour to
+    composite against, finds none it can use, and skips the element instead of
+    failing it. _page-style.css.j2 already records the same blind spot for the
+    deck toolbar. The unit measurement in tests/test_theme.py is therefore the
+    WHOLE guard here; this test only keeps the element on the page so the
+    stylesheet rule has something to apply to.
+    """
+    soup = render_soup("slide", "deck.md")
+
+    title_code = soup.select(".deck-title code")
+    subtitle_code = soup.select(".deck-subtitle code")
+    assert title_code, (
+        "the deck fixture's title lost its backticks; stn-7i8's rule now "
+        "applies to nothing any rendered test produces"
+    )
+    assert subtitle_code, "the deck fixture's subtitle lost its backticks"
+
+
 def test_the_document_puts_inline_code_in_a_table_header(render_soup):
     """stn-1y7, and the reason it went unseen for four releases.
 
