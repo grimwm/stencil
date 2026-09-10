@@ -10,7 +10,9 @@ contributor without docker still gets a useful run.
 from __future__ import annotations
 
 import copy
+import os
 import shutil
+import time
 from pathlib import Path
 
 import pytest
@@ -124,6 +126,63 @@ def pytest_runtest_makereport(item, call):
         if note:
             report.sections.append(("Disk space", note))
     return report
+
+
+# --- two runs at once must not corrupt each other (stn-zim) ----------------
+#
+# The neighbouring problem to the one above, and it arrives through the same
+# door: this file's own advice for a full disk is "pass --basetemp somewhere
+# with room", and doing that from two worktrees is what turned the first of
+# these up.
+#
+# Measured: two suites given the same --basetemp delete each other's fixture
+# trees, because pytest rotates that directory at startup. It read as
+# `22 failed, 789 passed, 79 errors`, almost all FileNotFoundError under the
+# shared path -- a catastrophic-looking regression rather than two runs
+# fighting, and it cost a re-run to tell the difference.
+#
+# The image tag is the same hazard, reasoned from the code rather than
+# observed: pipeline's browser helpers built and ran ONE fixed tag, so a
+# second run could rebuild the image out from under a first still using it.
+# AGENTS.md tells every agent to work in a worktree, so two suites at once is
+# the arrangement that setup exists to support rather than an unusual one.
+
+RUN_OWNER = ".pytest-run-owner"
+
+
+def _run_id() -> str:
+    """Stable within a run, different between runs."""
+    return f"{os.getpid()}-{int(time.time())}"
+
+
+def pytest_configure(config):
+    if not os.environ.get(pipeline.BROWSER_IMAGE_TAG_ENV):
+        # An explicit tag wins: a CI job that builds the image once and reuses
+        # it across invocations should be able to say so.
+        os.environ[pipeline.BROWSER_IMAGE_TAG_ENV] = (
+            f"localhost/stencil_browser:run-{_run_id()}"
+        )
+
+    basetemp = config.getoption("basetemp")
+    if not basetemp:
+        # pytest's own default is already per-run.
+        return
+
+    marker = Path(basetemp) / RUN_OWNER
+    if marker.exists():
+        pid = marker.read_text().strip().partition("-")[0]
+        # A run that crashed leaves its marker behind, and refusing forever
+        # afterwards would teach people to delete the guard rather than the
+        # file. Only a LIVE owner blocks.
+        if pid.isdigit() and Path(f"/proc/{pid}").exists():
+            raise pytest.UsageError(
+                f"--basetemp {basetemp} is in use by a running pytest "
+                f"(pid {pid}). Two runs sharing one basetemp delete each "
+                f"other's fixture trees at startup, and the failures do not "
+                f"name the cause. Pass a different --basetemp."
+            )
+    Path(basetemp).mkdir(parents=True, exist_ok=True)
+    marker.write_text(_run_id())
 
 
 def pytest_collection_modifyitems(config, items):

@@ -11,6 +11,36 @@ How the version gets bumped is written down in
 
 ## 0.36.0
 
+- **Two test runs at once no longer corrupt each other** (`stn-zim`). The
+  neighbouring problem to the retention one, and it arrives through the same
+  door: the advice for a full disk is "pass `--basetemp` somewhere with
+  room", and doing that from two worktrees is what turned the first of these
+  up.
+
+  **Measured:** two suites given the same `--basetemp` delete each other's
+  fixture trees, because pytest rotates that directory at startup. It read as
+  `22 failed, 789 passed, 79 errors`, almost all `FileNotFoundError` under
+  the shared path — a catastrophic-looking regression rather than two runs
+  fighting, and it cost a re-run to tell the difference. A run now marks its
+  basetemp and refuses to start on one a *live* pytest owns. A stale marker
+  from a crashed run does not block, because a guard that refuses forever
+  teaches people to delete the guard rather than the file.
+
+  The browser image tag was the same hazard, reasoned from the code rather
+  than observed: `pipeline`'s browser helpers built and ran one fixed tag, so
+  a second run could rebuild the image out from under a first still using it.
+  Each run gets its own tag now, overridable with
+  `$STENCIL_BROWSER_IMAGE_TAG` for a CI job that wants to build once and
+  reuse. Nothing in a generated package reads that tag — the compose file
+  builds its own image — so this is a test-harness knob and cannot affect a
+  consumer's build.
+
+  The four helpers took the tag as a **default argument**, which bound it at
+  import and made an environment override look like it worked while doing
+  nothing. They resolve at call time now, and a test asserts the signatures
+  stay that way — the same late-binding mistake was made and caught in
+  `conftest.py`'s low-space threshold one ticket earlier.
+
 - **The test tier no longer keeps every passing test's output**
   (`stn-0ot`, closing `stn-7im`). `tmp_path_retention_policy = "failed"`:
   measured, each generated package is ~10.75MB of inlined assets, the unit

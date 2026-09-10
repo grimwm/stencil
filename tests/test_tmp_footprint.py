@@ -27,6 +27,7 @@ can silently stop guarding.
 
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -248,3 +249,104 @@ def test_a_setup_error_is_left_alone(tmp_path, monkeypatch):
     _drive(_Item(tmp_path), report)
 
     assert report.sections == []
+
+
+# --- two runs at once (stn-zim) ---------------------------------------------
+#
+# The neighbouring ticket. stn-7im's own workaround is "pass --basetemp
+# somewhere with room", and doing that from two worktrees is what turned up
+# the first of these.
+
+
+def test_the_browser_image_tag_is_per_run_by_default(monkeypatch):
+    """pipeline's browser helpers built and ran ONE fixed tag, so a second
+    run could rebuild the image out from under a first still using it."""
+    from stencil import pipeline
+
+    monkeypatch.delenv(pipeline.BROWSER_IMAGE_TAG_ENV, raising=False)
+    assert pipeline.browser_image_tag() == pipeline.BROWSER_IMAGE_TAG
+
+    monkeypatch.setenv(pipeline.BROWSER_IMAGE_TAG_ENV, "localhost/x:run-1")
+    assert pipeline.browser_image_tag() == "localhost/x:run-1"
+
+
+def test_the_tag_is_resolved_at_call_time_not_at_import(monkeypatch):
+    """The mistake this replaces, asserted directly.
+
+    `def build_browser_image(..., tag=BROWSER_IMAGE_TAG)` binds the default at
+    IMPORT, so setting the environment or the module attribute afterwards
+    looks like it works and changes nothing. The same late-binding bug was
+    made and caught in this file's low-space threshold; asserting it here
+    stops the next person reintroducing it by 'tidying' the signature.
+    """
+    import inspect
+
+    from stencil import pipeline
+
+    for name in ("build_browser_image", "run_in_browser", "html_to_pdf",
+                 "check_access"):
+        signature = inspect.signature(getattr(pipeline, name))
+        default = signature.parameters["tag"].default
+        assert default is None, (
+            f"pipeline.{name} binds its tag default at import ({default!r}); "
+            f"an environment override set later cannot reach it"
+        )
+
+
+def _inner_run_against(basetemp: Path):
+    """A real pytest over THIS repository's tests, so tests/conftest.py loads.
+
+    Not a throwaway module in a temp directory: the guard lives in that
+    conftest, and a directory with no conftest never runs it -- which is
+    exactly how the first version of this test passed while proving nothing.
+    `-k` selects no tests, so the run is a startup and a teardown.
+    """
+    return subprocess.run(
+        [
+            sys.executable, "-m", "pytest", "tests/test_theme.py",
+            "-k", "no_test_matches_this_name",
+            "-p", "no:cacheprovider", f"--basetemp={basetemp}", "-q",
+        ],
+        cwd=PYPROJECT.parent, capture_output=True, text=True,
+    )
+
+
+def test_a_shared_basetemp_is_refused(tmp_path):
+    """Measured before it was guarded: two runs given the same --basetemp
+    delete each other's fixture trees, because pytest rotates that directory
+    at startup. It read as `22 failed, 789 passed, 79 errors` -- a
+    catastrophic-looking regression rather than two runs fighting.
+
+    Refused rather than silently rewritten: the caller passed that path on
+    purpose, and quietly substituting another is its own surprise.
+    """
+    basetemp = tmp_path / "shared"
+    basetemp.mkdir()
+    # An owner whose pid is certainly alive: this very process.
+    (basetemp / ".pytest-run-owner").write_text(f"{os.getpid()}-1")
+
+    result = _inner_run_against(basetemp)
+
+    assert "in use by a running pytest" in result.stdout + result.stderr, (
+        f"a second run on a live basetemp was allowed:\n{result.stdout}"
+    )
+    assert result.returncode == 4, "a UsageError should be pytest's exit 4"
+
+
+def test_a_stale_owner_does_not_block(tmp_path):
+    """The other half, and the one that would make this unusable: a run that
+    crashed leaves its marker behind, and refusing forever afterwards would
+    teach people to delete the guard rather than the file."""
+    basetemp = tmp_path / "stale"
+    basetemp.mkdir()
+    (basetemp / ".pytest-run-owner").write_text("999999-1")
+
+    result = _inner_run_against(basetemp)
+
+    # On the message, not the exit code: `-k` matching nothing exits 5 ("no
+    # tests collected"), which is not a refusal and asserting `== 0` made this
+    # test fail for a reason that had nothing to do with the guard.
+    assert "in use by a running pytest" not in result.stdout + result.stderr, (
+        f"a stale marker blocked a new run:\n{result.stdout}\n{result.stderr}"
+    )
+    assert result.returncode != 4, "pytest reported a usage error"
