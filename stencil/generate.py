@@ -109,6 +109,30 @@ def brand_of(
     return value, alt
 
 
+def checked_brand_image(value: str | None, package_id: str) -> str | None:
+    """brand_image_path, with the path actually checked (stn-ttg).
+
+    Every other configured path goes through check_config_path; this one did
+    not, and it is the only one that gets OPENED. copy_brand_image resolves it
+    and hands it to shutil.copyfile, which follows a symlink -- so a `logo.png`
+    pointing at any readable file copied that file's CONTENT into a generated
+    folder AGENTS.md describes as routinely handed to someone as a project of
+    their own. Measured in the ticket: an absolute `relative` makes
+    `(config_dir / relative).resolve()` the absolute path, and `file://` is
+    stripped before any of this, so the scheme was not a defence either.
+
+    Checking the CONFIG STRING rather than containing the resolved path is
+    deliberate. A containment check would still have to decide what to do
+    about a symlink inside the package pointing out of it, and the answer
+    that keeps `gen` and `clean` agreeing (stn-8wt) is the same one: the file
+    stencil copies is the file the config names, relative to the config.
+    """
+    relative = brand_image_path(value)
+    if relative is None:
+        return None
+    return check_config_path(package_id, "brand", relative)
+
+
 def brand_image_path(value: str | None) -> str | None:
     """The local file a brand points at, or None when it is a name or remote.
 
@@ -140,6 +164,15 @@ def brand_image_path(value: str | None) -> str | None:
 #
 # Globs stay: * ? [ ] are the point of an outputs pattern.
 _UNSAFE_IN_PATH = re.compile(r"[$`;|&<>\\\n]")
+
+# The C0 controls and DEL, checked LAST so the two more specific messages keep
+# the characters they already explain: `\n` stays a Make metacharacter and a
+# tab stays whitespace, because "Make would split it into two arguments" says
+# more than "that is a control character" does. What is left is the set nothing
+# covered -- NUL, BEL, ESC, DEL and friends. ESC is the one with a demonstrable
+# effect, since it is how a filename repaints the stderr line reporting it, but
+# the class is what is refused rather than any one member.
+_CONTROL_IN_PATH = re.compile(r"[\x00-\x1f\x7f]")
 
 
 def show_download_default(package: dict, config: dict, package_id: str = "") -> bool:
@@ -197,6 +230,12 @@ def check_config_path(package_id: str, where: str, value) -> str:
         raise ValueError(
             f"Package {package_id}: {where} {text!r} contains whitespace. The "
             "generated Make recipe would split it into two arguments."
+        )
+    if _CONTROL_IN_PATH.search(text):
+        raise ValueError(
+            f"Package {package_id}: {where} {text!r} contains a control "
+            "character. These are filenames, not terminal escapes. "
+            "(repr'd above, so the escape cannot repaint this line.)"
         )
     # ~ is expanded by the shell, not by Make, so Path() does not see it as
     # absolute -- `~/x.md` reaches sh and becomes a path in $HOME, outside the
@@ -441,8 +480,14 @@ def get_template_context(package_id: str, config: dict) -> dict:
         # someone as their own project, so it has to carry the file itself
         # rather than reach back into the repository that produced it.
         "config_brand": (
-            Path(brand_image_path(brand_of(package, config, package_id)[0])).name
-            if brand_image_path(brand_of(package, config, package_id)[0])
+            Path(
+                checked_brand_image(
+                    brand_of(package, config, package_id)[0], package_id
+                )
+            ).name
+            if checked_brand_image(
+                brand_of(package, config, package_id)[0], package_id
+            )
             else brand_of(package, config, package_id)[0]
         ),
         "config_brand_alt": brand_of(package, config, package_id)[1],
@@ -453,7 +498,16 @@ def get_template_context(package_id: str, config: dict) -> dict:
         # papering over an undeclared key with a default is worse than this.
         "config_show_download": show_download_default(package, config, package_id),
         "package_name": package_name,
-        "package_dir": package.get("dir", f"{package_id}"),
+        # stn-vhm. `dir` is not decoration: get_generated_files prefixes every
+        # entry with it, so it is every line of the managed .gitignore section
+        # and every path clean_generated resolves and deletes. `dir: ../..`
+        # deleted outside the output base. It gets the same check as every
+        # other configured path rather than a containment check at the
+        # deletion site, so the mistake is reported by the pre-flight that
+        # names all of them at once.
+        "package_dir": check_config_path(
+            package_id, "dir", package.get("dir", f"{package_id}")
+        ),
         "package_type": package_type,
         "package_sources": package_sources,
         "has_package_sources": bool(package_sources) and package_type == "doc",
@@ -879,7 +933,15 @@ def copy_brand_image(
         return
 
     source = (config_dir / relative).resolve()
-    destination = output_dir / source.name
+    # stn-8wt. The NAME comes from the config string, not from the resolved
+    # path. `.resolve()` follows a symlink, and get_generated_files names this
+    # same file from the raw config value -- so `logo.svg -> img/dated.svg`
+    # was copied as `dated.svg`, which the managed .gitignore section never
+    # listed and `clean` never removed. One rule with two spellings; this is
+    # the spelling both other call sites already used. The symlink is still
+    # followed for CONTENT, which is what a stable name pointing at a dated
+    # asset is for.
+    destination = output_dir / Path(relative).name
     if dry_run:
         print(f"Would copy: {source} -> {destination}")
         return
@@ -996,6 +1058,31 @@ def package_contexts(config: dict, config_dir: Path | None = None) -> dict[str, 
             f"{type(packages).__name__}"
         )
         packages = {}
+
+    # A template's `dest` is config-level, so it is checked once here rather
+    # than once per package: N identical bullets for one typo is exactly what
+    # the dedup below exists to avoid, and this is cheaper than deduping.
+    #
+    # stn-c25. `output_dir / dest` took the value verbatim, so
+    # `dest: ../../shared/Makefile` wrote outside the package on `gen` and
+    # get_generated_files named the same path -- so `clean` REMOVED it. The
+    # escape was symmetric across gen, clean and the managed .gitignore
+    # section, which is what makes refusing it better than containing it on
+    # one side. A nested dest is still fine: `.vscode/settings.json` is in the
+    # config's own documentation, and check_config_path allows a subdirectory
+    # while rejecting `..`, an absolute path and the rest.
+    templates = config.get("templates")
+    if isinstance(templates, list):
+        for tdef in templates:
+            if not isinstance(tdef, dict):
+                continue
+            declared = tdef.get("dest")
+            if declared is None:
+                continue
+            try:
+                check_config_path("config", "dest", declared)
+            except ValueError as error:
+                problems.append(str(error))
 
     # Shapes first, for EVERY package, before a single context is built.
     #
