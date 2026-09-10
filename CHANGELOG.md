@@ -11,6 +11,18 @@ How the version gets bumped is written down in
 
 ## 0.36.0
 
+- **The CLI tests run the code under test** (`stn-12v`). `tests/test_cli.py`
+  drives stencil as a subprocess, which imported whatever `pip install -e`
+  put on the path — one checkout. Run from a git worktree, that meant the
+  direct-import tests exercised the branch while every subprocess test
+  exercised `main`, with nothing saying so. The dangerous direction is
+  silent: a change that **breaks** the CLI passes in a worktree, because the
+  subprocess never sees it — and AGENTS.md tells every agent to work in a
+  worktree, so that is the default arrangement rather than an unusual one.
+  It was found the friendly way round, by a correct fix that appeared not to
+  work. `run_cli` sets `PYTHONPATH` to the tree under test, and a guard asks
+  the subprocess where it imported stencil from.
+
 - **A global option before the subcommand is honoured** (`stn-w4v`). `--config`
   and `--dry-run` are declared twice — once on the top-level parser and again
   on every subparser, because both spellings are documented — and the

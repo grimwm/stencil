@@ -7,6 +7,7 @@ the person nothing about which file stencil wanted or where to put it.
 
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -17,13 +18,33 @@ import yaml
 from stencil import generate
 
 
-def run_cli(*args: str, cwd: Path) -> subprocess.CompletedProcess:
-    """Invoke stencil the way a shell would, from ``cwd``."""
+REPO_ROOT = Path(generate.__file__).parent.parent
+
+
+def run_cli(*args: str, cwd: Path, **popen) -> subprocess.CompletedProcess:
+    """Invoke stencil the way a shell would, from ``cwd``.
+
+    PYTHONPATH is the load-bearing part (stn-12v). Without it the subprocess
+    imports whatever `pip install -e` put on the interpreter's path, which is
+    the MAIN CHECKOUT -- so from a git worktree this file ran two different
+    copies of stencil at once: the direct-import tests exercised the branch
+    and every test in here exercised main, with nothing saying so.
+
+    The dangerous direction is silent. A change that BREAKS the CLI passes in
+    a worktree, because the subprocess never sees it. AGENTS.md tells every
+    agent to work in a worktree, so that is the default arrangement rather
+    than an unusual one -- and it was found the other way round, by a correct
+    fix that appeared not to work.
+    """
+    env = {**os.environ, "PYTHONPATH": str(REPO_ROOT)}
+    env.update(popen.pop("env_extra", {}))
     return subprocess.run(
         [sys.executable, "-m", "stencil.generate", *args],
         capture_output=True,
         text=True,
         cwd=cwd,
+        env=env,
+        **popen,
     )
 
 
@@ -631,3 +652,41 @@ def test_gen_all_reports_every_package_that_failed(tmp_path):
         assert pid in result.stderr, (
             f"{pid} is missing from the report:\n{result.stderr}"
         )
+
+
+# --- stn-12v: the subprocess runs the code under test -----------------------
+
+
+def test_the_cli_subprocess_imports_the_tree_under_test(tmp_path):
+    """The guard for every other test in this file.
+
+    `pip install -e` points at ONE checkout. Run from a git worktree, an
+    unguarded subprocess imports that one -- so a test here can pass while the
+    branch's own code is never executed, and a break in argument parsing ships
+    green. Found the friendly way round while fixing stn-w4v: the fix was
+    correct, verified against argparse in isolation, and the new tests kept
+    failing because the subprocess was running main.
+
+    Asserted by asking the subprocess where it imported stencil from, which is
+    the only answer that cannot be faked by the parent process's own sys.path.
+    """
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import stencil.generate as g; print(g.__file__)",
+        ],
+        capture_output=True,
+        text=True,
+        cwd=tmp_path,
+        env={**os.environ, "PYTHONPATH": str(REPO_ROOT)},
+    )
+
+    assert result.returncode == 0, result.stderr
+    imported = Path(result.stdout.strip()).resolve()
+    expected = (REPO_ROOT / "stencil" / "generate.py").resolve()
+    assert imported == expected, (
+        f"the CLI subprocess imported {imported}, but this test run is "
+        f"exercising {expected}. Every subprocess test in this file is "
+        f"measuring the wrong copy of stencil."
+    )
