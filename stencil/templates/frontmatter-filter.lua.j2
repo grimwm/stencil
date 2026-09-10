@@ -318,6 +318,27 @@ function Meta(meta)
     end
   end
 
+  -- Plain-text twins for the one place markup cannot go: <title>.
+  --
+  -- stn-myk. Pandoc renders $title$ as inline markdown, which is what puts a
+  -- <code> on the title slide for a backticked `title:` -- correct, and what
+  -- stn-7i8 made legible. The head partial interpolates the SAME variable
+  -- into <title>, where an element has nowhere to go, so pandoc escapes it
+  -- and the browser tab, the bookmark and the PDF's document title all read
+  -- literally "The <code>foo</code> protocol".
+  --
+  -- stringify is the whole fix: it flattens Inlines to their text, so a
+  -- backtick, an emphasis or a link in any of these renders as the words the
+  -- author wrote. Computed here rather than in the template because a pandoc
+  -- template cannot flatten a value -- the same reason every other derived
+  -- key on this page is computed here.
+  for _, key in ipairs({ "title", "program", "section", "term" }) do
+    local text = text_of(meta[key])
+    if text then
+      meta[key .. "-text"] = pandoc.Inlines({ pandoc.Str(text) })
+    end
+  end
+
   -- Points is a number the reader cares about, so the badge says "1 pt" rather
   -- than "1 pts". Computed here because a pandoc template cannot compare a
   -- value -- the same reason `date` is filled in here rather than there.

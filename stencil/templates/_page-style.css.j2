@@ -74,6 +74,17 @@
          passes, which is what tests/test_theme.py now asserts: 4.95:1 on the
          header fill, 6.71:1 on white. It also lifts --print-th-bg from 4.51:1
          to 5.48:1, and that 0.01 of margin was never a margin. */
+      /* Bootstrap 5.3 resolves links through --bs-link-color-rgb, not
+         --bs-link-color. The dark block has mapped this since it was
+         written; the light palette never did, so a light-theme link was the
+         one colour on the page this project did not choose -- Bootstrap's own
+         #0d6efd, which measures 4.50:1 on white. That passes AA by rounding,
+         on the easiest surface there is. --accent is 9.85:1 on the same
+         surface and is the colour every other themed element already uses.
+         stn-c0b. */
+      --bs-link-color-rgb: 41, 65, 122;
+      --bs-link-hover-color-rgb: 41, 65, 122;
+
       --code-inline: #b01f45;
       --hl-builtin: #c85200;
       --hl-string: #0550ae;

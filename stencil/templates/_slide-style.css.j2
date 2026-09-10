@@ -83,6 +83,27 @@
       color: inherit;
     }
 
+    /* A link is the other inline construct that opts out of the colour it
+       would otherwise inherit, and mapping the link token is not enough here:
+       a themed light link IS --accent, which is the same colour as
+       --deck-accent-from -- 1.00:1 against the fill it would sit on. Any link
+       colour good on a pale prose surface is bad on a dark accent fill, the
+       same bind stn-7i8 found for inline code. Measured on the fill it
+       actually lands on: Bootstrap's #0d6efd is 2.19:1 and 1.40:1 across the
+       gradient, and 2.19:1 in print; the inherited --on-accent is 9.85:1 and
+       6.32:1.
+
+       The underline is not decoration. Inheriting the surrounding ink is
+       exactly what removes the colour difference that marked this as a link,
+       and WCAG 1.4.1 is a separate criterion from 1.4.3 -- fixing contrast by
+       deleting the only cue that a link is a link trades one failure for
+       another. stn-c0b. */
+    .slide--title a {
+      color: inherit;
+      text-decoration: underline;
+      text-underline-offset: 0.15em;
+    }
+
     /* Brand above the context line on a title slide, the same order a
        document's header uses. White-on-gradient, so a logo with its own
        background is the author's to supply appropriately. */

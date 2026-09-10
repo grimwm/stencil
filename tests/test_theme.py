@@ -199,6 +199,13 @@ def test_the_dark_block_defines_exactly_the_light_token_names():
     css = strip_comments(source("_page-style.css.j2"))
     light = {t for t in tokens(css) if not t.startswith("--font-")}
     dark = set(re.findall(r"(--[a-z0-9-]+)\s*:", dark_block(css)))
+    # --bs-* is Bootstrap's namespace, mapped FROM this project's tokens
+    # rather than being tokens in its own right, and the two sides map
+    # whichever ones each theme actually needs. Excluded from both sets, not
+    # just from dark: the one-sided version of this filter meant that adding
+    # the light palette's first --bs- mapping (stn-c0b) failed a parity check
+    # about a different thing entirely.
+    light = {t for t in light if not t.startswith("--bs-")}
     dark = {t for t in dark if not t.startswith("--bs-")}
     # Print tokens are deliberately light-only: print never sees the dark
     # block, so overriding them there would be dead code.
@@ -835,4 +842,94 @@ def test_colour_scheme_is_declared_in_css_not_inline():
     )
     assert "color-scheme: dark" in dark_block(css), (
         "color-scheme is not flipped inside the sealed dark block"
+    )
+
+
+# --- a link on an accent fill (stn-c0b) -------------------------------------
+#
+# The other inline construct that opts out of the colour it would otherwise
+# inherit. stn-7i8 covered `code`; this is the same shape with a second
+# criterion attached, because a link also has to be identifiable AS a link.
+
+BOOTSTRAP_DEFAULT_LINK = "#0d6efd"
+
+TITLE_SLIDE_LINK_RULE = re.compile(
+    r"\.slide--title\s+a\s*\{[^}]*color\s*:\s*inherit", re.S
+)
+
+
+def test_the_light_palette_themes_its_own_links():
+    """The half of stn-c0b that is arguably the real bug.
+
+    `_page-style.css.j2` declared no `a` rule at all and mapped Bootstrap's
+    link token ONLY inside the sealed dark block, so a light-theme link was
+    not themed -- it fell through to Bootstrap's own #0d6efd. Measured, that
+    is 4.50:1 on white: it passes AA by rounding, on the one surface where it
+    is easiest, while every other token in this file is chosen deliberately.
+    """
+    css = strip_comments(source("_page-style.css.j2"))
+    table = dict(tokens(css))
+    assert "--bs-link-color-rgb" in table, (
+        "the light palette does not map Bootstrap's link token, so a link "
+        "renders in Bootstrap blue rather than in this project's accent"
+    )
+
+
+@pytest.mark.parametrize("theme", ["light", "dark"])
+@pytest.mark.parametrize(
+    "surface", ["--surface", "--surface-muted", "--surface-sunken", "--card-bg"]
+)
+def test_a_link_is_legible_on_the_prose_surfaces(theme, surface):
+    """The mapped token, against the surfaces body text actually sits on."""
+    css = strip_comments(source("_page-style.css.j2"))
+    table = theme_table(css, theme)
+    channels = [int(part) for part in table["--bs-link-color-rgb"].split(",")]
+    fg = "#%02x%02x%02x" % tuple(channels)
+    bg = resolve(table[surface], table)
+    ratio = contrast(fg, bg)
+    assert ratio >= 4.5, (
+        f"{theme}: a link ({fg}) on {surface} ({bg}) is {ratio:.2f}:1"
+    )
+
+
+def test_title_slide_links_inherit_the_on_accent_ink():
+    """Mapping the token is not enough, and this is why both halves landed.
+
+    A themed light link is --accent #29417a, which is the SAME colour as
+    --deck-accent-from: 1.00:1 against the fill it would sit on. Any link
+    colour good on a pale prose surface is bad on a dark accent fill, exactly
+    as stn-7i8 found for `code`. So the title slide scopes it the same way.
+    """
+    css = source("_slide-style.css.j2")
+    assert TITLE_SLIDE_LINK_RULE.search(css), (
+        "_slide-style.css.j2 has no `.slide--title a { color: inherit }`; a "
+        "link in front matter renders in the link colour on the gradient"
+    )
+
+
+def test_a_title_slide_link_is_identifiable_without_colour():
+    """WCAG 1.4.1 is a SEPARATE criterion from 1.4.3, and inheriting the
+    surrounding ink is precisely what removes the colour difference that made
+    the link identifiable. Without an underline the fix for one criterion
+    breaks another: the link becomes indistinguishable from the text it sits
+    in."""
+    css = strip_comments(source("_slide-style.css.j2"))
+    match = re.search(r"\.slide--title\s+a\s*\{([^}]*)\}", css, re.S)
+    assert match, "no .slide--title a rule at all"
+    assert re.search(r"text-decoration\s*:\s*underline", match.group(1)), (
+        "the link inherits the surrounding ink and carries no underline, so "
+        "nothing marks it as a link"
+    )
+
+
+@pytest.mark.parametrize("fill", ACCENT_FILLS + ["--print-deck-bg"])
+def test_the_bootstrap_link_colour_fails_on_an_accent_fill(fill):
+    """The negative half, matching stn-7i8's: this is what the scoped rule is
+    for, and what reverting it returns to."""
+    css = strip_comments(source("_page-style.css.j2"))
+    table = dict(tokens(css))
+    bg = resolve(table[fill], table)
+    ratio = contrast(BOOTSTRAP_DEFAULT_LINK, bg)
+    assert ratio < 4.5, (
+        f"{BOOTSTRAP_DEFAULT_LINK} now reaches {ratio:.2f}:1 on {fill} ({bg})"
     )
