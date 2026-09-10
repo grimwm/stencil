@@ -35,6 +35,97 @@ DEMO_CONFIG = {
 }
 
 
+# --- when the disk is the reason, say so (stn-0ot / stn-7im) ---------------
+#
+# A run that exhausts the filesystem holding the basetemp does not fail like a
+# disk failure. It fails as OSError: [Errno 28] scattered across dozens of
+# unrelated tests -- measured: `51 failed, 540 passed, 157 errors`, none of
+# which mentions the disk in a way a reader connects to the cause, and the
+# harness capturing the output can hit ENOSPC of its own and lose even that.
+#
+# So the number goes in the header of every run, where the log of the run that
+# failed already has it, and a low-space failure gets told what happened.
+
+LOW_SPACE_BYTES = 512 * 1024 * 1024
+
+
+def _free_bytes(path: Path) -> int | None:
+    """Free space on the filesystem holding `path`, or None if it cannot say.
+
+    Walks upward: with retention="failed" the basetemp may not exist yet, or
+    may have been removed by the time this is asked, and a guard that raises
+    while explaining a failure is worse than one that stays quiet.
+    """
+    current = Path(path)
+    for candidate in (current, *current.parents):
+        try:
+            return shutil.disk_usage(candidate).free
+        except (OSError, ValueError):
+            continue
+    return None
+
+
+def _low_space_note(basetemp: Path, threshold: int | None = None) -> str | None:
+    """The message to attach to a failure, or None when the disk is fine.
+
+    None above the threshold is the load-bearing half: an annotation on every
+    failure is noise, and noise is how people learn to skip a section that
+    will one day be the answer.
+
+    `threshold=None` reads LOW_SPACE_BYTES at CALL time rather than binding it
+    as a default at import time. A default argument would freeze the value at
+    module load, which makes the constant look adjustable while being nothing
+    of the kind -- tests/test_tmp_footprint.py caught exactly that by setting
+    it and watching nothing change.
+    """
+    if threshold is None:
+        threshold = LOW_SPACE_BYTES
+    free = _free_bytes(basetemp)
+    if free is None or free >= threshold:
+        return None
+    return (
+        f"Only {free / 1e6:.0f}MB free on the filesystem holding {basetemp}.\n"
+        f"The container tier writes a ~10.75MB package per generated test, so "
+        f"this failure may be the disk rather than the code.\n"
+        f"Point the tree somewhere with room and run again:\n"
+        f"    pytest --basetemp=~/.cache/stencil-pytest"
+    )
+
+
+def pytest_report_header(config):
+    """Where the tree goes and how much room it has, in every run's log."""
+    basetemp = config.getoption("basetemp") or Path(
+        config._tmp_path_factory.getbasetemp()
+        if hasattr(config, "_tmp_path_factory")
+        else "/tmp"
+    )
+    free = _free_bytes(Path(basetemp))
+    if free is None:
+        return f"basetemp: {basetemp}"
+    return f"basetemp: {basetemp} ({free / 1e9:.1f}GB free)"
+
+
+@pytest.hookimpl(wrapper=True)
+def pytest_runtest_makereport(item, call):
+    """Annotate a FAILING test when the disk is nearly full.
+
+    At the moment of failure rather than in the terminal summary, and that is
+    not a stylistic choice: with retention="failed" a passing test frees its
+    tree as it goes, so a run that genuinely exhausted the disk mid-way can
+    look perfectly healthy by the time the summary is written.
+
+    wrapper=True because pyproject pins a pytest new enough for it, and
+    because the report object has to exist before a section can be added to
+    it.
+    """
+    report = yield
+    if report.when == "call" and report.failed:
+        note = _low_space_note(Path(item.config._tmp_path_factory.getbasetemp()))
+        if note:
+            report.sections.append(("Disk space", note))
+    return report
+
+
 def pytest_collection_modifyitems(config, items):
     """Skip the container-backed tests when there is nothing to run them in."""
     if pipeline.container_runtime() is not None:

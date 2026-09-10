@@ -11,6 +11,22 @@ How the version gets bumped is written down in
 
 ## 0.36.0
 
+- **The test tier no longer keeps every passing test's output**
+  (`stn-0ot`, closing `stn-7im`). `tmp_path_retention_policy = "failed"`:
+  measured, each generated package is ~10.75MB of inlined assets, the unit
+  tier retained 823MB across 310 directories per run, and pytest kept three
+  runs — which exhausted a 7.7GB tmpfs and produced `51 failed, 540 passed, 157 errors` that named the disk nowhere a reader would connect to the cause.
+  A failing test still keeps its tree, which is the one you want to look at;
+  `-o tmp_path_retention_policy=all` restores the old behaviour for a
+  debugging session.
+
+- **A run says where its temp tree is and how much room it has**, in the
+  header of every run, and a failing test is annotated when space is low — at
+  the moment of failure, because with the new policy a run that exhausted the
+  disk mid-way looks healthy by summary time.
+
+  Nothing in a generated package changed; this is the suite only.
+
 - **A zip package's `pkg` target archives with `tar` on Windows, so a hidden
   `.git` reaches the submission.** `Compress-Archive` cannot put one there.
   `git init` on Windows sets the real `FILE_ATTRIBUTE_HIDDEN` bit on `.git`

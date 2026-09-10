@@ -40,6 +40,27 @@ markers = [
     "integration: needs a container runtime; deselect with -m 'not integration'",
 ]
 
+# A passing test's output is deleted as it goes; a failing test's is kept.
+#
+# stn-7im, measured: a full run exhausted a 7.7GB tmpfs /tmp, and it did not
+# look like a disk failure -- two runs reported a bare exit 1, and the harness
+# capturing their output hit ENOSPC of its own. The arithmetic is that each
+# generated package is about 10.75MB, nearly all of it the Bootstrap,
+# highlight.js, Mermaid and fonts inlined into html-template.html; the unit
+# tier alone generates a few hundred; and pytest's default keeps the last
+# three runs of all of it.
+#
+# The trade, stated because it is a real one: a test that PASSED no longer
+# leaves its generated package to poke at afterwards. When that is what you
+# want -- and for this repository it often is, since reading a generated
+# Makefile is how several of these bugs were found -- ask for it explicitly:
+#
+#     pytest -o tmp_path_retention_policy=all
+#
+# tmp_path_retention_count is deliberately left alone. With this policy the
+# per-run directories are near-empty, so the count is no longer the lever.
+tmp_path_retention_policy = "failed"
+
 # Named rather than discovered. With plugin/ beside stencil/ at the top level,
 # setuptools' flat-layout discovery sees two candidate packages and refuses to
 # build at all, which fails `pip install -e .` before a single test runs.
