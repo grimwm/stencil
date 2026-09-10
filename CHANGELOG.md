@@ -11,6 +11,27 @@ How the version gets bumped is written down in
 
 ## 0.36.0
 
+- **A guard keeps developer home paths out of the published issue export**
+  (`stn-zcw`). `.beads/issues.jsonl` is committed and this repository is
+  public, and issue notes are written by agents that paste absolute paths — so
+  the export had been accumulating
+  `/Users/<user>/…/.claude/worktrees/<branch>/…` strings. Measured before
+  fixing: three real ones, no credentials or tokens, and the only identity
+  involved a username `git log` already carries. Hygiene rather than an
+  incident, which is exactly why it wanted a guard: the volume grows with
+  every note and nobody re-runs the check by hand.
+
+  The three were redacted **in the database** and re-exported, never by
+  editing the JSONL — that desyncs it from Dolt and trips the pre-push drift
+  guard, which is the whole reason that guard exists. Two of them needed
+  `bd import --allow-stale`, because their notes fields are ~300KB and a
+  single command-line argument on Linux caps at 128KB.
+
+  `tests/test_export_hygiene.py` also refuses credential-shaped strings, and
+  carries its own false-positive case: the tracker records leak-*detection*
+  snippets that build `'/Users/' + U`, so a plain search for `/Users/` reports
+  every one of them as a leak.
+
 - **A zip package's `pkg` target archives with `tar` on Windows, so a hidden
   `.git` reaches the submission.** `Compress-Archive` cannot put one there.
   `git init` on Windows sets the real `FILE_ATTRIBUTE_HIDDEN` bit on `.git`
