@@ -43,6 +43,11 @@ BROWSER_IMAGE_TAG = "localhost/stencil_browser:test"
 # built and overwrote this single tag, so one run could rebuild the image out
 # from under another that was still using it (stn-zim).
 #
+# A per-run tag would be a bad trade if it meant rebuilding the image each
+# time. Measured: 0.5s against the existing tag, 0.6s against a brand-new one
+# -- the layer cache keys on the Dockerfile and the context rather than on the
+# name, so the tag costs nothing.
+#
 # Read through a function rather than as a default argument, which is the
 # whole point: `def f(tag=BROWSER_IMAGE_TAG)` binds at IMPORT, so setting the
 # module attribute afterwards looks like it works and does nothing. The same

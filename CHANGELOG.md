@@ -35,6 +35,12 @@ How the version gets bumped is written down in
   builds its own image — so this is a test-harness knob and cannot affect a
   consumer's build.
 
+  A per-run tag could have meant rebuilding the image every run, which would
+  have been a worse trade than the problem. Measured rather than assumed:
+  **0.5s for the existing tag, 0.6s for a brand-new one** — podman's layer
+  cache keys on the Dockerfile and context, not on the name, so the tag is
+  free.
+
   The four helpers took the tag as a **default argument**, which bound it at
   import and made an environment override look like it worked while doing
   nothing. They resolve at call time now, and a test asserts the signatures
