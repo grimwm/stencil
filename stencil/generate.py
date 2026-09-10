@@ -887,6 +887,9 @@ def copy_brand_image(
     print(f"Copied: {destination}")
 
 
+_MAX_PROBLEM_CHARS = 400
+
+
 def _safe(text: str) -> str:
     """Config-supplied text is data, not terminal control.
 
@@ -909,9 +912,21 @@ def _safe(text: str) -> str:
     U+0085 and NBSP are all category Cf/Zl/Zs, so isprintable() is already
     False for them and they escape like any other control.
     """
-    return "".join(
+    escaped = "".join(
         c if c == " " or c.isprintable() else repr(c)[1:-1] for c in str(text)
     )
+    # ...and BOUNDED, which is the other half of stn-oty. Escaping stops a
+    # value from rewriting the report; it does not stop one from burying it,
+    # and yaml.safe_load returns a scalar of any size. The cap is per problem
+    # line and deliberately generous -- a real message runs to a couple of
+    # hundred characters -- so it only ever fires on something pathological,
+    # and it says how much it dropped so the value stays identifiable.
+    if len(escaped) > _MAX_PROBLEM_CHARS:
+        return (
+            escaped[:_MAX_PROBLEM_CHARS]
+            + f"... [truncated, {len(escaped)} characters]"
+        )
+    return escaped
 
 
 def _raise_config_problems(problems: list[str]) -> None:
@@ -1042,17 +1057,14 @@ def package_contexts(config: dict, config_dir: Path | None = None) -> dict[str, 
             # turn one config-wide complaint into a distinct string per
             # package sharing it, defeating the dedup below.
             #
-            # KNOWN GAP, measured rather than assumed: not every ValueError
-            # reaching here is about the config. pipeline.read_lockfile
-            # raises one when a vendored lockfile does not end in exactly
-            # one newline, which is a broken INSTALL -- the fix is
-            # `python3 scripts/vendor_npm_locks.py`, not editing
-            # .config.yaml -- and it is reported here as a config problem,
-            # with a trailer telling the reader to fix their config and
-            # remove a directory by hand. Wrong advice for the right
-            # failure. Catching it correctly means read_lockfile raising a
-            # type of its own, which is stn-hwo; pipeline.py is outside
-            # this change's boundary.
+            # That gap is closed (stn-hwo). pipeline.read_lockfile used to
+            # raise ValueError when a vendored lockfile was damaged, which is
+            # a broken INSTALL rather than a broken config -- and it arrived
+            # here, on the config channel, under a heading saying the config
+            # has a problem and a trailer telling the reader to fix it and
+            # delete a directory by hand. It raises VendoredAssetError now,
+            # which is deliberately not a ValueError, so it travels straight
+            # past this collector to main, which reports it as what it is.
             problems.append(str(e))
             continue
         except (TypeError, AttributeError, KeyError) as e:
@@ -1511,6 +1523,28 @@ def install_gitignore(config: dict, dry_run: bool = False):
 
 
 def main():
+    """The console-script entry point, and the one place install faults land.
+
+    stn-hwo. `pipeline.VendoredAssetError` means a file stencil SHIPS is
+    missing or damaged, which no amount of editing .config.yaml will fix. It
+    deliberately does not travel on the ValueError channel package_contexts
+    collects config problems on, so without this it reached the terminal as a
+    traceback. Caught here rather than at each of the three call sites so the
+    next command to read a vendored asset gets the same treatment for free.
+    """
+    try:
+        _main()
+    except pipeline.VendoredAssetError as error:
+        print(f"Error: {error}", file=sys.stderr)
+        print(
+            "\nThis is stencil's own installation, not your config. Nothing "
+            "was generated, removed or written.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+
+def _main():
     parser = argparse.ArgumentParser(
         description="Generate package scaffolding from templates"
     )
@@ -1527,14 +1561,33 @@ def main():
     sub = parser.add_subparsers(dest="command", required=True, metavar="COMMAND")
 
     def _add_global_opts(p):
+        """The same two options again, on a subparser, defaulting to nothing.
+
+        stn-w4v. These are declared twice on purpose -- both spellings are
+        documented, and `stencil gen --config x` has to work as well as
+        `stencil --config x gen`. What made the second one silently wrong was
+        the DEFAULT: argparse parses the main parser first and stores the real
+        value, then parses the subparser, whose default for the same `dest`
+        overwrites what the main parser just stored. So the documented
+        spelling -- generate.py's own module docstring says
+        `stencil [--config <path>] gen [--all] [pkg]` -- read .config.yaml and
+        said nothing about it, and `--dry-run` before the subcommand meant the
+        preview someone ran actually wrote.
+
+        SUPPRESS is the fix rather than a post-parse merge: with no default,
+        argparse sets the attribute only when the option is actually present
+        on the subcommand, so an absent one leaves the main parser's value
+        alone and the main parser's own default is the single source of it.
+        """
         p.add_argument(
             "--config",
-            default=".config.yaml",
+            default=argparse.SUPPRESS,
             help="Path to config file (default: .config.yaml)",
         )
         p.add_argument(
             "--dry-run",
             action="store_true",
+            default=argparse.SUPPRESS,
             help="Show what would be done without making changes",
         )
 
@@ -1687,20 +1740,72 @@ def main():
         print(f"Error: {e}", file=sys.stderr)
         sys.exit(1)
 
-    if args.all:
-        for package_id in config["packages"]:
-            generate_package(
+    # stn-zfc. Two ways a package could fail while `gen` still exited 0, and
+    # both of them are here rather than inside generate_package, because this
+    # is the only place that knows whether one package's failure should stop
+    # the others.
+    #
+    #   * render_templates prints its own message and RE-RAISES. Nothing
+    #     caught it, so a StrictUndefined error -- which AGENTS.md keeps
+    #     deliberately fatal, so a renamed context key cannot render as the
+    #     empty string -- reached the terminal as a traceback, with the
+    #     package that failed named nowhere in it.
+    #   * generate_package returns None when a package has no templates at
+    #     all, and the --all loop discarded the return value, so the loop
+    #     continued and main returned 0.
+    #
+    # Collected rather than raised at the first failure, for the reason
+    # package_contexts aggregates config problems: fixing one and running
+    # again to discover the next is the thing being avoided.
+    def _generate(package_id: str) -> str | None:
+        """Returns a problem, or None when the package generated."""
+        try:
+            out = generate_package(
                 env, config, output_base, package_id, args.dry_run, config_dir
             )
+        except pipeline.VendoredAssetError:
+            # Not this package's fault and not per-package at all: every
+            # package reads the same vendored lockfiles, so reporting it once
+            # per package would be N copies of one install problem. main()
+            # catches it and says what it actually is.
+            raise
+        except Exception as error:
+            # Broad on purpose: this is the CLI boundary, and a traceback is
+            # never the right report here. The type is kept in the message so
+            # nothing is actually lost by not printing the stack.
+            return f"{package_id}: {type(error).__name__}: {error}"
+        if out is None:
+            return f"{package_id}: nothing was generated"
+        return None
+
+    if args.all:
+        failures = [
+            problem
+            for problem in (_generate(pid) for pid in config["packages"])
+            if problem
+        ]
+        if failures:
+            print(
+                "Error: these packages could not be generated:\n  "
+                + "\n  ".join(failures),
+                file=sys.stderr,
+            )
+            print(
+                "\nSome packages may be half-written; generation is "
+                "idempotent, so fix the cause and run again.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
         return
 
     package_id = args.pkg
-    out = generate_package(
-        env, config, output_base, package_id, args.dry_run, config_dir
-    )
-    if out is None:
-        list_packages(config)
+    problem = _generate(package_id)
+    if problem:
+        print(f"Error: {problem}", file=sys.stderr)
+        if "nothing was generated" in problem:
+            list_packages(config)
         sys.exit(1)
+    out = output_base / config["packages"][package_id].get("dir", package_id)
     if not args.dry_run:
         print(f"\nSuccessfully generated files for {package_id} in {out}")
 

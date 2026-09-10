@@ -11,6 +11,60 @@ How the version gets bumped is written down in
 
 ## 0.36.0
 
+- **A global option before the subcommand is honoured** (`stn-w4v`). `--config`
+  and `--dry-run` are declared twice — once on the top-level parser and again
+  on every subparser, because both spellings are documented — and the
+  subparser's *default* overwrote the value the main parser had already
+  stored. So the documented order silently read the wrong file:
+
+  ```
+  stencil --config other.yaml list   # other.yaml ignored, .config.yaml used
+  stencil list --config other.yaml   # works
+  ```
+
+  and generate.py's own module docstring gives the broken one,
+  `stencil [--config <path>] gen [--all] [pkg]`. The `--dry-run` half is the
+  worse of the two: a preview that silently was not one. The subparser copies
+  now default to `argparse.SUPPRESS`, so an absent option leaves the main
+  parser's value alone.
+
+- **A package that fails to generate now fails the command** (`stn-zfc`). Two
+  routes survived `stn-k73`, which closed the config-error path only.
+  `render_templates` prints its message and re-raises, and nothing caught it,
+  so a `StrictUndefined` error — kept deliberately fatal so a renamed context
+  key cannot render as the empty string — arrived as a raw traceback naming
+  no package. And `generate_package` returns `None` for a package with no
+  templates, which the `--all` loop discarded, so the loop carried on and the
+  command exited **0**. Failures are collected across every package and
+  reported together, the way config problems already are.
+
+- **A damaged stencil install is no longer reported as a broken config**
+  (`stn-hwo`). `pipeline.read_lockfile` raised `ValueError` for a vendored
+  lockfile that lost its trailing-newline shape, and `ValueError` is the
+  channel `package_contexts` collects *config* problems on — so a fault whose
+  fix is `python3 scripts/vendor_npm_locks.py` was reported under a heading
+  saying the config has a problem, with a trailer telling the reader to fix it
+  and delete a directory by hand, in a file a consumer may not be able to edit
+  at all. It raises `pipeline.VendoredAssetError` now, deliberately **not** a
+  `ValueError` subclass, and `main` reports it as what it is:
+
+  ```
+  Error: browser-package-lock.json must end with exactly one newline ...
+         Re-vendor it: python3 scripts/vendor_npm_locks.py
+
+  This is stencil's own installation, not your config. Nothing was
+  generated, removed or written.
+  ```
+
+- **A pathological config scalar cannot bury the report that names it**
+  (`stn-oty`). The dangerous half of that ticket was already closed — measured:
+  `_safe` renders an ANSI CSI sequence in a package id as a literal `\x1b`,
+  and an embedded newline cannot forge an extra bullet in the aggregated list.
+  What was missing was a bound, since `yaml.safe_load` returns a scalar of any
+  size. Problem lines are capped at 400 characters and say how much they
+  dropped; a real message runs to a couple of hundred, so nothing ordinary
+  changes.
+
 - **A zip package's `pkg` target archives with `tar` on Windows, so a hidden
   `.git` reaches the submission.** `Compress-Archive` cannot put one there.
   `git init` on Windows sets the real `FILE_ATTRIBUTE_HIDDEN` bit on `.git`

@@ -508,3 +508,126 @@ def test_a_mistyped_package_beats_an_unrelated_broken_sibling(tmp_path):
     assert "Unknown package" in result.stderr, (
         f"a mistyped package id was answered with something else: {result.stderr!r}"
     )
+
+
+# --- stn-w4v: a global option before the subcommand -------------------------
+
+
+def _two_configs(tmp_path):
+    """A default config and an alternative, each naming a different package."""
+    (tmp_path / ".config.yaml").write_text(
+        "packages:\n  demo:\n    name: Demo\n    package_type: none\n"
+    )
+    (tmp_path / "other.yaml").write_text(
+        "packages:\n  other:\n    name: Other\n    package_type: none\n"
+    )
+
+
+def test_a_global_config_before_the_subcommand_is_honoured(tmp_path):
+    """The BROKEN order was the DOCUMENTED one, which is what made it bite.
+
+    ``--config`` and ``--dry-run`` are declared twice -- once on the top-level
+    parser and again, via ``_add_global_opts``, on every subparser with the
+    same defaults. argparse parses the main parser first and stores the real
+    value, then parses the subparser, whose default for the same ``dest``
+    overwrites it. So::
+
+        stencil --config other.yaml list   # other.yaml silently ignored
+        stencil list --config other.yaml   # works
+
+    and generate.py's own module docstring gives the first spelling:
+    ``stencil [--config <path>] gen [--all] [pkg]``. Anyone following the
+    usage string read the wrong file and got a confident answer about it.
+    """
+    _two_configs(tmp_path)
+
+    before = run_cli("--config", "other.yaml", "list", cwd=tmp_path)
+    after = run_cli("list", "--config", "other.yaml", cwd=tmp_path)
+
+    assert before.returncode == 0, before.stderr
+    assert "other" in before.stdout, (
+        "a --config before the subcommand was ignored; the default "
+        f"overwrote it:\n{before.stdout}"
+    )
+    assert "demo" not in before.stdout
+    assert before.stdout == after.stdout, (
+        "the two spellings of the same option disagree:\n"
+        f"before: {before.stdout}\nafter:  {after.stdout}"
+    )
+
+
+def test_a_global_dry_run_before_the_subcommand_is_honoured(tmp_path):
+    """The same defect on the other shared option, and the one that would
+    have been worse to discover: --dry-run silently NOT applying means the
+    command someone ran to preview a change actually made it."""
+    _two_configs(tmp_path)
+
+    result = run_cli("--dry-run", "install", cwd=tmp_path)
+
+    assert result.returncode == 0, result.stderr
+    assert not (tmp_path / ".gitignore").exists(), (
+        "--dry-run before the subcommand was ignored and install wrote the "
+        ".gitignore anyway"
+    )
+
+
+# --- stn-zfc: a package that fails must fail the command --------------------
+
+
+def _project(tmp_path, template_body="ok\n", packages=("one", "two")):
+    """A config with a templates_dir the caller can put a broken template in."""
+    (tmp_path / "templates").mkdir()
+    (tmp_path / "templates" / "t.j2").write_text(template_body)
+    body = "templates_dir: templates\ntemplates:\n  - src: t.j2\npackages:\n"
+    for pid in packages:
+        body += f"  {pid}:\n    name: {pid.title()}\n    package_type: none\n"
+    (tmp_path / ".config.yaml").write_text(body)
+
+
+def test_a_template_that_fails_to_render_fails_the_command(tmp_path):
+    """StrictUndefined is deliberate -- AGENTS.md explains why a renamed
+    context key must raise instead of rendering the empty string -- but
+    nothing in main() caught it, so `gen` exited on a raw traceback and left
+    a half-written package behind.
+
+    The exit code is the part that matters here. A traceback at least tells a
+    person something is wrong; a CI step reading `$?` is what this is for.
+    """
+    _project(tmp_path, template_body="VALUE = {{ pakage_stem }}\n")
+
+    result = run_cli("gen", "--all", cwd=tmp_path)
+
+    assert result.returncode != 0, (
+        f"a template that could not render still exited 0:\n{result.stdout}"
+    )
+    assert "Traceback" not in result.stderr, (
+        f"the failure is reported as a traceback:\n{result.stderr}"
+    )
+    assert "pakage_stem" in result.stderr, (
+        f"the message does not name the undefined key:\n{result.stderr}"
+    )
+
+
+def test_the_failing_package_is_named(tmp_path):
+    """`gen --all` over five packages that says only 'it failed' makes the
+    reader generate them one at a time to find out which."""
+    _project(tmp_path, template_body="VALUE = {{ pakage_stem }}\n")
+
+    result = run_cli("gen", "--all", cwd=tmp_path)
+
+    assert "one" in result.stderr, (
+        f"the failing package is not named:\n{result.stderr}"
+    )
+
+
+def test_gen_all_reports_every_package_that_failed(tmp_path):
+    """Same guarantee package_contexts gives for config errors: fixing one
+    problem and rerunning to find the next is the thing being avoided."""
+    _project(tmp_path, template_body="VALUE = {{ pakage_stem }}\n")
+
+    result = run_cli("gen", "--all", cwd=tmp_path)
+
+    for pid in ("one", "two"):
+        assert pid in result.stderr, (
+            f"{pid} is missing from the report:\n{result.stderr}"
+        )
