@@ -20,6 +20,10 @@ How the version gets bumped is written down in
   `-o tmp_path_retention_policy=all` restores the old behaviour for a
   debugging session.
 
+  Measured after the change, on the same full container-tier run: the
+  basetemp tree went from **4.0GB to 117MB**, a 34x reduction, with 872
+  tests passing either way.
+
 - **A run says where its temp tree is and how much room it has**, in the
   header of every run, and a failing test is annotated when space is low — at
   the moment of failure, because with the new policy a run that exhausted the

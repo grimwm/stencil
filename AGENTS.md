@@ -186,6 +186,10 @@ recorded elsewhere in this file — a handout that makes no network request — 
 nothing here argues with it. What does not scale is keeping it for every
 passing test, three runs deep.
 
+Measured on the same full container-tier run, before and after: the basetemp
+tree went from **4.0GB to 117MB** — a 34x reduction, 872 tests passing either
+way.
+
 The cost being accepted: **a test that passed no longer leaves its generated
 package to look at**, and reading a generated Makefile is how several of these
 bugs were found. Buy it back for a debugging session:
