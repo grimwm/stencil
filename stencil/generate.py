@@ -121,11 +121,12 @@ def checked_brand_image(value: str | None, package_id: str) -> str | None:
     `(config_dir / relative).resolve()` the absolute path, and `file://` is
     stripped before any of this, so the scheme was not a defence either.
 
-    Checking the CONFIG STRING rather than containing the resolved path is
-    deliberate. A containment check would still have to decide what to do
-    about a symlink inside the package pointing out of it, and the answer
-    that keeps `gen` and `clean` agreeing (stn-8wt) is the same one: the file
-    stencil copies is the file the config names, relative to the config.
+    This checks the CONFIG STRING, and brand_problem separately contains the
+    RESOLVED path. Both are needed: the string is what `gen`, `clean` and the
+    managed .gitignore section all name the copy from (stn-8wt), so it has to
+    be a plain relative filename; and a plain relative filename can still be
+    a symlink whose target is anywhere readable, which only the resolved path
+    can see.
     """
     relative = brand_image_path(value)
     if relative is None:
@@ -895,7 +896,21 @@ def brand_problem(package: dict, config: dict, config_dir: Path | None) -> str |
         )
 
     if config_dir is not None:
+        root = config_dir.resolve()
         source = (config_dir / relative).resolve()
+        # stn-ttg. check_config_path has already refused `..` and an absolute
+        # value, so the only way the resolved file can be outside the config's
+        # directory is a symlink -- and a symlink is exactly what turns a
+        # permitted-looking `logo.png` into a read of any file the user can
+        # open. The copy is the one place a configured path becomes CONTENT
+        # in a folder that gets handed to someone else, so the target has to
+        # stay under the same root the config string was checked against.
+        if not source.is_relative_to(root):
+            return (
+                f"brand points at {value}, which resolves to {source}, outside "
+                f"the config file's directory ({root}). A brand image, or the "
+                "symlink that names it, must stay inside that directory."
+            )
         if not source.is_file():
             return (
                 f"brand points at {value}, which is not a file. Paths are "
@@ -945,7 +960,18 @@ def copy_brand_image(
     if dry_run:
         print(f"Would copy: {source} -> {destination}")
         return
-    shutil.copyfile(source, destination)
+    # The path brand_problem checked and the bytes copied are the same file.
+    # `source` is already fully resolved, so nothing on it should be a link
+    # any more; opening it with O_NOFOLLOW makes a link swapped in after the
+    # check fail here (ELOOP) instead of quietly reading somewhere else.
+    # Windows has no O_NOFOLLOW, and no getattr default changes what a
+    # resolved path opens there.
+    nofollow = getattr(os, "O_NOFOLLOW", 0)
+    with (
+        open(source, "rb", opener=lambda p, f: os.open(p, f | nofollow)) as src,
+        open(destination, "wb") as dst,
+    ):
+        shutil.copyfileobj(src, dst)
     print(f"Copied: {destination}")
 
 
@@ -1078,6 +1104,17 @@ def package_contexts(config: dict, config_dir: Path | None = None) -> dict[str, 
                 continue
             declared = tdef.get("dest")
             if declared is None:
+                continue
+            # check_config_path str()s what it is given, so `dest: 2024`
+            # would pass it and then reach `output_dir / 2024` in
+            # render_templates as a TypeError, after earlier templates had
+            # already been written. A dest is a filename, so it is a string.
+            if not isinstance(declared, str):
+                problems.append(
+                    f"Package config: dest {declared!r} is "
+                    f"{type(declared).__name__}, not a string. A template's "
+                    "dest is the filename it renders to."
+                )
                 continue
             try:
                 check_config_path("config", "dest", declared)

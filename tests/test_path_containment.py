@@ -204,8 +204,8 @@ def test_a_symlinked_brand_is_copied_under_the_name_clean_looks_for(tmp_path):
     output.mkdir(parents=True)
 
     copy_brand_image(
-        cfg["packages"]["demo"],
         cfg,
+        cfg["packages"]["demo"],
         config_dir=tmp_path,
         output_dir=output,
     )
@@ -224,3 +224,73 @@ def test_a_symlinked_brand_is_copied_under_the_name_clean_looks_for(tmp_path):
         "the symlink's target content should still be copied -- only the "
         "NAME comes from the config"
     )
+
+
+# --- stn-ttg, the half a string check cannot see: the resolved target ------
+
+
+def test_a_permitted_brand_name_that_links_outside_the_config_dir_is_refused(
+    tmp_path,
+):
+    """`logo.png` passes every lexical check and is still a symlink.
+
+    check_config_path refuses `..` and an absolute value, so the only way the
+    file stencil OPENS can be outside the config's directory is a link -- and
+    a link is exactly what turned a permitted-looking name into a read of any
+    file the user can open. The pre-flight contains the resolved path, so it
+    is reported with every other config problem before anything is written,
+    and copy_brand_image refuses the same way rather than trusting that the
+    pre-flight ran.
+    """
+    import os
+
+    from stencil.generate import copy_brand_image
+
+    outside = tmp_path / "elsewhere"
+    outside.mkdir()
+    (outside / "secret.png").write_bytes(b"not a logo")
+    config_dir = tmp_path / "course"
+    config_dir.mkdir()
+    os.symlink(outside / "secret.png", config_dir / "logo.png")
+
+    cfg = config(brand="file://logo.png", **{"brand-alt": "Logo"})
+    with pytest.raises(ValueError, match="outside"):
+        package_contexts(cfg, config_dir)
+
+    output = tmp_path / "out" / "demo"
+    output.mkdir(parents=True)
+    with pytest.raises(ValueError, match="outside"):
+        copy_brand_image(
+            cfg,
+            cfg["packages"]["demo"],
+            config_dir=config_dir,
+            output_dir=output,
+        )
+    assert list(output.iterdir()) == [], "nothing may be copied on refusal"
+
+
+def test_a_brand_link_that_stays_inside_the_config_dir_is_fine(tmp_path):
+    """The stn-8wt arrangement -- a stable name pointing at a dated asset in
+    the same tree -- is the case containment must keep working."""
+    import os
+
+    (tmp_path / "img").mkdir()
+    (tmp_path / "img" / "logo-2024.png").write_bytes(b"logo")
+    os.symlink("img/logo-2024.png", tmp_path / "logo.png")
+    cfg = config(brand="file://logo.png", **{"brand-alt": "Logo"})
+    assert package_contexts(cfg, tmp_path)["demo"]["config_brand"] == "logo.png"
+
+
+# --- stn-c25, the shape check before the path check --------------------------
+
+
+def test_a_non_string_dest_is_a_config_problem_not_a_typeerror():
+    """check_config_path str()s its argument, so `dest: 2024` passed it and
+    reached `output_dir / 2024` in render_templates as a TypeError, after
+    the templates before it had already been written."""
+    cfg = {
+        "templates": [{"src": "Makefile.j2", "dest": 2024}],
+        "packages": {"demo": package()},
+    }
+    with pytest.raises(ValueError, match="dest 2024 is int, not a string"):
+        package_contexts(cfg)

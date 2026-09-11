@@ -35,9 +35,10 @@ How the version gets bumped is written down in
     stripped before any of it, so the scheme was not a defence, and an
     absolute value made `(config_dir / relative).resolve()` the absolute path.
   - **C0 control characters** (`stn-isr`) were in neither the metacharacter
-    class nor the whitespace check. They are refused now — except `\n` and
-    tab, which keep the messages they already had, because "Make would split
-    it into two arguments" says more than "that is a control character" does.
+    class nor the whitespace check. The rest of the C0 range and DEL are
+    refused now; `\n` keeps its metacharacter message, and tab and carriage
+    return keep the whitespace one, because "Make would split it into two
+    arguments" says more than "that is a control character" does.
 
   None of these is a privilege boundary, and it is worth repeating why:
   `pre_build.run` is arbitrary execution by design, so whoever writes
