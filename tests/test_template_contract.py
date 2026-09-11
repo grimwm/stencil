@@ -393,4 +393,4 @@ def test_a_line_written_after_the_include_is_its_own_line(generate_package, tmp_
     (directory / "Makefile.j2").write_text("{% include 'Makefile-pkg.j2' %}\npkg: fix lint\n")
     config = {"templates_dir": "templates", "templates": [{"src": "Makefile.j2"}], **ZIP_WITH_DOCS}
     lines = (generate_package(config) / "Makefile").read_text().splitlines()
-    assert "pkg: fix lint" in lines, [l for l in lines if "pkg: fix lint" in l]
+    assert "pkg: fix lint" in lines, [line for line in lines if "pkg: fix lint" in line]
