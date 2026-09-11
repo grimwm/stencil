@@ -121,7 +121,7 @@ def test_a_generated_package_stays_around_its_measured_size(tmp_path):
     fitting. The headroom is generous enough that ordinary growth does not
     red it and tight enough that a doubling does.
     """
-    from tests.conftest import DEMO_CONFIG, make_package
+    from conftest import DEMO_CONFIG, make_package
 
     package = make_package(tmp_path, DEMO_CONFIG)
     total = sum(p.stat().st_size for p in package.rglob("*") if p.is_file())
@@ -151,7 +151,7 @@ class _Report:
 
 
 def test_the_note_names_the_path_and_the_space_when_low(tmp_path):
-    from tests.conftest import _low_space_note
+    from conftest import _low_space_note
 
     note = _low_space_note(tmp_path, threshold=10**18)
     assert note is not None
@@ -163,7 +163,7 @@ def test_there_is_no_note_when_the_disk_is_fine(tmp_path):
     """The load-bearing half. An annotation on every failure is noise, and
     noise is how a reader learns to skip the section that will one day be the
     answer."""
-    from tests.conftest import _low_space_note
+    from conftest import _low_space_note
 
     assert _low_space_note(tmp_path, threshold=0) is None
 
@@ -172,7 +172,7 @@ def test_the_helper_survives_a_basetemp_that_does_not_exist(tmp_path):
     """With retention="failed" the tree may be gone by the time this is asked,
     and a guard that raises while explaining a failure is worse than one that
     stays quiet. It walks up until something answers."""
-    from tests.conftest import _free_bytes
+    from conftest import _free_bytes
 
     missing = tmp_path / "gone" / "deeper" / "still-gone"
     assert _free_bytes(missing) is not None
@@ -193,7 +193,7 @@ def _drive(item, report):
     hook does: an earlier version of these two tests appended the section
     itself and asserted it was there, which tested the test.
     """
-    from tests import conftest
+    import conftest
 
     generator = conftest.pytest_runtest_makereport(item, None)
     next(generator)
@@ -205,7 +205,7 @@ def _drive(item, report):
 
 
 def test_a_failing_report_is_annotated_when_space_is_low(tmp_path, monkeypatch):
-    from tests import conftest
+    import conftest
 
     monkeypatch.setattr(conftest, "LOW_SPACE_BYTES", 10**18)
     report = _Report()
@@ -218,7 +218,7 @@ def test_a_failing_report_is_annotated_when_space_is_low(tmp_path, monkeypatch):
 def test_a_failing_report_is_left_alone_when_there_is_room(tmp_path, monkeypatch):
     """An annotation on every failure is noise, and noise is how a reader
     learns to skip the section that will one day be the answer."""
-    from tests import conftest
+    import conftest
 
     monkeypatch.setattr(conftest, "LOW_SPACE_BYTES", 0)
     report = _Report()
@@ -229,7 +229,7 @@ def test_a_failing_report_is_left_alone_when_there_is_room(tmp_path, monkeypatch
 
 def test_a_passing_report_is_left_alone(tmp_path, monkeypatch):
     """Only failures are annotated; a passing run has nothing to explain."""
-    from tests import conftest
+    import conftest
 
     monkeypatch.setattr(conftest, "LOW_SPACE_BYTES", 10**18)
     report = _Report(failed=False)
@@ -241,7 +241,7 @@ def test_a_passing_report_is_left_alone(tmp_path, monkeypatch):
 def test_a_setup_error_is_left_alone(tmp_path, monkeypatch):
     """`when` is "setup", "call" or "teardown", and annotating all three would
     put the same note on a test three times."""
-    from tests import conftest
+    import conftest
 
     monkeypatch.setattr(conftest, "LOW_SPACE_BYTES", 10**18)
     report = _Report(when="setup")
