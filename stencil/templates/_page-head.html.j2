@@ -3,7 +3,12 @@
    page is one self-contained file, and make pdf does not reach the network. #}
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>$if(program)$$program$: $endif$$title$</title>
+  {# `-text` rather than the raw variables: an element cannot live in <title>,
+     so pandoc escapes it and the tab reads literally `The <code>foo</code>
+     protocol`. frontmatter-filter.lua stringifies these alongside the other
+     derived keys (stn-myk). The fallbacks keep a consuming project's own
+     composition working if it renders this partial without that filter. #}
+  <title>$if(program-text)$$program-text$: $elseif(program)$$program$: $endif$$if(title-text)$$title-text$$else$$title$$endif$</title>
 
   <!-- Theme resolution. Inline, synchronous, and ahead of every stylesheet on
        purpose: anything deferred paints the light palette first, so a reader

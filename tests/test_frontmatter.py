@@ -370,3 +370,56 @@ def test_a_blank_lang_falls_back_rather_than_emitting_nothing(render_soup):
     than the default: it asserts an unknown language rather than no claim."""
     soup = render_soup("doc", "l.md", text=document('title: "T"\nlang:\n'))
     assert html_attrs(soup)["lang"] == "en"
+
+
+# --- stn-myk: the browser tab is plain text ---------------------------------
+
+
+def test_a_backticked_title_is_markup_on_the_page_and_text_in_the_tab(
+    render_soup,
+):
+    """Two places, one variable, and only one of them can hold markup.
+
+    Pandoc renders `$title$` as inline markdown, which is what makes a
+    backticked title render as inline code on the page -- correct, and what
+    stn-7i8 made legible. The same variable is interpolated into `<title>`,
+    where markup has nowhere to go, so pandoc escapes it and the browser tab,
+    the bookmark and the PDF's document title read literally
+
+        The <code>foo</code> protocol
+
+    The fix is the shape pandoc itself uses for this: a plain-text variant of
+    the value, computed in frontmatter-filter.lua alongside the other derived
+    keys, and read by the head partial instead.
+    """
+    soup = render_soup(
+        "slide",
+        "myk.md",
+        text=(
+            "---\ntitle: \"The `foo` protocol\"\n"
+            "program: \"CS `101`\"\n---\n\n# Body\n"
+        ),
+    )
+
+    assert soup.select_one(".deck-title code") is not None, (
+        "the page should still render the backticks as inline code"
+    )
+
+    tab = soup.title.get_text()
+    assert "<code>" not in tab and "&lt;code&gt;" not in tab, (
+        f"the browser tab carries literal markup: {tab!r}"
+    )
+    assert "foo" in tab, f"the title text itself was lost: {tab!r}"
+    assert "101" in tab, f"program lost its text too: {tab!r}"
+
+
+def test_the_document_template_gets_the_same_treatment(render_soup):
+    """Both templates read the same `_page-head.html.j2`, so this is one fix
+    rather than two -- asserted rather than assumed, because the ticket
+    flagged the document side as needing checking."""
+    soup = render_soup(
+        "doc", "myk-doc.md", text="---\ntitle: \"A `b` c\"\n---\n\n# Body\n"
+    )
+    tab = soup.title.get_text()
+    assert "<code>" not in tab and "&lt;code&gt;" not in tab, tab
+    assert "b" in tab

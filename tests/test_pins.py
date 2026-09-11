@@ -698,17 +698,28 @@ def test_a_lockfile_must_end_in_exactly_one_newline(tmp_path, monkeypatch):
     which is what makes the generated file byte-identical to the committed one.
     A file that picked up a second newline -- an editor, a merge -- would render
     a package that no longer matches, and the byte-identity test would fail
-    somewhere far from the cause."""
+    somewhere far from the cause.
+
+    BOTH failures raise VendoredAssetError, and the TYPE is load-bearing
+    (stn-hwo). This test used to assert ValueError for the malformed case,
+    which is the channel generate.package_contexts collects config problems
+    on -- so a damaged install was reported to the reader as a broken
+    .config.yaml. It is not a ValueError subclass for exactly that reason.
+    """
     monkeypatch.setattr(pipeline, "ASSETS_DIR", tmp_path)
     (tmp_path / "x.json").write_text("{}\n\n")
-    with pytest.raises(ValueError, match="exactly one newline"):
+    with pytest.raises(pipeline.VendoredAssetError, match="exactly one newline"):
         pipeline.read_lockfile("x.json")
 
     (tmp_path / "y.json").write_text("{}\n")
     assert pipeline.read_lockfile("y.json") == "{}"
 
-    with pytest.raises(FileNotFoundError, match="vendor_npm_locks"):
+    with pytest.raises(pipeline.VendoredAssetError, match="vendor_npm_locks"):
         pipeline.read_lockfile("absent.json")
+
+    assert not issubclass(pipeline.VendoredAssetError, ValueError), (
+        "VendoredAssetError must not travel on the config-problem channel"
+    )
 
 
 # ---------------------------------------------------------------------------

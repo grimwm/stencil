@@ -109,6 +109,31 @@ def brand_of(
     return value, alt
 
 
+def checked_brand_image(value: str | None, package_id: str) -> str | None:
+    """brand_image_path, with the path actually checked (stn-ttg).
+
+    Every other configured path goes through check_config_path; this one did
+    not, and it is the only one that gets OPENED. copy_brand_image resolves it
+    and hands it to shutil.copyfile, which follows a symlink -- so a `logo.png`
+    pointing at any readable file copied that file's CONTENT into a generated
+    folder AGENTS.md describes as routinely handed to someone as a project of
+    their own. Measured in the ticket: an absolute `relative` makes
+    `(config_dir / relative).resolve()` the absolute path, and `file://` is
+    stripped before any of this, so the scheme was not a defence either.
+
+    This checks the CONFIG STRING, and brand_problem separately contains the
+    RESOLVED path. Both are needed: the string is what `gen`, `clean` and the
+    managed .gitignore section all name the copy from (stn-8wt), so it has to
+    be a plain relative filename; and a plain relative filename can still be
+    a symlink whose target is anywhere readable, which only the resolved path
+    can see.
+    """
+    relative = brand_image_path(value)
+    if relative is None:
+        return None
+    return check_config_path(package_id, "brand", relative)
+
+
 def brand_image_path(value: str | None) -> str | None:
     """The local file a brand points at, or None when it is a name or remote.
 
@@ -140,6 +165,15 @@ def brand_image_path(value: str | None) -> str | None:
 #
 # Globs stay: * ? [ ] are the point of an outputs pattern.
 _UNSAFE_IN_PATH = re.compile(r"[$`;|&<>\\\n]")
+
+# The C0 controls and DEL, checked LAST so the two more specific messages keep
+# the characters they already explain: `\n` stays a Make metacharacter and a
+# tab stays whitespace, because "Make would split it into two arguments" says
+# more than "that is a control character" does. What is left is the set nothing
+# covered -- NUL, BEL, ESC, DEL and friends. ESC is the one with a demonstrable
+# effect, since it is how a filename repaints the stderr line reporting it, but
+# the class is what is refused rather than any one member.
+_CONTROL_IN_PATH = re.compile(r"[\x00-\x1f\x7f]")
 
 
 def show_download_default(package: dict, config: dict, package_id: str = "") -> bool:
@@ -197,6 +231,12 @@ def check_config_path(package_id: str, where: str, value) -> str:
         raise ValueError(
             f"Package {package_id}: {where} {text!r} contains whitespace. The "
             "generated Make recipe would split it into two arguments."
+        )
+    if _CONTROL_IN_PATH.search(text):
+        raise ValueError(
+            f"Package {package_id}: {where} {text!r} contains a control "
+            "character. These are filenames, not terminal escapes. "
+            "(repr'd above, so the escape cannot repaint this line.)"
         )
     # ~ is expanded by the shell, not by Make, so Path() does not see it as
     # absolute -- `~/x.md` reaches sh and becomes a path in $HOME, outside the
@@ -441,8 +481,14 @@ def get_template_context(package_id: str, config: dict) -> dict:
         # someone as their own project, so it has to carry the file itself
         # rather than reach back into the repository that produced it.
         "config_brand": (
-            Path(brand_image_path(brand_of(package, config, package_id)[0])).name
-            if brand_image_path(brand_of(package, config, package_id)[0])
+            Path(
+                checked_brand_image(
+                    brand_of(package, config, package_id)[0], package_id
+                )
+            ).name
+            if checked_brand_image(
+                brand_of(package, config, package_id)[0], package_id
+            )
             else brand_of(package, config, package_id)[0]
         ),
         "config_brand_alt": brand_of(package, config, package_id)[1],
@@ -453,7 +499,16 @@ def get_template_context(package_id: str, config: dict) -> dict:
         # papering over an undeclared key with a default is worse than this.
         "config_show_download": show_download_default(package, config, package_id),
         "package_name": package_name,
-        "package_dir": package.get("dir", f"{package_id}"),
+        # stn-vhm. `dir` is not decoration: get_generated_files prefixes every
+        # entry with it, so it is every line of the managed .gitignore section
+        # and every path clean_generated resolves and deletes. `dir: ../..`
+        # deleted outside the output base. It gets the same check as every
+        # other configured path rather than a containment check at the
+        # deletion site, so the mistake is reported by the pre-flight that
+        # names all of them at once.
+        "package_dir": check_config_path(
+            package_id, "dir", package.get("dir", f"{package_id}")
+        ),
         "package_type": package_type,
         "package_sources": package_sources,
         "has_package_sources": bool(package_sources) and package_type == "doc",
@@ -841,7 +896,21 @@ def brand_problem(package: dict, config: dict, config_dir: Path | None) -> str |
         )
 
     if config_dir is not None:
+        root = config_dir.resolve()
         source = (config_dir / relative).resolve()
+        # stn-ttg. check_config_path has already refused `..` and an absolute
+        # value, so the only way the resolved file can be outside the config's
+        # directory is a symlink -- and a symlink is exactly what turns a
+        # permitted-looking `logo.png` into a read of any file the user can
+        # open. The copy is the one place a configured path becomes CONTENT
+        # in a folder that gets handed to someone else, so the target has to
+        # stay under the same root the config string was checked against.
+        if not source.is_relative_to(root):
+            return (
+                f"brand points at {value}, which resolves to {source}, outside "
+                f"the config file's directory ({root}). A brand image, or the "
+                "symlink that names it, must stay inside that directory."
+            )
         if not source.is_file():
             return (
                 f"brand points at {value}, which is not a file. Paths are "
@@ -879,12 +948,34 @@ def copy_brand_image(
         return
 
     source = (config_dir / relative).resolve()
-    destination = output_dir / source.name
+    # stn-8wt. The NAME comes from the config string, not from the resolved
+    # path. `.resolve()` follows a symlink, and get_generated_files names this
+    # same file from the raw config value -- so `logo.svg -> img/dated.svg`
+    # was copied as `dated.svg`, which the managed .gitignore section never
+    # listed and `clean` never removed. One rule with two spellings; this is
+    # the spelling both other call sites already used. The symlink is still
+    # followed for CONTENT, which is what a stable name pointing at a dated
+    # asset is for.
+    destination = output_dir / Path(relative).name
     if dry_run:
         print(f"Would copy: {source} -> {destination}")
         return
-    shutil.copyfile(source, destination)
+    # The path brand_problem checked and the bytes copied are the same file.
+    # `source` is already fully resolved, so nothing on it should be a link
+    # any more; opening it with O_NOFOLLOW makes a link swapped in after the
+    # check fail here (ELOOP) instead of quietly reading somewhere else.
+    # Windows has no O_NOFOLLOW, and no getattr default changes what a
+    # resolved path opens there.
+    nofollow = getattr(os, "O_NOFOLLOW", 0)
+    with (
+        open(source, "rb", opener=lambda p, f: os.open(p, f | nofollow)) as src,
+        open(destination, "wb") as dst,
+    ):
+        shutil.copyfileobj(src, dst)
     print(f"Copied: {destination}")
+
+
+_MAX_PROBLEM_CHARS = 400
 
 
 def _safe(text: str) -> str:
@@ -909,9 +1000,21 @@ def _safe(text: str) -> str:
     U+0085 and NBSP are all category Cf/Zl/Zs, so isprintable() is already
     False for them and they escape like any other control.
     """
-    return "".join(
+    escaped = "".join(
         c if c == " " or c.isprintable() else repr(c)[1:-1] for c in str(text)
     )
+    # ...and BOUNDED, which is the other half of stn-oty. Escaping stops a
+    # value from rewriting the report; it does not stop one from burying it,
+    # and yaml.safe_load returns a scalar of any size. The cap is per problem
+    # line and deliberately generous -- a real message runs to a couple of
+    # hundred characters -- so it only ever fires on something pathological,
+    # and it says how much it dropped so the value stays identifiable.
+    if len(escaped) > _MAX_PROBLEM_CHARS:
+        return (
+            escaped[:_MAX_PROBLEM_CHARS]
+            + f"... [truncated, {len(escaped)} characters]"
+        )
+    return escaped
 
 
 def _raise_config_problems(problems: list[str]) -> None:
@@ -997,6 +1100,42 @@ def package_contexts(config: dict, config_dir: Path | None = None) -> dict[str, 
         )
         packages = {}
 
+    # A template's `dest` is config-level, so it is checked once here rather
+    # than once per package: N identical bullets for one typo is exactly what
+    # the dedup below exists to avoid, and this is cheaper than deduping.
+    #
+    # stn-c25. `output_dir / dest` took the value verbatim, so
+    # `dest: ../../shared/Makefile` wrote outside the package on `gen` and
+    # get_generated_files named the same path -- so `clean` REMOVED it. The
+    # escape was symmetric across gen, clean and the managed .gitignore
+    # section, which is what makes refusing it better than containing it on
+    # one side. A nested dest is still fine: `.vscode/settings.json` is in the
+    # config's own documentation, and check_config_path allows a subdirectory
+    # while rejecting `..`, an absolute path and the rest.
+    templates = config.get("templates")
+    if isinstance(templates, list):
+        for tdef in templates:
+            if not isinstance(tdef, dict):
+                continue
+            declared = tdef.get("dest")
+            if declared is None:
+                continue
+            # check_config_path str()s what it is given, so `dest: 2024`
+            # would pass it and then reach `output_dir / 2024` in
+            # render_templates as a TypeError, after earlier templates had
+            # already been written. A dest is a filename, so it is a string.
+            if not isinstance(declared, str):
+                problems.append(
+                    f"Package config: dest {declared!r} is "
+                    f"{type(declared).__name__}, not a string. A template's "
+                    "dest is the filename it renders to."
+                )
+                continue
+            try:
+                check_config_path("config", "dest", declared)
+            except ValueError as error:
+                problems.append(str(error))
+
     # Shapes first, for EVERY package, before a single context is built.
     #
     # Not tidiness -- correctness. get_template_context does not read only
@@ -1042,17 +1181,14 @@ def package_contexts(config: dict, config_dir: Path | None = None) -> dict[str, 
             # turn one config-wide complaint into a distinct string per
             # package sharing it, defeating the dedup below.
             #
-            # KNOWN GAP, measured rather than assumed: not every ValueError
-            # reaching here is about the config. pipeline.read_lockfile
-            # raises one when a vendored lockfile does not end in exactly
-            # one newline, which is a broken INSTALL -- the fix is
-            # `python3 scripts/vendor_npm_locks.py`, not editing
-            # .config.yaml -- and it is reported here as a config problem,
-            # with a trailer telling the reader to fix their config and
-            # remove a directory by hand. Wrong advice for the right
-            # failure. Catching it correctly means read_lockfile raising a
-            # type of its own, which is stn-hwo; pipeline.py is outside
-            # this change's boundary.
+            # That gap is closed (stn-hwo). pipeline.read_lockfile used to
+            # raise ValueError when a vendored lockfile was damaged, which is
+            # a broken INSTALL rather than a broken config -- and it arrived
+            # here, on the config channel, under a heading saying the config
+            # has a problem and a trailer telling the reader to fix it and
+            # delete a directory by hand. It raises VendoredAssetError now,
+            # which is deliberately not a ValueError, so it travels straight
+            # past this collector to main, which reports it as what it is.
             problems.append(str(e))
             continue
         except (TypeError, AttributeError, KeyError) as e:
@@ -1511,6 +1647,28 @@ def install_gitignore(config: dict, dry_run: bool = False):
 
 
 def main():
+    """The console-script entry point, and the one place install faults land.
+
+    stn-hwo. `pipeline.VendoredAssetError` means a file stencil SHIPS is
+    missing or damaged, which no amount of editing .config.yaml will fix. It
+    deliberately does not travel on the ValueError channel package_contexts
+    collects config problems on, so without this it reached the terminal as a
+    traceback. Caught here rather than at each of the three call sites so the
+    next command to read a vendored asset gets the same treatment for free.
+    """
+    try:
+        _main()
+    except pipeline.VendoredAssetError as error:
+        print(f"Error: {error}", file=sys.stderr)
+        print(
+            "\nThis is stencil's own installation, not your config. Nothing "
+            "was generated, removed or written.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+
+def _main():
     parser = argparse.ArgumentParser(
         description="Generate package scaffolding from templates"
     )
@@ -1527,14 +1685,33 @@ def main():
     sub = parser.add_subparsers(dest="command", required=True, metavar="COMMAND")
 
     def _add_global_opts(p):
+        """The same two options again, on a subparser, defaulting to nothing.
+
+        stn-w4v. These are declared twice on purpose -- both spellings are
+        documented, and `stencil gen --config x` has to work as well as
+        `stencil --config x gen`. What made the second one silently wrong was
+        the DEFAULT: argparse parses the main parser first and stores the real
+        value, then parses the subparser, whose default for the same `dest`
+        overwrites what the main parser just stored. So the documented
+        spelling -- generate.py's own module docstring says
+        `stencil [--config <path>] gen [--all] [pkg]` -- read .config.yaml and
+        said nothing about it, and `--dry-run` before the subcommand meant the
+        preview someone ran actually wrote.
+
+        SUPPRESS is the fix rather than a post-parse merge: with no default,
+        argparse sets the attribute only when the option is actually present
+        on the subcommand, so an absent one leaves the main parser's value
+        alone and the main parser's own default is the single source of it.
+        """
         p.add_argument(
             "--config",
-            default=".config.yaml",
+            default=argparse.SUPPRESS,
             help="Path to config file (default: .config.yaml)",
         )
         p.add_argument(
             "--dry-run",
             action="store_true",
+            default=argparse.SUPPRESS,
             help="Show what would be done without making changes",
         )
 
@@ -1687,20 +1864,72 @@ def main():
         print(f"Error: {e}", file=sys.stderr)
         sys.exit(1)
 
-    if args.all:
-        for package_id in config["packages"]:
-            generate_package(
+    # stn-zfc. Two ways a package could fail while `gen` still exited 0, and
+    # both of them are here rather than inside generate_package, because this
+    # is the only place that knows whether one package's failure should stop
+    # the others.
+    #
+    #   * render_templates prints its own message and RE-RAISES. Nothing
+    #     caught it, so a StrictUndefined error -- which AGENTS.md keeps
+    #     deliberately fatal, so a renamed context key cannot render as the
+    #     empty string -- reached the terminal as a traceback, with the
+    #     package that failed named nowhere in it.
+    #   * generate_package returns None when a package has no templates at
+    #     all, and the --all loop discarded the return value, so the loop
+    #     continued and main returned 0.
+    #
+    # Collected rather than raised at the first failure, for the reason
+    # package_contexts aggregates config problems: fixing one and running
+    # again to discover the next is the thing being avoided.
+    def _generate(package_id: str) -> str | None:
+        """Returns a problem, or None when the package generated."""
+        try:
+            out = generate_package(
                 env, config, output_base, package_id, args.dry_run, config_dir
             )
+        except pipeline.VendoredAssetError:
+            # Not this package's fault and not per-package at all: every
+            # package reads the same vendored lockfiles, so reporting it once
+            # per package would be N copies of one install problem. main()
+            # catches it and says what it actually is.
+            raise
+        except Exception as error:
+            # Broad on purpose: this is the CLI boundary, and a traceback is
+            # never the right report here. The type is kept in the message so
+            # nothing is actually lost by not printing the stack.
+            return f"{package_id}: {type(error).__name__}: {error}"
+        if out is None:
+            return f"{package_id}: nothing was generated"
+        return None
+
+    if args.all:
+        failures = [
+            problem
+            for problem in (_generate(pid) for pid in config["packages"])
+            if problem
+        ]
+        if failures:
+            print(
+                "Error: these packages could not be generated:\n  "
+                + "\n  ".join(failures),
+                file=sys.stderr,
+            )
+            print(
+                "\nSome packages may be half-written; generation is "
+                "idempotent, so fix the cause and run again.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
         return
 
     package_id = args.pkg
-    out = generate_package(
-        env, config, output_base, package_id, args.dry_run, config_dir
-    )
-    if out is None:
-        list_packages(config)
+    problem = _generate(package_id)
+    if problem:
+        print(f"Error: {problem}", file=sys.stderr)
+        if "nothing was generated" in problem:
+            list_packages(config)
         sys.exit(1)
+    out = output_base / config["packages"][package_id].get("dir", package_id)
     if not args.dry_run:
         print(f"\nSuccessfully generated files for {package_id} in {out}")
 
