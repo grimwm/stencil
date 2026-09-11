@@ -1,6 +1,15 @@
 ---
-title: "Flow, Limits, and Specifications"
-subtitle: "Kanban and its neighbors"
+# Backticks in both, deliberately: every title-slide field is built as
+# pandoc.Inlines by frontmatter-filter.lua, so these render as <code> on the
+# accent gradient. That pairing is stn-7i8, and it is what keeps
+# `.slide--title code { color: inherit }` honest -- revert the rule and this
+# fixture is the page that shows it at 1.06:1.
+#
+# It also exposes stn-myk, which is a DIFFERENT open defect and not a
+# regression from this file: the <title> element cannot hold markup, so the
+# browser tab shows the literal <code> tags until that ticket lands.
+title: "Flow, Limits, and `WIP` Specifications"
+subtitle: "Kanban and its `pull`-based neighbors"
 author:
   - Ada Lovelace
   - Grace Hopper
