@@ -95,5 +95,21 @@ pkg: format-md ## Build {{ package_name }} from {{ package_sources | join(' ') }
 	@echo "Upload $(PKG) to the course website."
 
 {% endif %}
+{# The products are gathered here and emitted by the one expression on the last
+   line, and that shape is load-bearing. This partial is included by consumer
+   compositions that write their own next line -- cs234's follows it with
+   `pkg: fix lint lint-sql`. trim_blocks strips the newline after a block tag,
+   so a last line that ended in `{% endfor %}` ended the whole include
+   mid-line, and the consumer's rule rendered as the tail of this rm recipe:
+   `make pkg` linted nothing, in every assignment. A `{{ }}` keeps its newline.
+   tests/test_template_contract.py checks every partial ends with one. #}
+{% set products = [] %}
+{% if package_type == "zip" %}{% do products.append('$(PKG)') %}{% endif %}
+{% if has_package_sources %}
+{% for suffix in ['.html', '-*.html', '.pdf', '-*.pdf'] %}{% do products.append('$(OUT_HOST)/' ~ package_stem ~ suffix) %}{% endfor %}
+{% endif %}
+{% for md in docs + slides %}
+{% for suffix in ['.html', '-*.html', '.pdf', '-*.pdf'] %}{% do products.append('$(OUT_HOST)/' ~ (md | replace('.md', suffix))) %}{% endfor %}
+{% endfor %}
 clean-pkg: ## Remove generated files
-	rm -f {% if package_type == "zip" %}$(PKG) {% endif %}{% if has_package_sources %}$(OUT_HOST)/{{ package_stem }}.html $(OUT_HOST)/{{ package_stem }}-*.html $(OUT_HOST)/{{ package_stem }}.pdf $(OUT_HOST)/{{ package_stem }}-*.pdf {% endif %}{% for md in docs + slides %}$(OUT_HOST)/{{ md | replace('.md', '.html') }} $(OUT_HOST)/{{ md | replace('.md', '-*.html') }} $(OUT_HOST)/{{ md | replace('.md', '.pdf') }} $(OUT_HOST)/{{ md | replace('.md', '-*.pdf') }} {% endfor %}
+	rm -f {{ products | join(' ') }}
