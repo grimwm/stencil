@@ -9,7 +9,7 @@ and the closed epics in `.beads/issues.jsonl` are the readable index.
 How the version gets bumped is written down in
 [AGENTS.md](AGENTS.md#cutting-a-release), not here.
 
-## 0.36.0
+## 0.38.0
 
 - **Every configured path now goes through the same check, and four of them
   did not before.** `check_config_path` already encoded what a configured
@@ -70,6 +70,131 @@ How the version gets bumped is written down in
 - **`stn-2l6` is closed as already fixed** rather than reopened: brand
   validation reached the aggregating pre-flight with `stn-k73`, and
   `brand_problem` is called there before anything is written.
+
+- **A link in front matter is legible on a deck's title slide, and still
+  looks like a link** (`stn-c0b`). Two halves, because one alone would not
+  have done it.
+
+  The light palette never mapped Bootstrap's link token — the dark block has
+  since it was written — so a light-theme link was the one colour on the page
+  this project did not choose: Bootstrap's own `#0d6efd`, measuring **4.50:1**
+  on white. That passes AA by rounding, on the easiest surface there is.
+  `--accent` is 9.85:1 on the same surface and is what every other themed
+  element already uses.
+
+  Mapping it is not enough, though, and that is the interesting half: a
+  themed light link **is** `--accent`, which is the same colour as
+  `--deck-accent-from` — 1.00:1 against the fill it would sit on. Any link
+  colour good on a pale prose surface is bad on a dark accent fill, exactly
+  the bind `stn-7i8` found for inline code. So the title slide scopes it the
+  same way, and the inherited ink measures 9.85:1 and 6.32:1 across the
+  gradient against `#0d6efd`'s 2.19:1 and 1.40:1.
+
+  The underline is not decoration. Inheriting the surrounding ink is precisely
+  what removes the colour difference that marked the link as a link, and
+  WCAG **1.4.1** is a separate criterion from 1.4.3 — fixing contrast by
+  deleting the only cue would trade one failure for another.
+
+- **A backticked front-matter title no longer puts literal markup in the
+  browser tab** (`stn-myk`). Pandoc renders `$title$` as inline markdown,
+  which is what makes a backticked title render as inline code on the page.
+  The same variable is interpolated into `<title>`, where an element has
+  nowhere to go — so pandoc escaped it and the tab, the bookmark and the
+  PDF's document title read literally `The <code>foo</code> protocol`.
+  `frontmatter-filter.lua` now stringifies `title`, `program`, `section` and
+  `term` alongside the other derived keys, and the head partial reads the
+  plain-text twin. Both templates share that partial, so it is one fix rather
+  than two — asserted rather than assumed, since the ticket flagged the
+  document side as needing checking.
+
+- **Inline code on an accent fill takes the fill's own ink, so a backticked
+  front-matter title is legible on a deck's title slide** (`stn-7i8`). Every
+  field the title slide renders is parsed as inline markdown — measured, all
+  seven of `title`, `subtitle`, `brand`, `program`, `section`, `term` and
+  `author` — so a title like `` "Flow, Limits, and `WIP` Specifications" ``
+  puts a `<code>` on the accent gradient. It took `--code-inline`, which is
+  ink meant for pale prose surfaces: **1.47:1** against `--deck-accent-from`
+  and **1.06:1** against `--deck-accent-to`, in both themes and in print.
+  A scoped `.slide--title code { color: inherit }` hands it the `--on-accent`
+  ink the slide already carries instead, which measures 9.85:1 and 6.32:1,
+  and 9.85:1 on `--print-deck-bg`.
+
+  No value of `--code-inline` could have fixed this, which is why it is a
+  scoped rule rather than another palette change: the token has to work on
+  pale prose surfaces *and* on a dark fill, and those pull in opposite
+  directions. `stn-1y7` moved it from #c7254e to #b01f45 to fix a real
+  failure on a table header, and in doing so took the title slide from
+  1.78:1 to 1.47:1. `tests/test_theme.py` now asserts the token **fails**
+  here, so the next person to try tuning the palette reds a test that
+  explains why.
+
+- **A matching rule for inline code in the tab strip**, which is defence in
+  depth rather than a live fix, and the comment says so. The vendored
+  Bootstrap carries `a>code{color:inherit}` at (0,0,2), which already beats
+  its own `code{color:var(--bs-code-color)}` at (0,0,1), and
+  `_page-scripts.html.j2` adds `.nav-link` to the author's own `<a>` rather
+  than rebuilding it — so a `code` written as a direct child of a tab link is
+  legible today. The new rule covers the nested case (`<a><strong><code>`)
+  and stops the pairing resting on a reboot rule inside a vendored blob that
+  a Bootstrap bump could drop.
+
+- **The deck fixture now carries a backticked title and subtitle**, so a
+  rendered page in the suite actually produces the pairing. What that
+  measured is worth recording: **`make check-access` cannot see this defect.**
+  With the rule reverted, pa11y passed all eight page/theme combinations over
+  a deck proven to contain `<code>WIP</code>` in `.deck-title`. `.slide--title`
+  is painted with `background: linear-gradient(...)`, whose shorthand resets
+  `background-color` to transparent, so the checker finds no colour to
+  composite against and skips the element rather than failing it — the same
+  blind spot `_page-style.css.j2` already records for the deck toolbar. The
+  unit measurement in `tests/test_theme.py` is therefore the whole guard.
+
+- **A guard keeps developer home paths out of the published issue export**
+  (`stn-zcw`). `.beads/issues.jsonl` is committed and this repository is
+  public, and issue notes are written by agents that paste absolute paths — so
+  the export had been accumulating
+  `/Users/<user>/…/.claude/worktrees/<branch>/…` strings. Measured before
+  fixing: three real ones, no credentials or tokens, and the only identity
+  involved a username `git log` already carries. Hygiene rather than an
+  incident, which is exactly why it wanted a guard: the volume grows with
+  every note and nobody re-runs the check by hand.
+
+  The three were redacted **in the database** and re-exported, never by
+  editing the JSONL — that desyncs it from Dolt and trips the pre-push drift
+  guard, which is the whole reason that guard exists. Two of them needed
+  `bd import --allow-stale`, because their notes fields are ~300KB and a
+  single command-line argument on Linux caps at 128KB.
+
+  `tests/test_export_hygiene.py` also refuses credential-shaped strings, and
+  carries its own false-positive case: the tracker records leak-*detection*
+  snippets that build `'/Users/' + U`, so a plain search for `/Users/` reports
+  every one of them as a leak.
+
+## 0.37.0
+
+- **A consumer's line after `{% include 'Makefile-pkg.j2' %}` is its own line
+  again, so a composed `pkg` target runs its linters.** cs234's own
+  `Makefile.j2` includes the partial and follows it with
+  `pkg: fix lint lint-sql`, the rule that makes `make pkg` fix and lint the
+  HTML, PHP and SQL before it archives. The partial ended in the `clean-pkg`
+  recipe, whose last token was a `{% endfor %}` — and the Jinja environment's
+  `trim_blocks` strips the newline after a block tag, so the include ended
+  mid-line and the consumer's rule rendered as the tail of `rm -f ...`. All 15
+  of the course's assignment Makefiles carried `... -*.pdf pkg: fix lint lint-sql` on the rm line; `make pkg` zipped without linting anything, and
+  nothing said so because a `pkg:` rule with no prerequisites is a valid
+  Makefile. The bundled `Makefile.j2` never showed it: it happens to leave a
+  blank line after the include, which is the newline the partial was missing.
+
+  The partial now gathers the products first and emits them with the one
+  `{{ }}` expression on its last line, which keeps its newline. The bundled
+  output changes by one trailing space. The guard is in
+  `tests/test_template_contract.py`: every shared partial's rendered output
+  must end with a newline, for a zip package and a doc package, plus the
+  consumer's case end to end — a composition that writes `pkg: fix lint` after
+  the include gets that line back as a rule. A partial ending with a newline is
+  part of the interface, alongside the keys it reads; AGENTS.md says so now.
+
+## 0.36.0
 
 - **A zip package's `pkg` target archives with `tar` on Windows, so a hidden
   `.git` reaches the submission.** `Compress-Archive` cannot put one there.
