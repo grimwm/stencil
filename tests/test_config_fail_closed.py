@@ -25,6 +25,8 @@ one-line fix here.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from stencil.generate import brand_problem, get_generated_files, package_contexts
@@ -546,3 +548,99 @@ def test_a_missing_packages_key_is_itself_a_config_problem():
 def test_an_explicitly_empty_packages_mapping_is_allowed():
     """Saying "none yet" out loud is not the same as forgetting the key."""
     assert package_contexts({"packages": {}}) == {}
+
+
+# --- stn-hwo: a damaged install is not a broken config ----------------------
+
+
+def test_a_corrupt_vendored_lockfile_is_not_collected_as_a_config_problem(
+    tmp_path, monkeypatch
+):
+    """The wrong advice for the right failure.
+
+    `pipeline.read_lockfile` raised ValueError when a vendored lockfile does
+    not end in exactly one newline; `get_template_context` calls it, and the
+    loop above collects every ValueError as a CONFIG problem. So a damaged
+    stencil INSTALL was reported under a heading saying the config has a
+    problem, with a trailer telling the reader to fix their config and delete
+    a directory by hand -- for a fault whose real fix is
+    `python3 scripts/vendor_npm_locks.py`, in a file a consumer may not even
+    be able to edit.
+
+    The collection site's own comment described this gap and named the fix:
+    read_lockfile needs a type of its own. It has one now, and the type is
+    NOT a ValueError -- which is the whole point, since ValueError is the
+    config channel.
+    """
+    import shutil
+
+    from stencil import pipeline
+
+    monkeypatch.setattr(pipeline, "ASSETS_DIR", tmp_path)
+    for name in (pipeline.BROWSER_LOCKFILE, pipeline.FORMAT_LOCKFILE):
+        shutil.copy(
+            Path(pipeline.__file__).parent / "assets" / name, tmp_path / name
+        )
+    corrupt = tmp_path / pipeline.BROWSER_LOCKFILE
+    corrupt.write_text(corrupt.read_text() + "\n")
+
+    cfg = {"packages": {"demo": package(docs=["README.md"])}}
+
+    with pytest.raises(pipeline.VendoredAssetError, match="vendor_npm_locks"):
+        package_contexts(cfg)
+
+
+def test_a_missing_vendored_lockfile_uses_the_same_type(tmp_path, monkeypatch):
+    """Both halves of read_lockfile's contract are install faults, so both
+    raise the install type. The missing case already escaped the config
+    channel -- as a FileNotFoundError traceback -- which was right about the
+    classification and wrong about the presentation."""
+    from stencil import pipeline
+
+    monkeypatch.setattr(pipeline, "ASSETS_DIR", tmp_path)
+    with pytest.raises(pipeline.VendoredAssetError, match="vendor_npm_locks"):
+        pipeline.read_lockfile(pipeline.BROWSER_LOCKFILE)
+
+
+# --- stn-oty: bounded, as well as escaped -----------------------------------
+
+
+def test_a_huge_config_scalar_is_truncated_in_the_report():
+    """The half of stn-oty that was still live.
+
+    `_safe` already neutralises the dangerous half -- measured: an ANSI CSI
+    sequence in a package id comes out as literal `\\x1b`, and an embedded
+    newline cannot forge an extra bullet in the aggregated list. What it did
+    not do is bound the length, and yaml.safe_load will hand back a scalar of
+    any size, so one config value could bury the report that names it.
+
+    The cap is per problem line, and generous: a real message runs to a
+    couple of hundred characters, so nothing ordinary is touched.
+    """
+    huge = "X" * 5000
+    with pytest.raises(ValueError) as caught:
+        package_contexts({"packages": {"demo": package(package_type=huge)}})
+
+    message = str(caught.value)
+    assert len(message) < 1000, (
+        f"a 5000-character config value produced a {len(message)}-character "
+        f"report"
+    )
+    import re
+
+    reported = re.search(r"truncated, (\d+) characters", message)
+    assert reported, (
+        f"the report should say how much it dropped:\n{message}"
+    )
+    assert int(reported.group(1)) >= 5000, (
+        "the reported length should cover the value that caused it"
+    )
+
+
+def test_an_ordinary_message_is_not_truncated():
+    """The cap must not start eating real explanations."""
+    with pytest.raises(ValueError) as caught:
+        package_contexts({"packages": {"demo": package(package_type="bogus")}})
+    message = str(caught.value)
+    assert "has invalid package_type: bogus" in message
+    assert "truncated" not in message

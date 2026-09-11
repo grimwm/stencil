@@ -362,6 +362,13 @@ Two things hold it, and both are needed:
 - The Jinja environment uses `StrictUndefined`, so an unknown name raises at `stencil gen`
   instead of rendering the empty string. Without it, renaming a context key left the consumer
   emitting a Makefile with a recipe missing, found by whoever next ran `make`.
+- The same test file checks that every shared partial's rendered output **ends with a
+  newline**. The environment's `trim_blocks` strips the newline after a block tag, so a partial
+  whose last line ends in `{% endfor %}` or `{% endif %}` with content before it ends the whole
+  include mid-line, and whatever the consumer writes next lands on that line. That is how
+  cs234's `pkg: fix lint lint-sql` became the tail of `clean-pkg`'s `rm -f` recipe and
+  `make pkg` stopped linting (stn-l08). End a partial in an expression or a plain line, never a
+  block tag with content before it.
 
 `StrictUndefined` is why custom keys have to be declared. A key set by at least one package is
 undefined — not `False` — for the packages that do not set it, so `{% if key %}` and

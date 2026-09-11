@@ -438,6 +438,24 @@ def npm_manifest(name: str, pins: dict[str, str]) -> str:
 ASSETS_DIR = Path(__file__).parent / "assets"
 
 
+class VendoredAssetError(RuntimeError):
+    """A file stencil ships is missing or damaged -- not a config mistake.
+
+    stn-hwo. read_lockfile used to raise FileNotFoundError for one of its two
+    failures and ValueError for the other, and ValueError is the channel
+    generate.package_contexts collects CONFIG problems on. So a damaged
+    install was reported to the reader as a broken .config.yaml, under a
+    heading that says so and a trailer telling them to fix it and delete a
+    directory by hand -- for a fault fixed by
+    `python3 scripts/vendor_npm_locks.py`, in a file a consumer of stencil may
+    not be able to edit at all.
+
+    Deliberately NOT a subclass of ValueError. Making it one would keep the
+    old assertions passing and leave the bug exactly where it was: the point
+    is that this must not travel on the config channel.
+    """
+
+
 def read_lockfile(filename: str) -> str:
     """A committed npm lockfile, ready to be rendered into a package.
 
@@ -447,15 +465,16 @@ def read_lockfile(filename: str) -> str:
     """
     path = ASSETS_DIR / filename
     if not path.is_file():
-        raise FileNotFoundError(
+        raise VendoredAssetError(
             f"npm lockfile not vendored: {filename}; "
             f"run python3 scripts/vendor_npm_locks.py"
         )
     text = path.read_text(encoding="utf-8")
     if not text.endswith("\n") or text.endswith("\n\n"):
-        raise ValueError(
+        raise VendoredAssetError(
             f"{filename} must end with exactly one newline; npm writes it that "
-            f"way, and the generated copy is asserted byte-identical to this one"
+            f"way, and the generated copy is asserted byte-identical to this "
+            f"one. Re-vendor it: python3 scripts/vendor_npm_locks.py"
         )
     return text[:-1]
 
