@@ -348,3 +348,49 @@ def test_the_keys_the_real_consumers_use_are_all_still_accepted():
     context = context_for(in_use)
     for key, value in in_use.items():
         assert context[key] == value
+
+
+# ---------------------------------------------------------------------------
+# A partial's output ends with a newline, because a consumer writes the next
+# line.
+#
+# cs234's own Makefile.j2 does `{% include 'Makefile-pkg.j2' %}` and follows it
+# with `pkg: fix lint lint-sql`, the rule that makes `make pkg` lint before it
+# archives. Makefile-pkg.j2 ended in the clean-pkg recipe, whose last token was
+# a `{% endfor %}` -- and the environment's trim_blocks removes the newline
+# after a block tag, so the include ended mid-line and the consumer's rule was
+# rendered as the tail of `rm -f ...`. Every one of the course's 15 assignment
+# Makefiles carried `... -*.pdf pkg: fix lint lint-sql` on the rm line, and
+# `make pkg` linted nothing. The bundled Makefile.j2 never showed it, because
+# it happens to leave a blank line after the include.
+
+ZIP_WITH_DOCS = {
+    "packages": {
+        "demo": {
+            "name": "Demo",
+            "package_type": "zip",
+            "package_name": "demo.zip",
+            "docs": ["README.md"],
+            "package_sources": ["htdocs"],
+        }
+    }
+}
+
+
+@pytest.mark.parametrize("partial", sorted(CONTRACT))
+def test_a_partial_ends_with_a_newline(env, partial):
+    """Whatever line a consumer writes after the include starts on its own line."""
+    for config in (ZIP_WITH_DOCS, {"packages": {"demo": {"name": "Demo", "package_type": "doc", "package_name": "hs2.pdf", "package_sources": ["md/*.md"], "docs": ["README.md"], "slides": ["Deck.md"]}}}):
+        text = env.get_template(partial).render(get_template_context("demo", config))
+        assert text.endswith("\n"), f"{partial} ends mid-line: {text[-80:]!r}"
+
+
+def test_a_line_written_after_the_include_is_its_own_line(generate_package, tmp_path):
+    """The consumer's case, end to end: the dependency line that makes `make pkg`
+    lint must survive as a rule, not as the tail of clean-pkg's recipe."""
+    directory = tmp_path / "templates"
+    directory.mkdir()
+    (directory / "Makefile.j2").write_text("{% include 'Makefile-pkg.j2' %}\npkg: fix lint\n")
+    config = {"templates_dir": "templates", "templates": [{"src": "Makefile.j2"}], **ZIP_WITH_DOCS}
+    lines = (generate_package(config) / "Makefile").read_text().splitlines()
+    assert "pkg: fix lint" in lines, [line for line in lines if "pkg: fix lint" in line]
