@@ -9,6 +9,30 @@ and the closed epics in `.beads/issues.jsonl` are the readable index.
 How the version gets bumped is written down in
 [AGENTS.md](AGENTS.md#cutting-a-release), not here.
 
+## 0.37.0
+
+- **A consumer's line after `{% include 'Makefile-pkg.j2' %}` is its own line
+  again, so a composed `pkg` target runs its linters.** cs234's own
+  `Makefile.j2` includes the partial and follows it with
+  `pkg: fix lint lint-sql`, the rule that makes `make pkg` fix and lint the
+  HTML, PHP and SQL before it archives. The partial ended in the `clean-pkg`
+  recipe, whose last token was a `{% endfor %}` — and the Jinja environment's
+  `trim_blocks` strips the newline after a block tag, so the include ended
+  mid-line and the consumer's rule rendered as the tail of `rm -f ...`. All 15
+  of the course's assignment Makefiles carried `... -*.pdf pkg: fix lint lint-sql` on the rm line; `make pkg` zipped without linting anything, and
+  nothing said so because a `pkg:` rule with no prerequisites is a valid
+  Makefile. The bundled `Makefile.j2` never showed it: it happens to leave a
+  blank line after the include, which is the newline the partial was missing.
+
+  The partial now gathers the products first and emits them with the one
+  `{{ }}` expression on its last line, which keeps its newline. The bundled
+  output changes by one trailing space. The guard is in
+  `tests/test_template_contract.py`: every shared partial's rendered output
+  must end with a newline, for a zip package and a doc package, plus the
+  consumer's case end to end — a composition that writes `pkg: fix lint` after
+  the include gets that line back as a rule. A partial ending with a newline is
+  part of the interface, alongside the keys it reads; AGENTS.md says so now.
+
 ## 0.36.0
 
 - **A zip package's `pkg` target archives with `tar` on Windows, so a hidden
