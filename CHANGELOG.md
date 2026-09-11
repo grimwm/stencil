@@ -9,7 +9,7 @@ and the closed epics in `.beads/issues.jsonl` are the readable index.
 How the version gets bumped is written down in
 [AGENTS.md](AGENTS.md#cutting-a-release), not here.
 
-## 0.36.0
+## 0.38.0
 
 - **Inline code on an accent fill takes the fill's own ink, so a backticked
   front-matter title is legible on a deck's title slide** (`stn-7i8`). Every
@@ -52,6 +52,53 @@ How the version gets bumped is written down in
   composite against and skips the element rather than failing it — the same
   blind spot `_page-style.css.j2` already records for the deck toolbar. The
   unit measurement in `tests/test_theme.py` is therefore the whole guard.
+
+- **A guard keeps developer home paths out of the published issue export**
+  (`stn-zcw`). `.beads/issues.jsonl` is committed and this repository is
+  public, and issue notes are written by agents that paste absolute paths — so
+  the export had been accumulating
+  `/Users/<user>/…/.claude/worktrees/<branch>/…` strings. Measured before
+  fixing: three real ones, no credentials or tokens, and the only identity
+  involved a username `git log` already carries. Hygiene rather than an
+  incident, which is exactly why it wanted a guard: the volume grows with
+  every note and nobody re-runs the check by hand.
+
+  The three were redacted **in the database** and re-exported, never by
+  editing the JSONL — that desyncs it from Dolt and trips the pre-push drift
+  guard, which is the whole reason that guard exists. Two of them needed
+  `bd import --allow-stale`, because their notes fields are ~300KB and a
+  single command-line argument on Linux caps at 128KB.
+
+  `tests/test_export_hygiene.py` also refuses credential-shaped strings, and
+  carries its own false-positive case: the tracker records leak-*detection*
+  snippets that build `'/Users/' + U`, so a plain search for `/Users/` reports
+  every one of them as a leak.
+
+## 0.37.0
+
+- **A consumer's line after `{% include 'Makefile-pkg.j2' %}` is its own line
+  again, so a composed `pkg` target runs its linters.** cs234's own
+  `Makefile.j2` includes the partial and follows it with
+  `pkg: fix lint lint-sql`, the rule that makes `make pkg` fix and lint the
+  HTML, PHP and SQL before it archives. The partial ended in the `clean-pkg`
+  recipe, whose last token was a `{% endfor %}` — and the Jinja environment's
+  `trim_blocks` strips the newline after a block tag, so the include ended
+  mid-line and the consumer's rule rendered as the tail of `rm -f ...`. All 15
+  of the course's assignment Makefiles carried `... -*.pdf pkg: fix lint lint-sql` on the rm line; `make pkg` zipped without linting anything, and
+  nothing said so because a `pkg:` rule with no prerequisites is a valid
+  Makefile. The bundled `Makefile.j2` never showed it: it happens to leave a
+  blank line after the include, which is the newline the partial was missing.
+
+  The partial now gathers the products first and emits them with the one
+  `{{ }}` expression on its last line, which keeps its newline. The bundled
+  output changes by one trailing space. The guard is in
+  `tests/test_template_contract.py`: every shared partial's rendered output
+  must end with a newline, for a zip package and a doc package, plus the
+  consumer's case end to end — a composition that writes `pkg: fix lint` after
+  the include gets that line back as a rule. A partial ending with a newline is
+  part of the interface, alongside the keys it reads; AGENTS.md says so now.
+
+## 0.36.0
 
 - **A zip package's `pkg` target archives with `tar` on Windows, so a hidden
   `.git` reaches the submission.** `Compress-Archive` cannot put one there.
