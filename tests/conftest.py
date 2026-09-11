@@ -155,6 +155,29 @@ def _run_id() -> str:
     return f"{os.getpid()}-{int(time.time())}"
 
 
+def _pid_alive(pid: int) -> bool:
+    """Whether a process with this pid exists.
+
+    Not `/proc/<pid>`, which is Linux-only: on macOS that path never exists,
+    so the guard below silently never fired -- the exact failure AGENTS.md
+    records for the drift guard, a check that reads as protection while
+    doing nothing. Signal 0 is the portable existence probe on POSIX, and
+    EPERM means the process exists and belongs to someone else, which still
+    counts as alive. Windows has no equivalent -- os.kill there is
+    TerminateProcess for anything but the two console events -- so no
+    liveness is claimed and a marker alone does not block.
+    """
+    if os.name == "nt":
+        return False
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
 def pytest_configure(config):
     if not os.environ.get(pipeline.BROWSER_IMAGE_TAG_ENV):
         # An explicit tag wins: a CI job that builds the image once and reuses
@@ -174,7 +197,7 @@ def pytest_configure(config):
         # A run that crashed leaves its marker behind, and refusing forever
         # afterwards would teach people to delete the guard rather than the
         # file. Only a LIVE owner blocks.
-        if pid.isdigit() and Path(f"/proc/{pid}").exists():
+        if pid.isdigit() and _pid_alive(int(pid)):
             raise pytest.UsageError(
                 f"--basetemp {basetemp} is in use by a running pytest "
                 f"(pid {pid}). Two runs sharing one basetemp delete each "
