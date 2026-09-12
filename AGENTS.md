@@ -215,6 +215,59 @@ fixtures, and it is `stn-vda`. Concurrency is a third thing again: two runs
 sharing a `--basetemp`, or the one fixed browser image tag, corrupt each other
 (`stn-zim`).
 
+### The container tier runs in parallel with `-n auto --dist loadfile` (`stn-vda`)
+
+`pytest -n auto --dist loadfile` is the local fast path for the container
+tier — the same flags CI's integration job uses. `loadfile`,
+not xdist's default `load`: nine test files carry module- or file-scoped
+fixtures that each pay one container run to answer many assertions —
+`accessibility` in `test_check_access.py` at 44s, `installed` in
+`test_pins.py`, and the module-scoped fixtures in `test_pdf_ua`, `test_pdf`,
+`test_columns`, `test_painted_gaps` and `test_download`. Under `load`, a
+file's tests scatter across workers and each worker rebuilds that fixture —
+up to four times. A regression dressed as parallelism.
+
+The flag lives on the CI step, not in `[tool.pytest.ini_options]` addopts. In
+addopts it would change what plain `pytest` does for every contributor and
+break `-x` and `--pdb` by default, and a contributor who wants the speed can
+pass the two flags. Not, note, because the fast tier has nothing to gain: it
+goes from 18.18s to 5.24s under the same flags, which is a better ratio than
+the container tier manages. Being wrong about that is the reason it is written
+down — the argument for keeping the default serial is about `-x`, `--pdb` and
+a predictable plain `pytest`, and it does not need a speed claim that is
+false. The standing risk of a CI-only flag — a code path exercised
+only in CI can silently stop working, the same failure this file already
+records for the pre-push hook — is answered by `tests/test_parallel_harness.py`,
+which pins the two harness behaviours this depends on in the fast tier, not by
+trusting the job to notice.
+
+What it buys, measured on CI rather than predicted: the `pytest -v` step went
+from 565s to 352.95s and the job from 9m42s to 6m10s — 1.60x, not the 3.2-3.5x
+the plan expected. The plan assumed these tests are IO-bound on container
+startup; they are not. 65% of every container test is pandoc parsing the 5.3MB
+generated `html-template.html`, which is CPU and memory bandwidth, so four
+workers on four vCPUs contend: the four were saturated (busy 348s/327s/317s/343s
+of a 351s run, so the bin-packing is not the problem) and spent 1,335
+worker-seconds on work that costs 565s on one worker. Do not expect `-n auto`
+to scale further here without making the template smaller, which is the one
+cut this repository has decided not to take.
+
+Two of `stn-vda`'s three proposed fixes were measured and not taken, recorded
+here so the question does not get re-litigated from scratch. Widening fixture
+scope targets `stencil gen` at 31ms of an 870ms test — about 3.5% of the tier
+— while introducing shared mutable package directories across fifteen test
+files. Batching `test_dates.py`'s 102 builds into one container saves only the
+container starts (102 × 0.30s ≈ 31s), because each of the 102 still parses
+the same 5.3MB template, while turning a spreadable file into a serialized
+57s critical path. CHANGELOG.md's 0.39.0 entry carries the full per-container
+breakdown these numbers come from.
+
+One practical warning worth its line: a pytest run spawned as a subprocess
+from inside the suite must not inherit `$PYTEST_XDIST_WORKER`, or it announces
+itself as its own parent's worker and exempts itself from the basetemp guard.
+`conftest.inner_pytest_env()` is what strips it. Four guard tests
+failed this way the first time the fast tier ran in parallel.
+
 ## Architecture Overview
 
 **stencil is a scaffolding generator, not a renderer.** It never invokes pandoc.
@@ -505,8 +558,66 @@ reported clean at the versions 0.31.0 pinned; that was a measurement of a day, n
 property of the pins, and the lockfile does not change that — it fixes *which* code you
 get, not whether that code is sound.
 
-The images are still pinned by mutable tag rather than by digest, for all three of them —
-`stn-8vi`.
+**The images are pinned by manifest digest too, not only by tag** (`stn-8vi`), and bumping
+one is two steps for the same reason the npm pins are: edit the tag, then re-resolve.
+
+```bash
+$EDITOR stencil/pipeline.py                    # the tag, in IMAGE_TAGS
+python3 scripts/resolve_image_digests.py       # re-resolve, needs docker/podman + network
+```
+
+Commit both together, along with the `stencil/assets/image-digests.json` the script
+rewrites. `NODE_IMAGE`, `PANDOC_IMAGE` and `VERAPDF_IMAGE` now carry
+`<tag>@sha256:<digest>`, and the digest is looked up **by** the tag in
+`image-digests.json` rather than written inline beside it as one string. That is
+deliberate: a registry resolves `name:tag@digest` BY THE DIGEST and ignores the tag
+entirely, so an inline pair that goes stale — tag bumped, digest not re-resolved — would
+silently keep building the OLD image under a name that now says something else. Keyed by
+the tag, that state cannot be expressed: `pinned_image()` has nothing to look up for a tag
+with no entry, so a forgotten re-resolve fails loudly and offline, the same way `npm ci`
+refuses a lockfile the manifest does not satisfy. It fails at the first *read* of
+`NODE_IMAGE`/`PANDOC_IMAGE`/`VERAPDF_IMAGE` rather than at import, which is deliberate and
+is why those three resolve lazily: failing at import would take `stencil version` down with
+them, and — worse — would deadlock `scripts/resolve_image_digests.py` itself, which has to
+import `pipeline` to read `IMAGE_TAGS` before it can resolve the very tag that is missing.
+
+Pinning by digest broke the pull guard every *generated* package runs, so the fix reaches
+the generated Makefile, not only `pipeline.py`. Measured: `docker images -q <ref>` prints
+nothing for a reference that carries a digest, even when that exact image is present
+locally under it, while the bare-tag form of the same probe prints the id — so the old
+`ensure_image` guard could never succeed once a digest was pinned, and every `make doc`,
+`make pdf` and `make format-md` would have pulled again on every build. The guard runs
+`docker image inspect <ref>` now (through `$(CONTAINER)`, derived from `$(DC)` so a
+podman-only host probes with `podman` rather than a hardcoded `docker`), which checks the
+reference actually named, digest included — stricter than the old probe was ever able to
+be, since it also catches a wrong digest rather than only a missing name.
+
+veraPDF is the odd one out: `verapdf/cli:v1.30.2` is a single `linux/amd64` manifest, not a
+manifest list, so there is no index to resolve per architecture and its pin is an ordinary
+image digest rather than a multi-arch one. It already runs emulated on arm64 today; pinning
+the digest makes that fact visible rather than causing it, and freezes it — a future
+multi-arch repush of the same tag would otherwise start running it native on arm64 with
+nothing in any diff to say so.
+
+**The cost of a digest pin, so it is not "fixed" back to a tag later.** This is the same
+shape of regret AGENTS.md already records about Chromium above — a pin with no consumer
+override — reproduced deliberately on three more images rather than silently:
+
+1. Registry garbage collection gives a digest pin an expiry date a tag pin did not. A tag
+   degrades to different bytes under the same name; a digest degrades to `manifest unknown`, once upstream repushes the tag and the old manifest is untagged and eventually
+   reclaimed.
+1. `docker save` → transfer → `docker load` loses `RepoDigests`, so both `docker image inspect <ref>@sha256:...` and the compose pull fail against a reference that worked fine
+   as a tag. A pull-through cache preserves digests; a save/load air gap does not.
+1. `generate.py`'s `reject_derived` refuses `template_env: {pandoc_image: ...}` on purpose,
+   so a consumer behind a mirror has no supported override, and hand-editing the generated
+   Makefile is undone by the next `stencil gen`.
+
+The recovery path is the same for all three: a pull failing with `manifest unknown` means
+the digest was garbage-collected upstream — re-resolve with
+`python3 scripts/resolve_image_digests.py` and regenerate. There is deliberately no escape
+hatch beyond that; wiring an override through `Makefile-doc.j2`, `Makefile-pkg.j2` and
+`docker-compose-html.yml.j2` would let an environment variable downgrade the very pin this
+exists to create.
 
 ### Keep the two guides in step with the templates
 

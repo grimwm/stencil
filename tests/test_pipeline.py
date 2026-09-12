@@ -8,6 +8,7 @@ fails, a build is about to produce a plausible-looking document that is wrong.
 from __future__ import annotations
 
 import re
+import subprocess
 
 import pytest
 import yaml
@@ -130,13 +131,22 @@ def test_the_pandoc_image_is_pinned():
 
     Worse than irreproducible output: --fail-if-warnings means a pandoc release
     that adds a warning breaks CI on a commit that changed nothing.
+
+    stn-8vi appended `@sha256:<64 hex>` after the tag. A bare rpartition(":")
+    now hands the version check the digest's own hex instead of the tag --
+    the last ":" in the string sits inside "sha256:<hex>" -- so the digest has
+    to be split off first.
     """
-    _, _, tag = pipeline.PANDOC_IMAGE.rpartition(":")
+    reference, _, digest = pipeline.PANDOC_IMAGE.partition("@")
+    _, _, tag = reference.rpartition(":")
 
     assert tag, f"{pipeline.PANDOC_IMAGE} names no tag, so it resolves to latest"
     assert tag != "latest"
     assert re.fullmatch(r"\d+(\.\d+)+", tag), (
         f"{tag!r} is not a release version; a moving tag is not a pin"
+    )
+    assert re.fullmatch(r"sha256:[0-9a-f]{64}", digest), (
+        f"pipeline.PANDOC_IMAGE carries no digest pin: {pipeline.PANDOC_IMAGE!r}"
     )
 
 
@@ -153,27 +163,56 @@ def test_the_makefile_checks_for_the_image_compose_actually_runs(doc_package):
     Name a different tag there than the compose service uses and the check can
     never succeed, so every build pulls again -- or, worse, passes because some
     other tag is present while compose goes and fetches this one.
+
+    stn-8vi pins every pulled image by digest, and `docker images -q <ref>`
+    returns EMPTY for a digest-pinned reference even when the image is present
+    -- measured, not assumed -- so the old probe would make ensure_image pull
+    on every single build once digests land. `docker image inspect <ref>`
+    checks the exact reference, digest included, and is what replaces it.
+
+    BOTH arms of the `ifeq ($(OS),Windows_NT)` split are exercised through
+    `make -n`, in the shape tests/test_package_sources.py uses for the same
+    reason: the two shells share no spelling of "probe this image", and a
+    substring assertion that happens to appear in both arms is satisfied by
+    fixing only one of them. That is exactly how the OLD probe survived here:
+    both the POSIX line and the PowerShell string contained the literal text
+    "docker images -q $(1)", so this test's old form would have gone back to
+    green after a fix that repaired only the POSIX half, leaving every Windows
+    consumer pulling on every build.
     """
     makefile = (doc_package / "Makefile").read_text()
 
-    # The probe itself lives in one shared ensure_image, so the tag is passed to
-    # it rather than sitting on the same line. Assert both halves: that the
-    # helper still asks docker whether the image is there, and that every call
-    # site naming pandoc names the tag compose runs.
-    assert "docker images -q $(1)" in makefile, (
-        "ensure_image no longer probes for the image, so every build pulls"
+    # The negative assertion is what makes this un-skippable: a rewrite that
+    # merely added an inspect-based branch somewhere while leaving the other
+    # arm's "docker images -q" in place would still satisfy a positive-only
+    # check below, exactly as it did before this test was rewritten.
+    assert "docker images -q" not in makefile, (
+        "a branch still uses the probe that cannot see a digest-pinned image"
     )
 
-    guards = [
-        line
-        for line in makefile.splitlines()
-        if "ensure_image" in line and "pandoc" in line
-    ]
-    assert guards, "the pandoc pull guard is gone"
-
-    for line in guards:
-        assert pipeline.PANDOC_IMAGE in line, (
-            f"the pull guard names an image compose does not run: {line.strip()}"
+    # Matched as "some printed line does both", rather than as one literal
+    # string. The rendered probe is free to quote the reference and free to
+    # name a runtime other than `docker` -- ensure_image derives that from
+    # $(DC) so a podman-only host probes the store it actually pulls into --
+    # and neither of those is what this test is about. What it is about is
+    # that the guard interrogates THE PINNED REFERENCE, digest included,
+    # rather than a bare tag that some other image could satisfy.
+    for os_name in ("Darwin", "Windows_NT"):
+        printed = subprocess.run(
+            ["make", "-n", "doc", f"OS={os_name}"],
+            cwd=doc_package,
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout
+        probes = [
+            line
+            for line in printed.splitlines()
+            if "image inspect" in line and pipeline.PANDOC_IMAGE in line
+        ]
+        assert probes, (
+            f"OS={os_name}: the pull guard does not probe the pinned "
+            f"reference compose actually runs:\n{printed}"
         )
 
 

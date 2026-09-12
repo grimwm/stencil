@@ -983,6 +983,19 @@ columns. Line breaks you put in for your own reading comfort will not survive, a
 one-sentence-per-line habit. Where a break has to be real, use an explicit markdown line break — two
 trailing spaces, or a backslash at end of line — or a list item.
 
+Those settings are the only ones in force. `format-md` runs prettier with `--no-config`, so a
+`.prettierrc`, `.prettierrc.json`, `prettier.config.js` or `package.json#prettier` in the package is
+ignored, and so is `.editorconfig` — including its `end_of_line` and `indent_size`. The reason is
+that a config file is not only settings: prettier evaluates the JavaScript ones, and any of them,
+`.prettierrc.json` included, may name a `plugins` path that prettier then loads from the package's
+own `node_modules`. The formatter runs as root over a read-write mount of your directory on every
+`make pkg`, so a config it found there would be the package choosing what code the build runs.
+
+What still works is `.prettierignore` (and `.gitignore`): they decide which files are formatted
+rather than how, so exclude anything `format-md` should keep its hands off. If you run prettier
+yourself as well — format-on-save, a pre-commit hook, a `--check` job — give it the same flags, or
+exclude this directory from it; otherwise the two take turns rewriting each other's output.
+
 ## Do not run mdformat over this markdown
 
 Prettier is the formatter the pipeline runs, and the fenced-div rule above is the only concession

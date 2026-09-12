@@ -55,6 +55,215 @@ How the version gets bumped is written down in
   has no `gen` prerequisite, so an existing package keeps running the
   `html-to-pdf.js` it was generated with.
 
+- **The container tier now runs in parallel** (`stn-vda`). CI's integration job
+  ran a single `pytest -v`; it now runs `pytest -v -n auto --dist loadfile`.
+  `loadfile`, not xdist's default `load`: nine test files carry module- or
+  file-scoped fixtures that each pay one container run to answer many
+  assertions, and AGENTS.md now carries the full list and the reasoning.
+
+  **Measured**, per container test on this branch against the pinned
+  `pandoc/core:3.10.0.0` image: 0.30s docker-run container start and 0.56s
+  pandoc, a 35%/65% split. `stencil gen` (`make_package`) is 0.031s;
+  `install_fixtures` is 0.001s. The 0.56s decomposes by flag, cumulatively:
+  pandoc's own process startup is 4ms; `--standalone` against pandoc's own
+  template is 16ms; `--standalone --template=html-template.html` is 559ms;
+  adding all six lua filters brings it to 565ms; adding `--citeproc` brings it
+  to 579ms. The entire per-render cost is pandoc parsing the generated
+  `html-template.html` — 5.3MB, almost all of it the inlined
+  Bootstrap/highlight.js/Mermaid/webfont payload. The six lua filters and
+  citeproc together cost about 20ms, roughly 2% of a render.
+
+  That measurement refutes two of the ticket's three proposed fixes, plainly,
+  so neither needs re-proposing from scratch. Widening fixture scope targets
+  `stencil gen` at 31ms of an 870ms test — about 3.5% of the tier — while
+  introducing shared mutable package directories across fifteen test files.
+  Batching `test_dates.py`'s 102 builds into one container saves only the
+  container starts (102 × 0.30s ≈ 31s), because each of the 102 still parses
+  the same 5.3MB template, while turning a spreadable file into a serialized
+  57s critical path.
+
+  The single biggest cut available — generating test packages against a
+  slimmed asset set, which is 65% of every container test — is not taken.
+  `tests/test_assets.py`, `tests/test_fonts.py` and `tests/test_pins.py`
+  assert on exactly that inlined payload; a lean variant would mean the
+  container tier stops testing the artifact stencil actually ships.
+
+  Locally, the container tier went from 689.63s to 191.00s — 989 tests passed
+  either way, the same assertions against the same real containers — and the
+  fast tier from 18.18s to 5.24s.
+
+  On CI, which is the number that decides this: run 34678996838 on `8e17d65`
+  measured the `pytest -v` step at 565s inside a 9m42s job; run 34683551394
+  on this branch measured the same step at **352.95s** inside a **6m10s**
+  job, 995 passed. That is **1.60x**, and it is worth saying plainly that the
+  plan predicted 3.2-3.5x and was wrong.
+
+  It was wrong about why the tier is slow, not about the arithmetic. The
+  reasoning was that these tests are IO-bound on container startup, so four
+  workers would overlap four waits. They are not: 65% of every container test
+  is pandoc *parsing* the 5.3MB `html-template.html`, which is CPU and memory
+  bandwidth. Measured on the CI run, the four workers were busy 348s, 327s,
+  317s and 343s of a 351s wall clock — saturated, with idle tails of 0-31s,
+  so the bin-packing `--dist loadfile` produced was close to ideal and is not
+  where the missing speedup went. What the four workers spent was 1,335
+  worker-seconds on work that takes 565s on one worker: the same unit of work
+  costs **2.36x more** when four of them run at once on four vCPUs. Against a
+  perfect-split floor of `565/4 ≈ 141s`, 353s is 2.50x over.
+
+  So the honest statement is that parallelism recovers what contention
+  leaves, and on this workload that is a little over half. 1.60x for a CI
+  flag and two harness fixes is still worth having. It also sharpens the
+  fourth cost this entry declines to take: the 5.3MB template is both the
+  per-test cost *and* the reason four workers contend, so slimming it would
+  pay twice. It is still not taken, for the reason above — `test_assets.py`,
+  `test_fonts.py` and `test_pins.py` assert on exactly that payload.
+
+  No assertion was deleted, weakened, skipped or merged, and the compose gate
+  from #86 is untouched.
+
+- **The shared-basetemp guard now actually fires** (`stn-6fs`). It never did.
+  `pytest_configure` wrote `.pytest-run-owner` into the basetemp, and pytest's
+  own `TempPathFactory.getbasetemp()` `rmtree()`s that directory on first use
+  and recreates it — so a run deleted its own marker the moment any test
+  asked for `tmp_path`, and the window in which the guard could fire was
+  milliseconds. Dead, not racy: two concurrent runs on one `--basetemp` both
+  passed.
+
+  The test that was supposed to prove otherwise hand-writes the marker into a
+  directory no pytest ever rotates, so it proved the marker is **read** while
+  saying nothing about whether it is ever there to read.
+
+  The fix claims the basetemp twice: the check stays in `pytest_configure`
+  (refusing after the rotation would destroy the run being protected), and the
+  write is repeated in `pytest_sessionstart`, after touching `getbasetemp()`
+  to force the rotation while the run is still starting. Proven by two real
+  pytest runs overlapping in time, the first already past a `tmp_path`.
+
+  Two runs starting *simultaneously* are a second case, and the marker alone
+  never covered it: checking for an owner and writing one are two steps, so
+  both runs read an empty directory and both claimed it. Claiming is now
+  atomic under a lock keyed on the resolved basetemp path, held only across
+  that check-and-write and across the rotation — and living outside the
+  basetemp, since a lock inside it would be deleted by the rotation it
+  covers. Measured: four simultaneous starters leave exactly one survivor,
+  15 runs out of 15; with the lock removed the same test fails 2 runs in 6.
+
+  Forcing the rotation introduced a failure of its own, now closed.
+  `getbasetemp()` does `rm_rf` and then `mkdir` with no `exist_ok`, so a
+  directory recreated underneath it raised `FileExistsError` out of a session
+  hook — an `INTERNALERROR` whose traceback never names a basetemp, which is
+  worse than the corruption being guarded against. It retries once and then
+  refuses in the guard's own words.
+
+- **The three images the scaffolding pulls are pinned by manifest digest, not only by
+  tag** (`stn-8vi`, closing the sibling gap `stn-5hv` left open). A registry tag is
+  mutable — `docker.io/pandoc/core:3.10.0.0` can be repushed, and every rebuild after
+  that silently gets different bytes under a name that says otherwise. `stn-5hv` fixed
+  the layer above this — the npm tree the browser image installs is now fixed by a
+  committed lockfile and verified by integrity hash — which left the images themselves
+  as the remaining floating input.
+
+  **Measured**, 2026-09-12: `node:24.20.0-alpine3.24` resolves to the OCI image index
+  `sha256:e67514e5…`, covering `linux/amd64`, `linux/arm64/v8` and `linux/s390x`;
+  `pandoc/core:3.10.0.0` resolves to the index `sha256:8d7467e8…`, covering
+  `linux/amd64` and `linux/arm64`. `NODE_IMAGE` and `PANDOC_IMAGE` now carry
+  `<tag>@sha256:<digest>`, keyed by the tag in the new
+  `stencil/assets/image-digests.json` rather than written inline beside it — a
+  registry resolves `name:tag@digest` **by the digest** and ignores the tag, so an
+  inline pair that goes stale (tag bumped, digest not re-resolved) would silently keep
+  building the old image under a name that no longer describes it. Keyed, that state
+  cannot be expressed: `pipeline.pinned_image()` raises for a tag with no recorded
+  digest, loudly and offline, the same way `npm ci` refuses a lockfile the manifest
+  does not satisfy.
+
+  `scripts/resolve_image_digests.py` writes the file, following
+  `scripts/vendor_page_assets.py`'s shape — `urllib`, a maintainer runs it once with
+  the network — but hardened well past
+  that, because this script is the step that *establishes* trust rather than merely
+  caching a CDN asset: what it writes is pinned permanently and rendered into a
+  Makefile, a compose file and a `FROM` line. It refuses every redirect on the
+  manifest and token requests (measured: Hub does not redirect either today, so this
+  costs nothing), drops proxy inheritance, computes the digest locally rather than
+  trusting the advertised `Docker-Content-Digest` header, and cross-checks the result
+  against a real `docker pull`'s `RepoDigests` — by membership, not `[0]`, because
+  podman records the arch-specific child digest there as well as the index digest and
+  `[0]` compares against the wrong one under podman. All three tags resolve before one
+  write, so a rate limit on the third cannot leave one fresh digest sitting beside two
+  stale ones in a file that looks complete.
+
+- **`verapdf/cli:v1.30.2` turned out not to be a manifest list at all.** The source
+  ticket assumed all three images were multi-arch, the way node and pandoc are.
+  Measured instead: veraPDF's tag resolves to a single
+  `application/vnd.docker.distribution.manifest.v2+json`, `linux/amd64` only —
+  `sha256:d5ee3296…` — with no index to resolve a per-architecture digest from. Its pin
+  is an ordinary image digest, `image-digests.json` records the single-arch media type
+  by name rather than treating "not an index" as an error, and a test checks for it
+  explicitly so a future multi-arch veraPDF release is a deliberate edit rather than a
+  silent pass. It already runs emulated on arm64 today; the digest makes that visible
+  rather than causing it, and freezes it — a later multi-arch repush of the same tag
+  would otherwise start running it native on arm64 with nothing in any diff to say so.
+
+- **The generated `ensure_image` pull guard could not see a digest-pinned image**, so
+  pinning the three above without this would have made every `make doc`, `make pdf`
+  and `make format-md` pull on every build. Measured: `docker images -q <ref>` prints
+  nothing for a reference that carries a digest, even when that exact image is present
+  locally under it, while the bare-tag form of the same probe prints the id — the
+  guard looked like it worked because some other tag happened to satisfy it, while
+  compose pulled the pinned reference anyway. The guard now runs `docker image inspect <ref>`, which checks the reference actually named, digest included, and reports the
+  image absent for a wrong digest — stricter than the old probe was ever able to be.
+  Both the POSIX and the Windows branch changed; the old literal was one string shared
+  by both, so a fix to one alone would have left every Windows consumer pulling on
+  every build with a green suite.
+
+  The runtime the probe names is derived rather than hardcoded now too: `CONTAINER = $(firstword $(subst -, ,$(DC)))` reads `docker` or `podman` out of whichever of the
+  four `DC` spellings `pipeline.compose_command()` falls through to, because a
+  podman-only host has always failed this probe outright — `docker images -q` doesn't
+  merely miss the digest there, it fails to run at all.
+
+- **The cost of pinning by digest is written down, not only accepted silently.** A
+  digest pin gives a consumer three new ways to fail that a tag pin did not: registry
+  garbage collection turns a repushed tag into `manifest unknown` instead of quietly
+  different bytes; `docker save`/`load` loses `RepoDigests`, so an image that worked
+  fine as a tag fails both `image inspect` and the compose pull after a save/load air
+  gap; and `generate.py`'s `reject_derived` gives a consumer behind a mirror no
+  supported override. The recovery path is the same for all three and is now in
+  `AGENTS.md` next to the pin: a pull failing with `manifest unknown` means the digest
+  was garbage-collected upstream — re-resolve with
+  `python3 scripts/resolve_image_digests.py` and regenerate.
+
+- **`format-md` no longer executes a consumer's prettier config** (`stn-20h`).
+  The service installs prettier into `/tmp/fmt` precisely so npm resolves
+  stencil's manifest and not the package's. That answered which *manifest*, and
+  stopped one loader short: prettier's own config discovery was still rooted in
+  the mount.
+
+  **Measured**, running the generated service the way `make pkg` does, on the
+  pinned node image with the pinned prettier: a `.prettierrc.cjs` in the package
+  was evaluated as uid 0 and wrote to the read-write mount; and a
+  `.prettierrc.json` — a file containing no JavaScript at all — named a
+  `plugins` path that prettier then required out of the package's own
+  `node_modules`, also as uid 0. The second is the one that matters, because
+  "we only ship JSON" was never a defence. Both ran with the network up, on
+  every build, and the build printed its usual success output afterwards.
+
+  `--no-config` closes both. There is deliberately no allowlist of safe config
+  formats: the dangerous file in the second case was the inert-looking one, and
+  a `plugins` entry is available in every format prettier reads.
+
+  **What this costs a consumer, and it is not nothing.** A package's own
+  prettier settings stop applying — so do `.editorconfig`'s, including
+  `end_of_line` and `indent_size`, which is the one most likely to surprise a
+  Windows-authored repository whose markdown will come back LF. Plugins loaded
+  through a config stop loading. Nothing is printed when this happens and
+  `--write` means the reformat is already on disk, so run `make format-md` on a
+  clean tree first and commit the result as its own commit, before anything
+  else. `.prettierignore` and `.gitignore` still apply — they choose which files
+  are formatted rather than what code runs — and they remain the way to keep the
+  formatter away from a directory. If you also run prettier yourself, give it
+  the same flags or exclude the package, or the two will take turns rewriting
+  each other's output. [AUTHORING.md](AUTHORING.md#fenced-divs-and-prettier)
+  says all of this to the person writing the markdown.
+
 ## 0.38.0
 
 - **Two test runs at once no longer corrupt each other** (`stn-zim`). The

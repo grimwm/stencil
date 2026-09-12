@@ -2,14 +2,53 @@
 # Override to use another Compose implementation, e.g. DC="podman compose"
 DC ?= docker compose
 
+# The runtime CLI that DC actually drives, derived rather than hardcoded. The
+# four spellings pipeline.compose_command() falls through are "docker
+# compose", "podman compose", "docker-compose" and "podman-compose", and
+# ensure_image below needs the bare binary name to run `image inspect`
+# against. $(subst -, ,$(DC)) turns "docker-compose" into two words so
+# $(firstword ...) yields "docker" the same way it already does for "docker
+# compose"; the same holds for the two podman spellings. Do NOT simplify this
+# to plain $(firstword $(DC)) -- that reads correctly for the two-word
+# spellings but returns the whole standalone binary name ("docker-compose")
+# for the other two, and neither standalone binary has an `image inspect`
+# subcommand, so the probe below would fail to run at all on those hosts.
+CONTAINER ?= $(firstword $(subst -, ,$(DC)))
+
 # Pull an image only when it is not already present. Four targets want this and
 # the two shells share no spelling of it, so it lives here rather than as four
 # copies of the same ifeq: cmd, which is what make runs recipes through on
 # Windows, has no grep.
+#
+# THE PROBE IS `image inspect`, NOT the old `-q`-flagged `images` listing.
+# MEASURED: once an image reference carries a digest, running that old probe
+# against `<ref>` prints nothing even though the image is present locally
+# under that exact digest -- the bare-tag form of the same probe (against
+# `<tag>` alone) prints the id, which is how this went unnoticed: the guard
+# looked like it worked because some other tag happened to satisfy it, while
+# compose went and pulled the pinned reference anyway on every build.
+# `image inspect <ref>` checks the reference actually named, digest included,
+# and reports the image absent when the digest is wrong -- which is what this
+# guard always claimed to do and, before this fix, could not. The same
+# measurement holds for podman, and is the reason CONTAINER exists above
+# rather than the literal "docker" this used to say: on a podman-only host
+# the old `-q`-flagged listing doesn't merely miss the digest, it fails
+# outright, so the guard was an unconditional pull there regardless of this
+# bug.
+#
+# One more thing MEASURED, not assumed: `image inspect` ignores a stale or
+# bogus TAG once a digest is present -- `hello-world:BOGUSTAG@sha256:...`
+# inspects successfully on both docker and podman. That is the same rule the
+# registry itself applies (a digest resolves on its own; the tag alongside it
+# is a human label), and it is this epic's whole argument for keying pins by
+# digest rather than by tag -- so the probe is consistent with how pulling
+# actually resolves the reference. But it means this guard does not and
+# cannot validate that the tag half of a ref still describes the digest; it
+# only proves the digest is present.
 ifeq ($(OS),Windows_NT)
-ensure_image = @powershell -NoProfile -Command "if (-not (docker images -q $(1))) { $(DC) pull $(2) }"
+ensure_image = @powershell -NoProfile -Command "$(CONTAINER) image inspect '$(1)' *> $$null; if ($$LASTEXITCODE -ne 0) { $(DC) pull $(2) }"
 else
-ensure_image = @docker images -q $(1) | grep -q . || $(DC) pull $(2)
+ensure_image = @$(CONTAINER) image inspect '$(1)' >/dev/null 2>&1 || $(DC) pull $(2)
 endif
 
 # Default target
