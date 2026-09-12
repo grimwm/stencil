@@ -106,9 +106,15 @@ def browser_image_tag() -> str:
 # bump the tag, forget to re-resolve, and the build silently keeps pulling the
 # OLD image under a name that now says something else. Keyed by the tag, that
 # state cannot be expressed -- pinned_image() has nothing to look up for a tag
-# with no entry, so a forgotten re-resolve fails loudly and offline at import
-# time, the way `npm ci` refuses a lockfile the manifest does not satisfy,
-# rather than quietly shipping a stale digest that happens to parse.
+# with no entry, so a forgotten re-resolve fails loudly and offline the way
+# `npm ci` refuses a lockfile the manifest does not satisfy, rather than
+# quietly shipping a stale digest that happens to parse.
+#
+# NOT at import, though -- at the first READ of one of the three constants.
+# The distinction is the whole reason __getattr__ is down there rather than
+# three eager assignments up here: failing at import is what would deadlock
+# the resolver script that exists to fix the failure. `stencil version` and
+# `stencil list` keep working; `stencil gen` is what stops.
 #
 # THE COST BEING ACCEPTED, so nobody later "fixes" this by going back to a
 # tag. A digest pin gives a CONSUMER three new ways to fail that a tag pin did
