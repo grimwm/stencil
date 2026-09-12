@@ -2334,6 +2334,152 @@ def contained_entry_parent(
     return parent_resolved
 
 
+# stn-avv (stn-6mcb.7). Whether the descriptor-walk mechanism below --
+# `walk_dir_fd`, and the `dir_fd=` keyword on the two nofollow writers --
+# can run at all. MEASURED on this macOS (APFS, Python 3.13) and on Linux:
+# all four conditions hold, so `os.open(component, ..., dir_fd=parent)` and
+# `os.mkdir(component, dir_fd=parent)` both work; all four are absent on
+# Windows, which has no dir_fd support whatsoever and keeps
+# `checked_write_target`'s lstat pre-pass as its only defence -- stated here
+# and in STENCIL.md rather than implied away.
+#
+# READ AT CALL TIME, EVERYWHERE THIS IS USED -- never capture it in a
+# function's DEFAULT ARGUMENT. A default argument is evaluated exactly once,
+# when the enclosing `def` statement runs at import time, so
+# `def f(x, capable=_DIR_FD_CAPABLE):` would freeze whatever this measured
+# on THIS platform forever; no test could then force the Windows-shaped
+# fallback path on a machine where the flag is naturally True. Referencing
+# the bare name `_DIR_FD_CAPABLE` inside a function BODY instead re-reads
+# this module global on every call, which is what lets
+# `monkeypatch.setattr(generate, "_DIR_FD_CAPABLE", False)` actually change
+# behaviour in a test -- and is the only way the "the fallback still
+# behaves as today" pin can run at all.
+_DIR_FD_CAPABLE = (
+    hasattr(os, "O_DIRECTORY")
+    and hasattr(os, "O_NOFOLLOW")
+    and os.open in os.supports_dir_fd
+    and os.mkdir in os.supports_dir_fd
+)
+
+
+def walk_dir_fd(base_fd: int, relative: str) -> tuple[int, str]:
+    """Walk `relative`'s INTERMEDIATE components below `base_fd` by
+    descriptor rather than by path, returning `(parent_fd, final_name)` for
+    the caller to write through with `os.open(final_name, ..., dir_fd=
+    parent_fd)`. The object a caller checks by opening it here and the
+    object it later writes are then the same inode by construction --
+    stn-avv's fix for the gap `checked_write_target`'s docstring names: a
+    symlink swapped in at an INTERMEDIATE directory between a path-based
+    pre-pass and a path-based write.
+
+    Requires `_DIR_FD_CAPABLE` (read fresh here -- see the comment above
+    it). A caller must not reach this function on a platform where that is
+    False; it refuses loudly with `NotImplementedError` rather than passing
+    an unsupported `dir_fd=` keyword to `os.open` and letting a raw
+    `TypeError` stand in for a real diagnosis.
+
+    OWNERSHIP, AND IT IS UNIFORM ON PURPOSE: the returned `parent_fd` is
+    ALWAYS the caller's to close, in every case, with no test for which case
+    this was. Intermediates this walk acquires and does not return are closed
+    here on both the success and the failure path (try/finally); `base_fd`
+    itself belongs to the caller and is never closed here.
+
+    That uniformity costs one `os.dup` and is the whole reason for it. A
+    single-component `relative` -- `Makefile`, and every other top-level file
+    a package contains, i.e. the COMMON case -- has no intermediates at all,
+    so the natural thing to hand back is `base_fd`. Then `parent_fd` is
+    sometimes the caller's own long-lived package-directory descriptor and
+    sometimes a fresh one, and a caller that closes what it was given (the
+    obvious reading of "handed back for the caller to use and then close")
+    closes the package directory out from under itself after the first
+    top-level write, so every write after it fails on a stale descriptor.
+    Returning a `dup` makes "close what you were given" correct always,
+    rather than correct only for nested destinations.
+
+    THE TRAP, measured (stn-6mcb.7 spike note 3) and the reason the loop
+    below is not the "try mkdir, except FileExistsError: pass" pattern it
+    looks like it should be. `os.mkdir(name, dir_fd=parent)` over an
+    EXISTING SYMLINK raises `FileExistsError` -- the exact same exception a
+    benign "the directory is already there" raises. A caught-and-ignored
+    `FileExistsError` therefore proves NOTHING about what `name` actually
+    is: swallowing it would treat an attacker's symlink as though it were
+    the real directory it asked for. What saves this is that the walk
+    ALWAYS re-opens the component afterwards with
+    `O_RDONLY|O_DIRECTORY|O_NOFOLLOW`, and THAT open -- never the mkdir --
+    is measured to refuse the symlink case. This is invisible on the happy
+    path, which is exactly why it is written down here rather than left for
+    whoever "simplifies" the mkdir/except pattern later to rediscover the
+    hard way.
+
+    DO NOT BRANCH ON ERRNO. Measured: the identical symlink-to-directory
+    open above is refused with ENOTDIR on macOS and ELOOP on Linux -- two
+    different errno values for the same attack, from two kernels that both
+    correctly refuse it. Treating one errno as "the" refusal would silently
+    stop refusing on whichever platform did not get tested against. ANY
+    `OSError` from the component open is the refusal, and the message
+    carries `strerror` rather than a hardcoded diagnosis of what the errno
+    means. (A regular file at an intermediate component is refused the same
+    way, for the same reason `checked_write_target` already gives it:
+    `O_DIRECTORY` on a non-directory is ENOTDIR too.)
+    """
+    if not _DIR_FD_CAPABLE:
+        raise NotImplementedError(
+            "walk_dir_fd requires O_DIRECTORY/O_NOFOLLOW dir_fd support, "
+            "which this platform does not have -- the caller must use the "
+            "path-based fallback instead"
+        )
+
+    parts = Path(relative).parts
+    if not parts:
+        raise ValueError(f"{relative!r} has no components to walk")
+
+    if len(parts) == 1:
+        # No intermediates to walk. Duplicated rather than returned as-is so
+        # the caller owns what it is handed in every case -- see OWNERSHIP
+        # above for the bug that costs.
+        return os.dup(base_fd), parts[-1]
+
+    current_fd = base_fd
+    # An fd THIS walk opened and has not yet closed -- None means there is
+    # currently nothing pending closure. Distinct from `base_fd`, which is
+    # never ours to close.
+    pending_fd = None
+    succeeded = False
+    try:
+        for part in parts[:-1]:
+            try:
+                os.mkdir(part, dir_fd=current_fd)
+            except FileExistsError:
+                # Proves nothing by itself -- see the docstring. The open
+                # immediately below is what actually decides whether `part`
+                # is a directory this walk may descend into.
+                pass
+
+            try:
+                next_fd = os.open(
+                    part,
+                    os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                    dir_fd=current_fd,
+                )
+            except OSError as error:
+                raise ValueError(
+                    f"could not open {part!r} as a directory while writing "
+                    f"{relative!r} ({error.strerror}) -- refusing to write "
+                    "through it"
+                ) from error
+
+            if pending_fd is not None:
+                os.close(pending_fd)
+            pending_fd = next_fd
+            current_fd = next_fd
+
+        succeeded = True
+        return current_fd, parts[-1]
+    finally:
+        if not succeeded and pending_fd is not None:
+            os.close(pending_fd)
+
+
 def checked_write_target(
     package_id: str, where: str, root: Path, pkg_path: Path, relative: str
 ) -> Path:
@@ -2524,7 +2670,7 @@ def checked_write_target(
     return target
 
 
-def open_for_write_nofollow(path: Path):
+def open_for_write_nofollow(path: Path, *, dir_fd: int | None = None):
     """`open(path, "wb")`, refusing a symlink at the final component.
 
     The check-to-write window is small and it is real: `checked_write_target`
@@ -2536,6 +2682,36 @@ def open_for_write_nofollow(path: Path):
 
     Windows has no O_NOFOLLOW; `getattr` there leaves the flags unchanged,
     which is the same accommodation the brand read makes.
+
+    `dir_fd`, OPTIONAL AND KEYWORD-ONLY (stn-avv, stn-6mcb.7): when given,
+    `path` is resolved relative to it via `os.open`'s own `dir_fd=`
+    parameter, exactly the way `walk_dir_fd` hands back a `(parent_fd,
+    final_name)` pair for a caller to write through. `None` -- the default
+    -- is today's behaviour, unchanged: `path` is resolved by the OS the
+    ordinary way, absolute or relative to the process's cwd. Nothing else
+    about this function's contract changes for either case.
+
+    THE WRITE-TIME FSTAT GATE (stn-avv, stn-6mcb.7; architecture review).
+    `checked_write_target` refuses three things at its pre-pass -- a
+    symlink, a hardlink, and "not the kind of file gen writes" -- but a
+    pre-pass is a snapshot. O_NOFOLLOW above closes the symlink refusal at
+    write time, because the kernel itself refuses to open a link with that
+    flag; the other two refusals were snapshot-only until now. This closes
+    them the same way: check the descriptor `os.open` actually returned,
+    not a path stat taken earlier.
+
+    MEASURED sequence (spike, this macOS): no `O_TRUNC` at open time --
+    `os.ftruncate` below does that job, but only AFTER the fstat gate
+    approves what got opened. `os.fstat` the descriptor; refuse a
+    non-regular file (the kind check) and refuse `st_nlink > 1` (the
+    hardlink check) -- both against the fd's OWN inode, which is the object
+    actually about to be written rather than whatever a second path lookup
+    might find. A FIFO planted at the destination is refused before any of
+    this: `O_NONBLOCK` makes the `os.open` call itself fail ENXIO, measured,
+    because there is no reader -- so `fstat` is never reached and the walk
+    never blocks waiting for one. The descriptor is closed on every refusal
+    path here; one that leaked the fd it just opened would be the exact
+    failure mode this gate exists to close.
     """
     nofollow = getattr(os, "O_NOFOLLOW", 0)
     # O_NONBLOCK, for the one node type O_NOFOLLOW says nothing about.
@@ -2546,19 +2722,40 @@ def open_for_write_nofollow(path: Path):
     # same open fails ENXIO. On a regular file POSIX says the flag has no
     # effect, so this costs the ordinary path nothing.
     nonblock = getattr(os, "O_NONBLOCK", 0)
-    flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC | nofollow | nonblock
-    descriptor = os.open(path, flags, 0o666)
+    # NO O_TRUNC. Truncating at open time would happily clear a hardlink's
+    # shared inode, or a symlink's target on a platform with no O_NOFOLLOW,
+    # before this function ever gets a chance to refuse it. `os.ftruncate`
+    # below does the same job, moved to AFTER the fstat gate.
+    flags = os.O_WRONLY | os.O_CREAT | nofollow | nonblock
+    descriptor = os.open(path, flags, 0o666, dir_fd=dir_fd)
     try:
+        info = os.fstat(descriptor)
+        if not stat.S_ISREG(info.st_mode):
+            raise ValueError(
+                "refusing to write: the descriptor just opened is not a "
+                f"regular file (mode {oct(stat.S_IFMT(info.st_mode))}) -- "
+                f"{path}"
+            )
+        if info.st_nlink > 1:
+            raise ValueError(
+                "refusing to write: the descriptor just opened is a "
+                f"hardlink (st_nlink={info.st_nlink}), so another name for "
+                f"this file exists outside the package, which no path "
+                f"check can see -- {path}"
+            )
+        os.ftruncate(descriptor, 0)
         return os.fdopen(descriptor, "wb")
     except Exception:
-        # fdopen can raise between the open and the wrapper taking
+        # fdopen can also raise between the open and the wrapper taking
         # ownership, and the descriptor would leak for the life of the
-        # process. Every other failure path here closes itself.
+        # process. Every failure path here closes itself.
         os.close(descriptor)
         raise
 
 
-def write_text_nofollow(path: Path, text: str, executable: bool = False) -> None:
+def write_text_nofollow(
+    path: Path, text: str, executable: bool = False, *, dir_fd: int | None = None
+) -> None:
     """`Path.write_text` without following a symlink at the final component.
 
     UTF-8, DECIDED RATHER THAN INHERITED. `Path.write_text` with no encoding
@@ -2576,8 +2773,12 @@ def write_text_nofollow(path: Path, text: str, executable: bool = False) -> None
     `executable` marks the file `+x` through the descriptor just written,
     rather than by re-opening the path: see the call site in
     `render_templates`.
+
+    `dir_fd`, OPTIONAL AND KEYWORD-ONLY (stn-avv, stn-6mcb.7): passed
+    straight through to `open_for_write_nofollow`. `None` is today's
+    behaviour; nothing else about this function's contract changes.
     """
-    with open_for_write_nofollow(path) as handle:
+    with open_for_write_nofollow(path, dir_fd=dir_fd) as handle:
         handle.write(text.encode("utf-8"))
         if executable:
             descriptor = handle.fileno()

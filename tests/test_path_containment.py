@@ -32,13 +32,16 @@ case that makes the brand one worth more than its severity suggests.
 
 from __future__ import annotations
 
+import errno
 import json
 import os
 import sys
+from pathlib import Path
 
 import pytest
 
 from stencil import __version__ as stencil_version
+from stencil import generate
 from stencil.generate import (
     MANIFEST_NAME,
     MANIFEST_VERSION,
@@ -1752,3 +1755,332 @@ def test_an_ordinary_package_dir_with_a_manifest_missing_package_survives_clean(
     assert MANIFEST_NAME in combined, (
         f"the manifest should be named in the refusal: {combined!r}"
     )
+
+
+# --- stn-avv: the object checked is the object written ----------------------
+#
+# stn-6mcb.7 is the MECHANISM ONLY -- the capability flag, the descriptor
+# walk helper, and the `dir_fd` keyword on the two nofollow writers. No call
+# site (render_templates, write_manifest, copy_brand_image, generate_package)
+# changes here; that wiring is stn-6mcb.5. Every test below exercises the
+# mechanism directly rather than through `stencil gen`, which is why this
+# section calls `generate.walk_dir_fd` / `generate.open_for_write_nofollow` /
+# `generate.write_text_nofollow` rather than `run_cli`.
+
+pytestmark_avv = pytest.mark.skipif(
+    not generate._DIR_FD_CAPABLE,
+    reason=(
+        "dir_fd is not supported on this platform -- "
+        "generate._DIR_FD_CAPABLE is False"
+    ),
+)
+
+
+def test_the_capability_flag_matches_the_measured_conditions():
+    """Pins the exact formula stn-6mcb.7 measured, not just its value on
+    this machine, so a future edit that quietly narrows or widens it fails
+    here rather than only on whichever platform CI happens to run."""
+    expected = (
+        hasattr(os, "O_DIRECTORY")
+        and hasattr(os, "O_NOFOLLOW")
+        and os.open in os.supports_dir_fd
+        and os.mkdir in os.supports_dir_fd
+    )
+    assert generate._DIR_FD_CAPABLE is expected
+
+
+@pytestmark_avv
+def test_walk_dir_fd_write_lands_in_the_original_inode_after_a_swap(tmp_path):
+    """The direct unit test of the walk (stn-6mcb.7 spike note 2): once the
+    walk has opened `sub`'s descriptor, replacing `sub` on disk with a
+    symlink to a victim directory must not move where a write through that
+    descriptor lands. The fd is pinned to the inode it opened, not to the
+    name that found it.
+    """
+    root = tmp_path / "root"
+    root.mkdir()
+    victim = tmp_path / "victim"
+    victim.mkdir()
+
+    base_fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        parent_fd, name = generate.walk_dir_fd(base_fd, "sub/file.txt")
+        try:
+            # Move the REAL "sub" out of the way and plant a symlink to the
+            # victim directory in its place. `parent_fd` was already opened
+            # against the original inode before this happens.
+            renamed = tmp_path / "sub-renamed"
+            (root / "sub").rename(renamed)
+            (root / "sub").symlink_to(victim)
+
+            generate.write_text_nofollow(Path(name), "hello\n", dir_fd=parent_fd)
+        finally:
+            os.close(parent_fd)
+    finally:
+        os.close(base_fd)
+
+    assert (renamed / "file.txt").read_text() == "hello\n", (
+        "the write did not land in the original inode the walk opened"
+    )
+    assert list(victim.iterdir()) == [], (
+        "the victim directory received a write through the swapped symlink"
+    )
+
+
+@pytestmark_avv
+@pytest.mark.skipif(
+    not generate._DIR_FD_CAPABLE,
+    reason="no O_DIRECTORY/O_NOFOLLOW dir_fd support on this platform",
+)
+def test_walk_dir_fd_hands_back_a_descriptor_the_caller_owns_for_a_top_level_name(
+    tmp_path,
+):
+    """A single-component `relative` returns a fd the caller may close, and
+    closing it must NOT close `base_fd`.
+
+    This is the COMMON case -- `Makefile`, the manifest, the brand image and
+    every other top-level file a package contains -- and it is the one where
+    the natural implementation hands back `base_fd` itself. A caller doing
+    the obvious thing with what it was given would then close its own
+    long-lived package-directory descriptor after the first top-level write,
+    and every write after that would fail on a stale fd. One `os.dup` makes
+    "close what you were given" correct in both cases; this test is what
+    holds that, because nothing about the happy path reveals it.
+    """
+    base_fd = os.open(tmp_path, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        parent_fd, name = generate.walk_dir_fd(base_fd, "Makefile")
+        assert name == "Makefile"
+        assert parent_fd != base_fd, (
+            "a top-level name must not hand back base_fd itself: the caller "
+            "closes what it is given, and that would be the package directory"
+        )
+
+        os.close(parent_fd)
+
+        # base_fd must still be usable -- this is the assertion the bug would
+        # fail, with EBADF.
+        second_fd, second_name = generate.walk_dir_fd(base_fd, "Makefile")
+        try:
+            assert second_name == "Makefile"
+            generate.write_text_nofollow(
+                Path("Makefile"), "after the first close\n", dir_fd=second_fd
+            )
+        finally:
+            os.close(second_fd)
+
+        assert (tmp_path / "Makefile").read_text() == "after the first close\n"
+    finally:
+        os.close(base_fd)
+
+
+def test_walk_dir_fd_refuses_a_symlinked_intermediate_component(tmp_path):
+    """A symlink at an intermediate component is refused, and the message
+    names THAT component -- not only the declared relative path, which for
+    a nested dest is a different string the author would edit in vain.
+    """
+    root = tmp_path / "root"
+    root.mkdir()
+    victim = tmp_path / "victim"
+    victim.mkdir()
+    (root / "sub").symlink_to(victim)
+
+    base_fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        with pytest.raises(ValueError) as excinfo:
+            generate.walk_dir_fd(base_fd, "sub/file.txt")
+    finally:
+        os.close(base_fd)
+
+    assert "sub" in str(excinfo.value), (
+        f"the refusal must name the symlinked component: {excinfo.value}"
+    )
+    assert "Traceback" not in str(excinfo.value)
+    assert list(victim.iterdir()) == [], (
+        "nothing should have been written through the symlink"
+    )
+
+
+@pytestmark_avv
+def test_walk_dir_fd_closes_every_intermediate_fd_on_the_failure_path(
+    tmp_path, monkeypatch
+):
+    """No fd leak on the failure path. `a` and `b` are opened successfully as
+    the walk descends; `c` is a symlink and refuses. Every fd the walk
+    itself opened (tracked by the `dir_fd=` keyword, which only ITS opens
+    use) must be closed by the time the ValueError propagates -- `gen --all`
+    over many packages must not leak one descriptor per refused component.
+    """
+    root = tmp_path / "root"
+    (root / "a" / "b").mkdir(parents=True)
+    victim = tmp_path / "victim"
+    victim.mkdir()
+    (root / "a" / "b" / "c").symlink_to(victim)
+
+    opened = []
+    closed = []
+    real_open = os.open
+    real_close = os.close
+
+    def tracking_open(*args, **kwargs):
+        fd = real_open(*args, **kwargs)
+        if "dir_fd" in kwargs:
+            opened.append(fd)
+        return fd
+
+    def tracking_close(fd):
+        closed.append(fd)
+        real_close(fd)
+
+    monkeypatch.setattr(os, "open", tracking_open)
+    monkeypatch.setattr(os, "close", tracking_close)
+
+    base_fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        with pytest.raises(ValueError):
+            generate.walk_dir_fd(base_fd, "a/b/c/d.txt")
+    finally:
+        os.close(base_fd)
+
+    assert opened, "test setup: the walk should have opened 'a' and 'b'"
+    assert set(opened) <= set(closed), (
+        f"the walk leaked a descriptor on the failure path: "
+        f"opened={opened}, closed={closed}"
+    )
+
+
+@pytestmark_avv
+def test_write_text_nofollow_writes_through_an_explicit_dir_fd(tmp_path):
+    """Regression guard for the new keyword: `write_text_nofollow` still
+    does exactly what it always did -- UTF-8, fchmod through the same
+    descriptor for `executable` -- when the destination is named relative
+    to a `dir_fd` instead of by an absolute path."""
+    root = tmp_path / "root"
+    root.mkdir()
+    base_fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        generate.write_text_nofollow(
+            Path("file.txt"), "via dir_fd\n", executable=True, dir_fd=base_fd
+        )
+    finally:
+        os.close(base_fd)
+
+    written = root / "file.txt"
+    assert written.read_text() == "via dir_fd\n"
+    assert written.stat().st_mode & 0o111, "the executable bit must still be set"
+
+
+# --- stn-avv: the write-time fstat gate --------------------------------------
+#
+# checked_write_target's pre-pass refuses three things -- a symlink, a
+# hardlink, and "not the kind of file gen writes" -- but it is a snapshot.
+# These tests plant the hardlink/FIFO AFTER any such pre-pass would have run
+# (there is none here; this calls the write function directly) and confirm
+# the refusal now holds at the moment of the write itself, against the
+# object `os.open` actually returned.
+
+pytestmark_fstat_gate = pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="hardlinks, FIFOs and O_NOFOLLOW do not behave the same on Windows",
+)
+
+
+@pytestmark_fstat_gate
+def test_open_for_write_nofollow_refuses_a_hardlink_at_write_time(tmp_path):
+    """Reproduction of the snapshot gap the notes describe: a hardlink
+    planted after any pre-pass is still refused, because the check now runs
+    against the fd `os.open` returned rather than only a path stat taken
+    earlier. Asserted on the file OUTSIDE the tree: a refusal that still
+    truncates it would defeat the point.
+    """
+    outside = tmp_path / "outside.txt"
+    outside.write_text("PRECIOUS\n")
+    target = tmp_path / "target.txt"
+    os.link(outside, target)
+    assert target.stat().st_nlink == 2, "test setup"
+
+    with pytest.raises(ValueError) as excinfo:
+        generate.open_for_write_nofollow(target)
+
+    assert "target.txt" in str(excinfo.value), (
+        f"the refusal must name the file: {excinfo.value}"
+    )
+    assert outside.read_text() == "PRECIOUS\n", (
+        "a hardlink refusal must not truncate the shared inode -- dropping "
+        "O_TRUNC in favour of the fstat-gated ftruncate is what makes that "
+        "true"
+    )
+
+
+@pytestmark_fstat_gate
+def test_open_for_write_nofollow_refuses_a_fifo_before_fstat_is_reached(tmp_path):
+    """Measured (stn-6mcb.7 spike): O_NONBLOCK refuses a FIFO with ENXIO at
+    `os.open` itself, before fstat is ever reached -- so a FIFO planted at a
+    destination cannot block `gen` forever waiting for a reader that will
+    never come.
+    """
+    target = tmp_path / "target"
+    os.mkfifo(target)
+
+    with pytest.raises(OSError) as excinfo:
+        generate.open_for_write_nofollow(target)
+
+    assert excinfo.value.errno == errno.ENXIO, (
+        f"expected ENXIO from O_NONBLOCK, got: {excinfo.value!r}"
+    )
+
+
+def test_open_for_write_nofollow_still_replaces_a_longer_existing_file(tmp_path):
+    """Regression guard for dropping O_TRUNC: `open_for_write_nofollow` now
+    truncates via `os.ftruncate` AFTER the fstat gate approves the
+    descriptor, rather than via O_TRUNC at open time. If that ftruncate
+    were ever dropped or misordered, a shorter replacement would leave the
+    old file's tail bytes behind."""
+    target = tmp_path / "file.txt"
+    target.write_text("a much longer line that must be fully replaced\n")
+
+    generate.write_text_nofollow(target, "new\n")
+
+    assert target.read_text() == "new\n"
+
+
+# --- stn-avv: the fallback (capability flag forced False) -------------------
+#
+# `open_for_write_nofollow` and `write_text_nofollow` never consult
+# `_DIR_FD_CAPABLE` themselves -- `dir_fd` is an explicit, caller-supplied
+# keyword that defaults to None, which is exactly today's behaviour. The
+# flag only gates whether a caller (stn-6mcb.5, not this task) may attempt
+# the descriptor walk at all. These tests force the flag False -- something
+# only possible because it is a module global read at CALL time rather than
+# captured in a default argument -- to prove that forcing it has no effect
+# on the code path every existing caller still uses.
+
+
+def test_write_text_nofollow_ignores_the_capability_flag_on_the_default_path(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(generate, "_DIR_FD_CAPABLE", False)
+
+    target = tmp_path / "file.txt"
+    generate.write_text_nofollow(target, "hello\n")
+
+    assert target.read_text() == "hello\n"
+
+
+def test_walk_dir_fd_refuses_cleanly_when_the_capability_flag_is_forced_false(
+    tmp_path, monkeypatch
+):
+    """Without this, the 'fallback still behaves as today' pin above could
+    never actually run on a machine where dir_fd IS supported -- the flag
+    would always read True and there would be no way to exercise the
+    unsupported-platform path at all."""
+    monkeypatch.setattr(generate, "_DIR_FD_CAPABLE", False)
+
+    root = tmp_path / "root"
+    root.mkdir()
+    base_fd = os.open(root, os.O_RDONLY)
+    try:
+        with pytest.raises(NotImplementedError):
+            generate.walk_dir_fd(base_fd, "a/b.txt")
+    finally:
+        os.close(base_fd)
