@@ -238,6 +238,25 @@ def test_a_non_string_package_name_raises_valueerror_not_attributeerror():
     assert "demo" in str(exc.value)
 
 
+def test_a_non_string_package_name_names_the_key_too():
+    """The test above only asserts that 'demo' -- the package -- appears in
+    the message. This pins that the KEY, package_name, is named too: a
+    config with a dozen keys otherwise sends the author looking through all
+    of them for which one was the problem.
+
+    package_type "none" never CONSUMES package_name at all (unlike "doc"
+    above, which reaches it via `.endswith('.pdf')`) -- used deliberately so
+    this also pins that a non-string package_name is refused whenever the
+    key is PRESENT, not only for the doc/zip types that happen to read it.
+    """
+    config = {"packages": {"demo": package(package_type="none", package_name=42)}}
+    with pytest.raises(ValueError) as exc:
+        package_contexts(config)
+    message = str(exc.value)
+    assert "demo" in message, f"the broken package is not named: {message!r}"
+    assert "package_name" in message, f"the key is not named: {message!r}"
+
+
 def test_a_non_string_output_dir_raises_valueerror_not_typeerror():
     """output_dir: 5 hits `Path(raw_output)` before the try/except around
     os.path.relpath even starts, so today's TypeError -- 'argument should be

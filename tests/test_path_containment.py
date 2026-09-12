@@ -752,3 +752,122 @@ def test_a_package_dir_symlinked_inside_the_output_tree_still_generates(
         f"still generate: rc={result.returncode}, stderr={result.stderr!r}"
     )
     assert (real / "Makefile").exists()
+
+
+# --- stn-9rn: package_name is a filename, not a path -------------------------
+#
+# package_name is the only package path key that never goes through
+# check_config_path. Measured on this branch, the ticket's own reproduction:
+#
+#     packages: {demo: {package_type: zip, package_name: "../escape me.zip"}}
+#     $ stencil gen demo   -> rc=0
+#     out/demo/Makefile:145:  PKG ?= ../escape me.zip
+#     manifest entries:       ['../escape me.zip', 'Makefile', ...]
+#
+# Two consequences: the generated Make recipe word-splits on the space and
+# names a path outside the package directory -- the exact class
+# check_config_path exists to refuse for docs, slides, dir, dest and
+# package_sources -- and the unvalidated string is recorded VERBATIM as a
+# manifest entry, so `clean` (which DOES run check_config_path over every
+# manifest entry) refuses it by name forever: the package becomes
+# permanently un-cleanable, rc=1, and the complaint points at a "manifest
+# entry" the author never wrote.
+#
+# `package()` above defaults to `package_type: "none"`, which never
+# CONSUMES package_name at all -- kept deliberately for the five tests below
+# so they pin that the check applies whenever the key is PRESENT, not only
+# for the zip/doc types that happen to read it.
+
+
+def test_a_package_name_with_whitespace_is_refused_for_whitespace():
+    """The ticket's own reproduction string. `check_config_path` tests
+    whitespace BEFORE '..', so this value -- which has both -- must be
+    pinned as the WHITESPACE refusal, not the escape: whitespace is what
+    actually splits the generated Make recipe, and that ordering is correct
+    for this value. Asserting the escape message here would pin nothing,
+    since check_config_path never reaches its '..' check for this string."""
+    with pytest.raises(ValueError, match="whitespace"):
+        package_contexts(config(package_name="../escape me.zip"))
+
+
+def test_a_package_name_with_dotdot_and_no_whitespace_is_refused_for_escaping():
+    """The case the whitespace test above does not cover: no whitespace, so
+    this must be refused for escaping the package directory instead. A test
+    written only from '../escape me.zip' would assert the whitespace
+    message and prove nothing about '..' at all."""
+    with pytest.raises(ValueError, match="escapes the package directory"):
+        package_contexts(config(package_name="../escape.zip"))
+
+
+def test_a_package_name_with_a_path_separator_is_refused():
+    """`check_config_path` deliberately permits a subdirectory --
+    `dest: .vscode/settings.json` is documented -- but `package_name` names
+    a file IN the package directory, not a path, so a separator
+    check_config_path allows today must still be refused here."""
+    with pytest.raises(ValueError, match="separator"):
+        package_contexts(config(package_name="sub/thing.zip"))
+
+
+def test_a_package_name_with_a_backslash_is_refused_for_metacharacter():
+    """`_UNSAFE_IN_PATH` already contains a backslash, so `check_config_path`
+    refuses this as a shell/Make METACHARACTER before any separator check
+    even runs. Asserting a separator message here would pass for the wrong
+    reason and pin nothing about the separator check at all."""
+    with pytest.raises(ValueError, match="metacharacter"):
+        package_contexts(config(package_name="a\\b"))
+
+
+def test_a_package_name_with_a_glob_metacharacter_is_refused():
+    """`package_name` is recorded VERBATIM as a manifest entry, so a glob
+    metacharacter is the same shape `docs` and `slides` got in stn-2x4's
+    `check_no_glob`."""
+    with pytest.raises(ValueError, match="glob metacharacter"):
+        package_contexts(config(package_name="[a-z].zip"))
+
+
+def test_cli_gen_with_an_unsafe_package_name_refuses_and_writes_nothing(
+    tmp_path,
+):
+    """The ticket's reproduction end to end. TODAY: gen exits 0, writes a
+    Makefile whose PKG line word-splits on the space, and records the
+    unvalidated string verbatim as a manifest entry -- which `clean` then
+    refuses by name forever. The fix must refuse at gen time, so the
+    un-cleanable manifest is never written in the first place: assert the
+    Makefile does not exist at all, not only that the exit code is
+    non-zero."""
+    write_config(
+        tmp_path,
+        {
+            "templates": [{"src": "Makefile.j2"}],
+            "packages": {
+                "demo": {
+                    "name": "Demo",
+                    "package_type": "zip",
+                    "package_name": "../escape me.zip",
+                }
+            },
+        },
+    )
+
+    result = run_cli("gen", "demo", cwd=tmp_path)
+
+    assert result.returncode != 0, (
+        f"rc={result.returncode}, stdout={result.stdout!r}, "
+        f"stderr={result.stderr!r}"
+    )
+    assert "Traceback" not in result.stderr, result.stderr
+    assert not (tmp_path / "demo" / "Makefile").exists(), (
+        "the Makefile must not be written at all -- an unsafe package_name "
+        "must be refused before anything is generated, not discovered later "
+        f"when `clean` tries to read the manifest back: "
+        f"stdout={result.stdout!r}"
+    )
+
+
+@pytest.mark.parametrize("name", ["workspace.zip", "hs1.zip", "hs2.pdf"])
+def test_an_ordinary_package_name_still_generates(name):
+    """The regression guard: the plain names every consumer config on this
+    machine actually uses (checked across all seven before this epic's plan
+    was written) must keep working."""
+    contexts = package_contexts(config(package_type="zip", package_name=name))
+    assert contexts["demo"]["package_name"] == name
