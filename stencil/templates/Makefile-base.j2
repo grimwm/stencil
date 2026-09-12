@@ -57,6 +57,35 @@ ifneq ($(filter -%,$(DC)),)
 $(error DC names a compose implementation only, e.g. DC="podman compose"; compose files belong in COMPOSE_FILES)
 endif
 
+# AND AN EMPTY DC IS NOT AN IMPLEMENTATION EITHER (stn-mbq). `?=` above tests
+# whether DC is DEFINED, never whether it is non-empty -- the same fact the
+# COMPOSE_FILES guard below is written out at length for, and which DC was
+# missing. An empty DC is not a degraded build, it is a SILENT one, and it
+# breaks in two places at once. MEASURED against a real generated package:
+#
+#   $ DC= make doc
+#   image inspect '<the pinned node image>' >/dev/null 2>&1 ||  -f docker-compose.yml pull format-md
+#   f docker-compose.yml run --rm format-md
+#
+#   1. The probe below derives its runtime with $(firstword $(subst -, ,$(DC))),
+#      which is EMPTY here -- so the recipe line begins with the probe's own
+#      argument list and a program named `image` ANYWHERE ON PATH is executed,
+#      in the package directory, with both streams sent to /dev/null. Measured
+#      with one planted: it ran three times and `make doc` exited 0.
+#   2. $(STENCIL_COMPOSE) expands to ` -f docker-compose.yml`, and make strips
+#      a leading `-` from a recipe line as the IGNORE-ERRORS prefix. The shell
+#      is handed `f docker-compose.yml run ...`, `f` is not a command, and the
+#      error is ignored BY CONSTRUCTION -- so the build printed "Generated
+#      docs", exited 0, and wrote no HTML at all.
+#
+# Reachable from a plain `export DC=` in a shell profile or a CI job that set
+# it once for something unrelated, which is the same honest-mistake actor the
+# COMPOSE_FILES guards below serve -- not an attacker boundary, since anyone
+# who can set DC can already run anything.
+ifeq ($(strip $(DC)),)
+$(error DC must name a compose implementation, e.g. DC="podman compose")
+endif
+
 # The compose file(s) every invocation below pins, so that a
 # docker-compose.override.yml or a .env COMPOSE_FILE sitting in the package
 # directory is never auto-discovered and merged by compose's own resolution
@@ -134,13 +163,17 @@ endif
 #
 #   docker compose -f evil.yml -f docker-compose.yml run --rm format-md
 #
-# So the same two questions are asked again HERE, at the point of use, where
-# the values are the ones the recipe will actually run with. This expands to
+# So the same questions are asked again HERE, at the point of use, where the
+# values are the ones the recipe will actually run with. THE EMPTY-DC QUESTION
+# (stn-mbq) IS ASKED HERE TOO, and it is the one with a measured consumer: a
+# composition that includes this partial and then writes `DC =` reads as
+# non-empty at the parse-time guard above and is empty by the time the recipe
+# expands. This expands to
 # nothing when both hold, so it costs a generated package nothing but the
 # check. The parse-time guards stay: they fail earlier and more legibly for
 # the ordinary case of a consumer typing `make COMPOSE_FILES=`, and a guard
 # that fires at `make` startup beats one that fires midway through a build.
-_stencil_pin_check = $(if $(strip $(COMPOSE_FILES)),,$(error COMPOSE_FILES must name at least one compose file -- e.g. COMPOSE_FILES=docker-compose.yml))$(if $(filter -%,$(DC)),$(error DC names a compose implementation only -- e.g. DC="podman compose" -- and compose files belong in COMPOSE_FILES))
+_stencil_pin_check = $(if $(strip $(DC)),,$(error DC must name a compose implementation -- e.g. DC="podman compose"))$(if $(strip $(COMPOSE_FILES)),,$(error COMPOSE_FILES must name at least one compose file -- e.g. COMPOSE_FILES=docker-compose.yml))$(if $(filter -%,$(DC)),$(error DC names a compose implementation only -- e.g. DC="podman compose" -- and compose files belong in COMPOSE_FILES))
 
 STENCIL_COMPOSE = $(_stencil_pin_check)$(DC) $(addprefix -f ,$(COMPOSE_FILES))
 
@@ -158,7 +191,12 @@ STENCIL_COMPOSE = $(_stencil_pin_check)$(DC) $(addprefix -f ,$(COMPOSE_FILES))
 # subcommand, so the probe below would fail to run at all on those hosts.
 #
 # WHY DERIVED RATHER THAN OVERRIDABLE (stn-3y8). This used to be spelled
-# `CONTAINER ?=`, and `?=` means an environment value wins. Since ensure_image
+# `CONTAINER ?=`, and `?=` means an environment value wins. (stn-3y8 called
+# CONTAINER "the one variable in this file with no check at all". That was
+# wrong, and is corrected here rather than left standing: BUILD_DATE and WITH
+# were the same `?=` shape and STRICTLY WORSE -- CONTAINER let an exported
+# value name a PROGRAM, while those two let it inject a SHELL FRAGMENT. Both
+# are checked now, in Makefile-doc.j2; see stn-cb8.) Since ensure_image
 # runs the result as a BARE COMMAND, an exported CONTAINER was executed by
 # four targets, in the package directory, with both streams sent to
 # /dev/null. MEASURED against a real generated package: with CONTAINER naming
@@ -214,8 +252,36 @@ STENCIL_COMPOSE = $(_stencil_pin_check)$(DC) $(addprefix -f ,$(COMPOSE_FILES))
 # An earlier draft of this comment claimed `override` closed MAKEFLAGS
 # outright. It does not, and a guard that overclaims is the failure this
 # comment itself warns about, so the claim is narrowed rather than repeated.
-# The route is filed as stn-2je with its reproduction; `--eval` injects
-# arbitrary makefile text, so there is no clean defence to reach for here.
+#
+# THAT ROUTE IS ACCEPTED, DELIBERATELY, AND IT IS NOT CHEAP -- stn-2je, closed
+# won't-fix with the measurements rather than left open as an implied promise.
+# Two defences were built and driven on GNU Make 4.4.1. Both close the filed
+# reproduction; both are defeated by a ONE-CLAUSE change to the same hostile
+# string, which is no bar at all; and each costs something real:
+#
+#   (a) Require `$(origin STENCIL_CONTAINER)` to be `override` at the point of
+#       use. MEASURED: origin reads `override` for the environment, `make -e`,
+#       the command line and MAKEFLAGS=VAR=value on BOTH 3.81 and 4.4.1, and
+#       `file` exactly when a pattern-specific assignment has displaced it --
+#       so it fires on the filed route and the documented `override
+#       STENCIL_CONTAINER = nerdctl` escape hatch still passes. But
+#       `--eval %: override STENCIL_CONTAINER = X` -- one extra word, same
+#       clause -- reports origin `override` and sails through. It would also
+#       turn a consumer's own `doc: STENCIL_CONTAINER = x` into a hard error.
+#
+#   (b) Refuse to run when MAKEFLAGS carries `--eval`. MEASURED: it fires,
+#       survives abbreviation (`--ev` canonicalises to `--eval=` inside
+#       MAKEFLAGS) and survives `--eval MAKEFLAGS:=`. But one more clause,
+#       `--eval undefine MAKEFLAGS`, defeats it outright, and it refuses a
+#       legitimate command-line `make --eval='var = 1'`.
+#
+# So the route stays open, and what it now costs is stated plainly rather than
+# understated: on GNU Make 4.0+ it is not merely a repointed probe runtime but
+# ARBITRARY SHELL, because the same one-clause string carries a
+# pattern-specific BUILD_DATE past the character class in Makefile-doc.j2. The
+# distinction that makes this acceptable is the one the COMPOSE_FILES and DC
+# guards rest on: `export DC=` and `export CONTAINER=podman` are things a
+# person does by accident, and `MAKEFLAGS='--eval %: ... = x'` is not.
 #
 # The assignment stays RECURSIVE, so a DC assigned later -- or built from a
 # second variable, the deferred case _stencil_pin_check above exists for --

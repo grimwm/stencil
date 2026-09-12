@@ -419,7 +419,11 @@ make doc COMPOSE_FILES="docker-compose.yml docker-compose.override.yml"
 ```
 
 - **`DC` names an implementation, and nothing else.** A flag inside it is refused —
-  `DC="docker compose -f other.yml"` fails with *DC names a compose implementation only*.
+  `DC="docker compose -f other.yml"` fails with *DC names a compose implementation only* —
+  and so is an **empty** one: `DC= make doc` fails with *DC must name a compose
+  implementation*. `?=` only asks whether `DC` is *defined*, so an empty value used to sail
+  through and produce a build that exited 0 having written nothing, while running whatever
+  `image` it found on your `PATH` (`stn-mbq`).
   This is not pedantry: `DC` is placed *before* the pin, so a compose file smuggled in there
   would be **merged** with `docker-compose.yml` rather than replaced by it, which is the exact
   behaviour the pin exists to stop. Compose files go in `COMPOSE_FILES`. All four spellings
@@ -453,6 +457,32 @@ make doc COMPOSE_FILES="docker-compose.yml docker-compose.override.yml"
   ```
 
   The `override` is required — a plain assignment there loses to the Makefile's own.
+
+- **What none of these checks close, said plainly.** They are honest-mistake protection, not a
+  boundary against a hostile environment — anyone who can set `DC` or `MAKEFLAGS` can already
+  run commands. Two routes get a value past them and are accepted rather than guarded
+  (`stn-2je`): `MAKEFLAGS=--eval` on GNU Make 4.0+, which injects makefile text from the
+  environment alone, and a target- or pattern-specific assignment in a makefile that includes
+  stencil's partials. Two defences against the first were built and measured; both were
+  defeated by a one-clause change to the same string and each refused something legitimate, so
+  neither shipped. `MAKEFILES` — an environment variable naming makefile text to read first —
+  *is* closed, by the point-of-use half of the checks above. The reasoning and the measurements
+  are in `Makefile-base.j2`'s own comment.
+
+- **`BUILD_DATE` may contain only digits, `-`, `T` and `:`.** It is how the build host's day
+  reaches a document carrying `show_date:` — `make doc BUILD_DATE=2026-09-01` — and the
+  accepted characters are exactly those of the date shapes the frontmatter filter honours,
+  `yyyy-mm-dd` and `yyyy-mm-ddThh:mm`. It is a *character* class and not a date check:
+  `2026-13-45` passes here and is refused later, by the filter, with a message about months.
+
+  The check runs on the targets that actually stamp a date — `doc` and `slide`, and `pdf` and
+  `check-pdf`, which reach them as prerequisites — and nowhere else. `pkg` is deliberately not
+  among them: it never reaches `doc`, so it reads `WITH` but no date, and it is checked for
+  `WITH` alone. So an unrelated `BUILD_DATE` in your environment (the OCI
+  `org.opencontainers.image.created` convention uses that name, and its `Z` is out of class)
+  leaves `make help`, `make clean` and `make format-md` working. On a stamping target it is a
+  hard error naming the variable; `make doc BUILD_DATE=` builds with the container's own date
+  instead.
 
   **This costs you a vendored template, and that is the real price of the change.** `Makefile.j2`
   is four `{% include %}`s with no extension point, and `stencil gen` overwrites the generated
@@ -548,6 +578,12 @@ To add a new conditional feature (e.g., `draft`):
 
 The `WITH=` variable automatically passes `--metadata include-<feature>=true` to pandoc for any
 feature name.
+
+**A feature name may contain letters, digits, `-` and `_`, and the list is separated by commas.**
+Anything else — a space, a slash, a shell metacharacter — is refused by name before the build
+starts. The value reaches a `pandoc` command line *and* an output filename, and before this it
+reached both unquoted, so `WITH='a;rm -rf /;b'` ran what it said (`stn-cb8`). The lowercase
+`with=` spelling is checked the same way.
 
 ### Custom context keys
 
