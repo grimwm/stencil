@@ -17,6 +17,7 @@ that the real build never uses.
 from __future__ import annotations
 
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -36,6 +37,34 @@ PANDOC_IMAGE = "docker.io/pandoc/core:3.10.0.0"
 # in the generated package. Tests build it once and reuse the tag.
 BROWSER_DOCKERFILE = "Dockerfile.browser"
 BROWSER_IMAGE_TAG = "localhost/stencil_browser:test"
+
+# ...unless something asks for a different one. Two suites running at once --
+# two worktrees, which is what AGENTS.md tells every agent to work in -- both
+# built and overwrote this single tag, so one run could rebuild the image out
+# from under another that was still using it (stn-zim).
+#
+# A per-run tag would be a bad trade if it meant rebuilding the image each
+# time. Measured: 0.5s against the existing tag, 0.6s against a brand-new one
+# -- the layer cache keys on the Dockerfile and the context rather than on the
+# name, so the tag costs nothing.
+#
+# Read through a function rather than as a default argument, which is the
+# whole point: `def f(tag=BROWSER_IMAGE_TAG)` binds at IMPORT, so setting the
+# module attribute afterwards looks like it works and does nothing. The same
+# late-binding mistake was made and caught in tests/conftest.py's low-space
+# threshold, which is why it is spelled out here.
+BROWSER_IMAGE_TAG_ENV = "STENCIL_BROWSER_IMAGE_TAG"
+
+
+def browser_image_tag() -> str:
+    """The image tag the browser-backed helpers build and run.
+
+    Overridden per run by $STENCIL_BROWSER_IMAGE_TAG so concurrent suites do
+    not share one mutable name. Nothing in a GENERATED package reads this --
+    the compose file builds its own image -- so this is a test-harness knob
+    and changing it cannot affect a consumer's build.
+    """
+    return os.environ.get(BROWSER_IMAGE_TAG_ENV) or BROWSER_IMAGE_TAG
 
 # Every Node in a generated package: the browser image's base, the format-md
 # service, and the ensure_image line that pre-pulls it. One constant, because
@@ -629,7 +658,7 @@ def render(
 def build_browser_image(
     workdir: Path,
     *,
-    tag: str = BROWSER_IMAGE_TAG,
+    tag: str | None = None,
     runtime: str | None = None,
 ) -> subprocess.CompletedProcess:
     """Build the Chromium image the pdf and check-access services share.
@@ -640,6 +669,7 @@ def build_browser_image(
     A bare "Dockerfile.browser" therefore works under podman and fails under
     docker with "no such file or directory".
     """
+    tag = tag or browser_image_tag()
     runtime = runtime or container_runtime()
     if runtime is None:
         raise RuntimeError("no container runtime found (looked for docker, podman)")
@@ -665,7 +695,7 @@ def run_in_browser(
     script: str,
     *,
     workdir: Path,
-    tag: str = BROWSER_IMAGE_TAG,
+    tag: str | None = None,
     runtime: str | None = None,
     timeout: float | None = None,
 ) -> subprocess.CompletedProcess:
@@ -681,6 +711,7 @@ def run_in_browser(
     The script is written into the workdir rather than piped, so a failure
     leaves it on disk beside the page it was driving.
     """
+    tag = tag or browser_image_tag()
     runtime = runtime or container_runtime()
     if runtime is None:
         raise RuntimeError("no container runtime found (looked for docker, podman)")
@@ -713,7 +744,7 @@ def html_to_pdf(
     output: str,
     *,
     workdir: Path,
-    tag: str = BROWSER_IMAGE_TAG,
+    tag: str | None = None,
     runtime: str | None = None,
     timeout: float | None = None,
 ) -> subprocess.CompletedProcess:
@@ -722,6 +753,7 @@ def html_to_pdf(
     Same image, same entrypoint, same mount -- the compose service is
     `node html-to-pdf.js` over the package directory at /workspace.
     """
+    tag = tag or browser_image_tag()
     runtime = runtime or container_runtime()
     if runtime is None:
         raise RuntimeError("no container runtime found (looked for docker, podman)")
@@ -752,7 +784,7 @@ def check_access(
     workdir: Path,
     directory: str = "/workspace",
     out_dir: Path | None = None,
-    tag: str = BROWSER_IMAGE_TAG,
+    tag: str | None = None,
     runtime: str | None = None,
     timeout: float | None = None,
 ) -> subprocess.CompletedProcess:
@@ -767,6 +799,7 @@ def check_access(
     sibling is ``..`` away, which escapes a bind mount. Pass ``directory``
     ``/out`` to search it.
     """
+    tag = tag or browser_image_tag()
     runtime = runtime or container_runtime()
     if runtime is None:
         raise RuntimeError("no container runtime found (looked for docker, podman)")
