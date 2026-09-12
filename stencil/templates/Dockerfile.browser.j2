@@ -167,12 +167,17 @@ COPY {{ browser_lockfile_name }} {{ browser_tools_dir }}/package-lock.json
 # generated artifact attracts, since it reads as data rather than as a choice of
 # what code to run.
 #
-# AND IT IS ONLY REACHED WHEN THE BUILD ACTUALLY USES THIS FILE. The generated
-# Makefile invokes compose with no `-f`, so a `docker-compose.override.yml`
-# beside it, or a `.env` setting `COMPOSE_FILE`, selects a different compose
-# file and with it a different Dockerfile entirely -- without touching either
-# file this guard is about. That is stn-qli, and it is not closed here. Do not
-# read this guard as meaning the browser build path is shut.
+# AND IT IS ONLY REACHED WHEN THE BUILD ACTUALLY USES THIS FILE, which is a
+# weaker statement than it sounds and is worth keeping straight. `make` pins its
+# compose file explicitly since stn-qli, and an explicit `-f` makes compose
+# ignore `COMPOSE_FILE` outright -- so a `docker-compose.override.yml` or a
+# `.env` dropped beside this Dockerfile no longer redirects `make pdf` or
+# `make check-access` at a different one. What is closed is the documented path.
+# A hand-run `docker compose build pdf` with no `-f` still merges an override,
+# as compose has always done, and builds whatever Dockerfile that names --
+# without touching either file this guard is about. So this guard is what makes
+# stencil's own lockfile authoritative for the build that actually uses it; it
+# is not a claim that nothing else can build this image.
 RUN if ! echo "{{ browser_lockfile_digest }}  {{ browser_tools_dir }}/package-lock.json" \
       | sha256sum -c >/dev/null; then \
       echo "Dockerfile.browser: {{ browser_lockfile_name }} is not the file stencil generated." >&2; \

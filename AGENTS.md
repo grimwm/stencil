@@ -631,10 +631,12 @@ from inside the file that carries the guard:
 - A digest proves two files in the package directory agree. Whoever edits the lockfile can
   edit the file carrying its digest, so it refuses accident — a script, a bad merge, a
   half-finished hand edit — rather than a determined author.
-- It is only reached when the build actually uses the file it lives in. The generated
-  Makefile invokes compose with no `-f`, so a `docker-compose.override.yml` or a `.env`
-  setting `COMPOSE_FILE` selects a different compose file, and with it a different
-  Dockerfile, without touching either guarded file. That is `stn-qli`.
+- It is only reached when the build actually uses the file it lives in. `stn-qli` closed
+  the documented route — the generated Makefile now pins `-f`, and an explicit `-f` makes
+  compose ignore `COMPOSE_FILE` entirely — so a `docker-compose.override.yml` dropped
+  beside a package no longer redirects `make`. A hand-run `docker compose` with no `-f`
+  still merges one, as it always has. The guard makes stencil's lockfile authoritative for
+  the build that uses these files; it does not make these files the only way to build.
 - How much a reviewer can see of a tampered digest depends on whether these files are in
   git at all, and right now that is config-dependent rather than known: the managed
   `.gitignore` section omits the top-level `output_dir`, so for a config that sets one it
