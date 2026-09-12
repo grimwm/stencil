@@ -1962,12 +1962,23 @@ def read_manifest(path: Path) -> dict:
     config-derived fallback.
 
     FORWARD COMPATIBILITY (review finding D7): within a KNOWN
-    ``manifest_version``, unknown keys in the document are IGNORED, not
+    ``manifest_version``, UNKNOWN EXTRA keys in the document are IGNORED, not
     refused. Strict key validation would make a v1 manifest written by a
     later stencil unreadable by this one the moment that later version adds
     a diagnostic field -- exactly backwards from what a version field is
-    for. Only ``manifest_version`` itself and the required shape of
-    ``entries`` are enforced; everything else is read permissively.
+    for. That guarantee is about keys nothing below requires; it says
+    nothing about the ones that follow.
+
+    REQUIRED FIELDS (stn-jez): ``manifest_version``, the shape of
+    ``entries``, and -- checked last, below both of those -- the presence of
+    ``package``, ``dir`` and ``stencil_version`` as strings. `write_manifest`
+    has emitted all five fields since manifest v1 was introduced (verified:
+    ``git show 1e25490``), so no manifest stencil ever wrote is refused by
+    this. What it does refuse is a manifest missing one of them entirely --
+    which used to reach ``_clean_one_directory``'s ownership guard and read
+    as "no opinion", not as "untrusted" -- and requiring a field the writer
+    has always emitted does not weaken the forward-compatibility guarantee
+    above, which was never about these five.
 
     HARDENING (review finding A7), all measured on this interpreter:
 
@@ -2033,10 +2044,17 @@ def read_manifest(path: Path) -> dict:
     def _context() -> str:
         """A best-effort ``(package "x", dir "y")`` suffix for a message.
 
-        Both fields are diagnostic only (see write_manifest's docstring),
-        so a missing or malformed one is not itself a rejection -- it just
-        drops out of the suffix. Every value is `_safe`-guarded: it came
-        from the same unvalidated document as everything else here.
+        A missing or malformed field just drops out of the suffix here --
+        this helper only decides what the parenthetical SAYS, never whether
+        the manifest is accepted. That used to make a missing ``package`` or
+        ``dir`` "not itself a rejection" in the fuller sense too, but it no
+        longer is: the required-field check below raises `ManifestError` for
+        exactly that. This helper runs ABOVE that check (it is used by the
+        ``manifest_version`` and ``entries`` messages too, which fire before
+        a missing `package`/`dir` would even be checked), so it still has to
+        tolerate both fields being absent -- it just no longer gets the last
+        word on whether that absence is fine. Every value is `_safe`-guarded:
+        it came from the same unvalidated document as everything else here.
         """
         parts = []
         for key in ("package", "dir"):
@@ -2068,6 +2086,33 @@ def read_manifest(path: Path) -> dict:
             "read it. Delete the manifest to fall back to deriving from "
             "the config."
         )
+
+    # stn-jez. Checked LAST -- below manifest_version and below entries --
+    # because two existing parametrised regression tests in
+    # tests/test_manifest.py assert on the message they name
+    # (id=entries-not-list-of-strings expects "entries",
+    # id=unknown-manifest-version expects "manifest_version") from a fixture
+    # that also happens to omit `stencil_version`; checking this first would
+    # turn both red for the wrong reason. See the REQUIRED FIELDS paragraph
+    # above for why enforcing these does not weaken forward compatibility.
+    #
+    # `write_manifest` has emitted `package`, `dir` and `stencil_version` on
+    # every manifest since v1 was introduced (verified: `git show 1e25490`),
+    # so no manifest stencil ever wrote is refused here. What used to be
+    # refused by nothing at all was a manifest missing one of them entirely:
+    # `_clean_one_directory`'s ownership guard reads `manifest.get("package")`
+    # and only refuses when that IS a string and unrecognized -- a missing
+    # key made the guard's own `isinstance` check False, so it read as "no
+    # opinion" instead of "untrusted".
+    for key in ("package", "dir", "stencil_version"):
+        value = document.get(key)
+        if not isinstance(value, str):
+            raise ManifestError(
+                f'no valid "{key}"{_context()} (found {_safe(repr(value))}) '
+                "-- every manifest stencil writes has one. Delete the "
+                "manifest to fall back to deriving from the config. "
+                f"Manifest: {safe_name}"
+            )
 
     return document
 
@@ -3342,7 +3387,19 @@ def _clean_one_directory(
             return
 
         manifest_pkg = manifest.get("package")
-        if isinstance(manifest_pkg, str) and manifest_pkg not in full_member_set:
+        # INVERTED (stn-jez) from `isinstance(...) and ... not in
+        # full_member_set` to `not isinstance(...) or ... not in
+        # full_member_set`. The old spelling read a manifest with NO
+        # `package` key as "no opinion" -- `isinstance(None, str)` is
+        # False, so the whole `and` was False and the manifest was trusted
+        # -- rather than as untrusted. `read_manifest` now refuses a
+        # missing/non-string `package` on its own (see its REQUIRED FIELDS
+        # paragraph), so this can never fire for a manifest that reached
+        # here -- kept anyway, belt and braces, the same pattern
+        # `checked_write_target`'s closing `contained_entry_parent` call
+        # documents: cheap, and the day the check above it gains a gap in
+        # the wrong place this is what still holds the line standing alone.
+        if not isinstance(manifest_pkg, str) or manifest_pkg not in full_member_set:
             problems.append(
                 f"manifest {manifest_path} names package {manifest_pkg!r}, "
                 "which is not among the package(s) configured with this "
@@ -3352,6 +3409,111 @@ def _clean_one_directory(
             return
 
         entries = set(manifest["entries"])
+
+        # stn-jez (operator ruling): A MANIFEST MAY NARROW WHAT THE CONFIG
+        # AUTHORISES, NEVER WIDEN IT. The required-field check above stops a
+        # MALFORMED manifest, not a FORGED one -- every field it checks is
+        # free to an attacker: `stencil_version` is what `stencil version`
+        # prints, `package` is a package id read straight off the config
+        # being attacked, and `dir` defaults to the package id. A manifest
+        # with every field correct and naming the right package can still
+        # list an entry the config never derives for it, so field presence
+        # was never the actual boundary.
+        #
+        # Checked ONLY on `config_readable`: on the degraded path the
+        # manifest is the ONLY thing that can name what this directory
+        # holds -- not the config, which does not parse, and not a sibling's
+        # manifest, which names different files. That is the same trade
+        # stn-p9a documents for the degraded path generally, restated here
+        # rather than fixed: a documented limit, not a defect.
+        #
+        # Checked against the manifest's OWN entries, computed here BEFORE
+        # the `unnamed` union below adds a sibling package's config-derived
+        # entries on top -- unioning first and checking after would let a
+        # sibling's legitimate entries mask a forged one sitting in THIS
+        # manifest.
+        if config_readable:
+            authorised_problems: list[str] = []
+            authorised = _config_derived_entries(
+                sorted(full_member_set), config, authorised_problems
+            )
+            if authorised_problems:
+                # The authorised set itself could not be derived, so there is
+                # nothing reliable to narrow this manifest against.
+                #
+                # TRUSTING IT HERE IS AN INTERIM STATE, NOT THE INTENDED ONE,
+                # and stn-dl3r (same PR, next commit) is what makes the
+                # better answer safe. Today a malformed top-level `templates:`
+                # entry reaches here because `package_contexts` skips a
+                # non-mapping member silently; once it names that as a config
+                # problem, `clean_generated`'s own `package_contexts` call
+                # raises, the CLI drops to `config_readable=False`, and this
+                # branch stops being reachable through that door at all. At
+                # that point it becomes fail-closed -- see stn-dl3r's change.
+                #
+                # Trusting an unvalidated file because the thing that bounds
+                # it could not be computed is the one option that is never
+                # right on its own; it is tolerable only for the one commit
+                # in which refusing would instead make `clean` LESS able to
+                # clean a package whose manifest is perfectly good, which is
+                # the capability stn-p9a exists to provide.
+                pass
+            else:
+                # Compared as LITERAL STRINGS, unexpanded: both sides come
+                # from `package_entries`, so a glob pattern like
+                # `Guide*.html` appears the same way on both, and expanding
+                # either would compare apples to a set that was never meant
+                # to hold them. `MANIFEST_NAME` itself is exempt --
+                # `package_entries` never lists it (see its docstring: "the
+                # manifest does not list itself"), so it is not the
+                # caller's entry to authorise, and `_remove_entries` never
+                # receives it either.
+                widened = sorted(
+                    entry
+                    for entry in entries
+                    if entry != MANIFEST_NAME and entry not in authorised
+                )
+                expected_dir = config["packages"][manifest_pkg].get(
+                    "dir", manifest_pkg
+                )
+                manifest_dir = manifest.get("dir")
+                dir_mismatch = manifest_dir != expected_dir
+
+                if widened or dir_mismatch:
+                    complaints = []
+                    if widened:
+                        complaints.append(
+                            "names "
+                            + ", ".join(repr(entry) for entry in widened)
+                            + ", which the config does not derive for it"
+                        )
+                    if dir_mismatch:
+                        complaints.append(
+                            f'declares "dir" {manifest_dir!r}, not '
+                            f"{expected_dir!r} as configured"
+                        )
+                    # THE CONSEQUENCE, WORDED ON PURPOSE (stn-jez): an
+                    # author who removes a template from the config and
+                    # then runs `clean` hits this exact message -- the
+                    # manifest legitimately names a file the current config
+                    # no longer derives. That is fail-closed and intended,
+                    # not a false positive, so the message says what to do
+                    # about it rather than only that something is wrong:
+                    # restore the config entry if the file is still wanted,
+                    # or delete the file (and, if nothing else in the
+                    # package needs cleaning, the manifest) by hand.
+                    problems.append(
+                        f"manifest for package {manifest_pkg!r} "
+                        + "; and it ".join(complaints)
+                        + " -- a manifest may narrow what the config "
+                        "authorises but never widen it, so nothing was "
+                        "removed for this package. Restore the removed "
+                        "config entry if the file(s) are still wanted, or "
+                        "delete the file(s) -- and the manifest, by hand. "
+                        f"Manifest: {manifest_path}"
+                    )
+                    return
+
         entry_problems: list[str] = []
 
         # THE MANIFEST NAMES ONE PACKAGE; A DIRECTORY MAY HOLD SEVERAL.

@@ -1019,6 +1019,7 @@ def test_clean_refuses_a_package_dir_that_is_the_config_directory(tmp_path):
         json.dumps(
             {
                 "manifest_version": MANIFEST_VERSION,
+                "stencil_version": "0.1.0",
                 "package": "demo",
                 "dir": ".",
                 "entries": ["IMPORTANT.md", ".env", "src/app.py"],
@@ -1689,3 +1690,65 @@ def test_a_template_dest_with_a_glob_metacharacter_is_refused(tmp_path, dest):
         f"rc={result.returncode}, stdout={result.stdout[:400]!r}"
     )
     assert "glob metacharacter" in result.stderr, result.stderr
+
+
+# --- stn-jez: an ordinary dir with a planted manifest -----------------------
+#
+# NOT stn-17h. That ticket closed `dir: "."` -- a package directory that
+# resolves to the output base itself -- which the containment checks above
+# already refuse before any manifest is ever read. The attack here needs
+# none of that: `src` is an ordinary, hand-populated source directory,
+# strictly beneath the output base, with no `output_dir` prefix and no
+# templates at all. It clears every containment check in this file. What
+# lets a planted manifest delete a hand-written file here is
+# `_clean_one_directory`'s ownership guard reading a MISSING `package` key
+# as "no opinion" rather than as untrusted -- `isinstance(None, str)` is
+# False, so `isinstance(manifest_pkg, str) and ...` was False too, and the
+# manifest was used.
+
+
+def test_an_ordinary_package_dir_with_a_manifest_missing_package_survives_clean(
+    tmp_path,
+):
+    """The ticket's verbatim reproduction.
+
+    BEFORE (stn-jez): `stencil clean src` printed a `Removed` line for
+    `important.txt` and exited 0, having deleted a hand-written file that
+    `gen` never produced -- through a manifest with no `package` key at all,
+    which the old guard's `isinstance` check let straight through.
+
+    Asserted on the FILE, not on the exit code alone. A refusal that still
+    deletes is the failure worth catching, and an exit code cannot see it.
+    """
+    write_config(
+        tmp_path,
+        {
+            "templates": [],
+            "packages": {"src": {"package_type": "none"}},
+        },
+    )
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "important.txt").write_text("HAND WRITTEN - DO NOT DELETE\n")
+    (src / MANIFEST_NAME).write_text(
+        json.dumps({"manifest_version": MANIFEST_VERSION, "entries": ["important.txt"]})
+    )
+
+    result = run_cli("clean", "src", cwd=tmp_path)
+
+    assert result.returncode != 0, (
+        f"rc={result.returncode}, stdout={result.stdout!r}, "
+        f"stderr={result.stderr!r}"
+    )
+    assert "Traceback" not in result.stderr, result.stderr
+    assert (src / "important.txt").exists(), (
+        f"important.txt was deleted by a planted manifest missing "
+        f"'package': stdout={result.stdout!r}"
+    )
+    combined = result.stdout + result.stderr
+    assert '"package"' in combined, (
+        f"the missing field should be named in the refusal: {combined!r}"
+    )
+    assert MANIFEST_NAME in combined, (
+        f"the manifest should be named in the refusal: {combined!r}"
+    )

@@ -22,11 +22,17 @@ Imported in one place, at the top, so a rename on the implementation side is a
 one-line fix here rather than a search-and-replace across every test (see
 test_config_fail_closed.py's module docstring for the same convention).
 
-`write_manifest` and `ManifestError` are deliberately NOT imported here.
-Nothing in this file calls either: the writer is exercised through
-`generate_package`, and the error type belongs with the parser-rejection cases
-in stn-2x4.5. Importing a name only to `assert` it exists proves nothing that
-the tests below do not already prove, and leaves an unused import behind.
+`write_manifest` is deliberately NOT imported here. Nothing in this file
+calls it: the writer is exercised through `generate_package`.
+
+`ManifestError` WAS deliberately not imported, on the same reasoning, until
+stn-jez: `read_manifest`'s required-field checks are a pure parser property
+("does this document have the fields it must") independent of `clean`, and
+test_config_fail_closed.py's convention for exactly that shape is a DIRECT
+call to the raising function, not only a CLI-driven one. Imported below for
+that reason; every OTHER `ManifestError` case in this file still goes
+through the CLI only (see the parser-rejection section), because those are
+about what `_clean_one_directory` does with the error, not about the parser.
 
 `read_manifest` takes the PATH TO A MANIFEST FILE and returns the parsed
 document, rather than an (output_base, pkg_dir) pair returning just the
@@ -53,6 +59,7 @@ from jinja2 import UndefinedError
 from stencil.generate import (
     MANIFEST_NAME,
     MANIFEST_VERSION,
+    ManifestError,
     check_glob_vocabulary,
     get_generated_files,
     package_contexts,
@@ -745,17 +752,27 @@ def test_a_failed_regeneration_leaves_no_manifest(tmp_path, generate_package):
 # --- clean reads the manifest in preference to a since-edited config -------
 
 
-def test_clean_removes_a_dropped_docs_entrys_build_artifacts_from_the_manifest(
+def test_a_dropped_docs_entry_is_refused_as_a_widened_manifest_not_silently_honoured(
     generate_package, tmp_path
 ):
-    """PRECEDENCE, the headline of the gen/clean split. The manifest names a
-    document's build-artifact glob patterns (Guide*.html, Guide*.pdf, ...)
-    for every doc that existed AT GEN TIME. Editing `docs:` afterward to
-    drop one must not make clean forget that document's artifacts -- a
-    config-derived removal list would no longer name them at all, and they
-    would be left on disk forever. A manifest-driven clean still removes
-    them, because the manifest records what gen actually did, not what the
-    config says today.
+    """SUPERSEDES this file's old "PRECEDENCE" headline (stn-jez, operator
+    ruling). The manifest still names a document's build-artifact glob
+    patterns (Guide*.html, Guide*.pdf, ...) for every doc that existed AT
+    GEN TIME. Editing `docs:` afterward to drop one used to still get that
+    document's artifacts removed -- the manifest overriding a since-edited
+    config, which was the whole point of stn-p9a. It no longer does: a
+    manifest naming an entry the CURRENT config does not derive is now
+    indistinguishable from a forged one that never went through `docs:` at
+    all (see _clean_one_directory's stn-jez block, and its own docstring's
+    "field presence was never the boundary"), so it is refused the same
+    way, and NOTHING is removed for the package -- not even Guide's own
+    artifacts.
+
+    This is a deliberate, accepted trade, not a regression nobody noticed:
+    the operator's ruling names this exact scenario and says the refusal
+    message must tell the author what to do about it -- restore the dropped
+    `docs:` entry, or delete the stale build artifacts (and the manifest)
+    by hand.
     """
     config = {
         "output_dir": "out",
@@ -781,12 +798,22 @@ def test_clean_removes_a_dropped_docs_entrys_build_artifacts_from_the_manifest(
 
     result = run_cli("clean", "demo", cwd=tmp_path)
 
-    assert result.returncode == 0, result.stderr
+    assert result.returncode != 0, (
+        "a manifest naming a glob the edited config no longer derives must "
+        "be refused, not silently honoured"
+    )
+    assert "Traceback" not in result.stderr, result.stderr
+    combined = result.stdout + result.stderr
+    assert "Extra" in combined, f"the widened entries should be named: {combined!r}"
     for name in ("Guide.html", "Guide.pdf", "Extra.html", "Extra.pdf"):
-        assert not (generated / name).exists(), (
-            f"{name} survived clean -- a config-derived removal list would "
-            "have dropped Extra's artifacts the moment `Extra.md` left docs:"
+        assert (generated / name).exists(), (
+            f"{name} must survive too -- nothing is removed for a package "
+            "whose manifest widens what the config authorises"
         )
+    assert (generated / MANIFEST_NAME).exists(), (
+        "the manifest survives a refusal, same as every other whole-group "
+        "refusal in this file"
+    )
 
 
 def test_clean_does_not_remove_a_file_gen_never_produced_from_an_added_docs_entry(
@@ -861,6 +888,15 @@ def test_manifest_survives_a_partial_clean(generate_package, tmp_path):
     path-check failure) or failed to be removed, the manifest itself must
     NOT be removed -- otherwise the file that was refused has no record
     left naming it at all, and the next clean cannot even try again.
+
+    SUPERSEDED IN PART by stn-jez: "../escape.txt" is not just a path-check
+    failure any more, it is also an entry the config never derives for
+    "demo" at all -- a widened manifest, refused as a whole group before
+    `_remove_entries` ever runs, so the OTHER, legitimate entries no longer
+    get removed either (see _clean_one_directory's stn-jez block). What
+    A10 actually pins -- the manifest surviving so the refused entry is
+    still named for next time -- still holds and is still the point of this
+    test; only the "valid entries removed anyway" half changed.
     """
     config = {
         "output_dir": "out",
@@ -884,8 +920,9 @@ def test_manifest_survives_a_partial_clean(generate_package, tmp_path):
     assert result.returncode != 0, (
         "a refused manifest entry must fail the command, not pass silently"
     )
-    assert not (generated / "Makefile").exists(), (
-        "the valid entries should still be removed despite the one refusal"
+    assert (generated / "Makefile").exists(), (
+        "stn-jez: '../escape.txt' is also an entry the config does not "
+        "derive, so nothing is removed for the package, Makefile included"
     )
     assert outside.is_file() and outside.read_text() == "do not touch", (
         "the refused '../escape.txt' entry must not have been removed"
@@ -1377,10 +1414,15 @@ def test_a_glob_vocabulary_entry_is_refused_by_name_not_expanded(
     passes it -- the only fix is refusing the pattern itself, by name.
 
     RED today: measured against this branch, all three patterns sweep up
-    `decoy`, a file gen never listed. `Makefile` (an ordinary, legitimately
-    manifested entry) is expected to still be removed even when the
-    vocabulary entry next to it is refused -- per-entry skip, not whole-
-    package refusal, mirroring test_manifest_survives_a_partial_clean.
+    `decoy`, a file gen never listed.
+
+    SUPERSEDED IN PART by stn-jez: none of these three patterns is
+    something the config derives for "demo" either, so the widened-manifest
+    check in `_clean_one_directory` now refuses the whole group before
+    `_remove_entries` (and its own `check_glob_vocabulary` call) ever runs
+    -- doubly guarded rather than differently guarded. `Makefile`, an
+    ordinary legitimately manifested entry, therefore now survives
+    alongside `decoy` rather than still being removed next to the refusal.
     """
     config = {
         "output_dir": "out",
@@ -1411,9 +1453,9 @@ def test_a_glob_vocabulary_entry_is_refused_by_name_not_expanded(
         f"{pattern!r} swept up {decoy}, a file gen never listed -- exactly "
         f"the shape that would delete an author's own docs"
     )
-    assert not (generated / "Makefile").exists(), (
-        "Makefile is a legitimately manifested entry and should still have "
-        "been removed despite the vocabulary entry's refusal"
+    assert (generated / "Makefile").exists(), (
+        "stn-jez: nothing is removed for a package whose manifest widens "
+        "what the config authorises, Makefile included"
     )
 
 
@@ -1462,6 +1504,12 @@ def test_a_manifest_entry_that_is_absolute_is_refused_by_name(tmp_path, generate
     operator discards the left side when the right side is absolute -- so an
     absolute manifest entry is followed and its target is unlinked, exactly
     like stn-7t9's arrangement but with no symlink needed at all.
+
+    SUPERSEDED IN PART by stn-jez: an absolute path is also never something
+    the config derives, so the widened-manifest check refuses the whole
+    group before `_remove_entries` gets a chance to run its own check --
+    Makefile now survives alongside the victim rather than being removed
+    next to the refusal.
     """
     config = {
         "output_dir": "out",
@@ -1488,8 +1536,9 @@ def test_a_manifest_entry_that_is_absolute_is_refused_by_name(tmp_path, generate
     assert bad_entry in (result.stdout + result.stderr), (
         f"the absolute entry should be named in the refusal: {result.stderr!r}"
     )
-    assert not (generated / "Makefile").exists(), (
-        "the legitimate Makefile entry should still have been removed"
+    assert (generated / "Makefile").exists(), (
+        "stn-jez: nothing is removed for a package whose manifest widens "
+        "what the config authorises, Makefile included"
     )
 
 
@@ -1500,6 +1549,11 @@ def test_a_manifest_entry_that_escapes_with_dotdot_is_refused_by_name(
     test pins survival and the non-zero exit; this one additionally asserts
     the offending entry is named in the refusal, which is the "BY NAME" half
     of the requirement.
+
+    SUPERSEDED IN PART by stn-jez: a '..'-escaping entry is also never
+    something the config derives, so the widened-manifest check refuses the
+    whole group before `_remove_entries` runs its own check -- Makefile now
+    survives too.
     """
     config = {
         "output_dir": "out",
@@ -1524,7 +1578,10 @@ def test_a_manifest_entry_that_escapes_with_dotdot_is_refused_by_name(
     assert bad_entry in (result.stdout + result.stderr), (
         f"the escaping entry should be named in the refusal: {result.stderr!r}"
     )
-    assert not (generated / "Makefile").exists()
+    assert (generated / "Makefile").exists(), (
+        "stn-jez: nothing is removed for a package whose manifest widens "
+        "what the config authorises, Makefile included"
+    )
 
 
 def test_a_manifest_entry_that_is_tilde_prefixed_is_refused_by_name(
@@ -1536,6 +1593,11 @@ def test_a_manifest_entry_that_is_tilde_prefixed_is_refused_by_name(
     file, and the command exits 0 as if nothing were wrong. `clean` must
     refuse it by name and fail, the same way `check_config_path` already
     refuses it for `docs`, `slides`, `dir`, `dest` and `brand`.
+
+    SUPERSEDED IN PART by stn-jez: a '~'-prefixed entry is also never
+    something the config derives, so the widened-manifest check refuses the
+    whole group before `_remove_entries` runs its own check -- Makefile now
+    survives too.
     """
     config = {
         "output_dir": "out",
@@ -1556,7 +1618,10 @@ def test_a_manifest_entry_that_is_tilde_prefixed_is_refused_by_name(
     assert bad_entry in (result.stdout + result.stderr), (
         f"the '~'-prefixed entry should be named in the refusal: {result.stderr!r}"
     )
-    assert not (generated / "Makefile").exists()
+    assert (generated / "Makefile").exists(), (
+        "stn-jez: nothing is removed for a package whose manifest widens "
+        "what the config authorises, Makefile included"
+    )
 
 
 def test_a_manifest_entry_with_a_control_character_is_refused_by_name(
@@ -1568,6 +1633,11 @@ def test_a_manifest_entry_with_a_control_character_is_refused_by_name(
     already pins (that test is about a package ID, not a manifest entry).
     The raw escape must not reach the terminal either, mirroring that test's
     own assertion.
+
+    SUPERSEDED IN PART by stn-jez: an entry with a control character is
+    also never something the config derives, so the widened-manifest check
+    refuses the whole group before `_remove_entries` runs its own check --
+    Makefile now survives too.
     """
     config = {
         "output_dir": "out",
@@ -1590,7 +1660,10 @@ def test_a_manifest_entry_with_a_control_character_is_refused_by_name(
     assert esc not in combined, (
         "a control character in a manifest entry reached the terminal raw"
     )
-    assert not (generated / "Makefile").exists()
+    assert (generated / "Makefile").exists(), (
+        "stn-jez: nothing is removed for a package whose manifest widens "
+        "what the config authorises, Makefile included"
+    )
 
 
 def test_a_manifest_entry_with_a_shell_metacharacter_is_refused_by_name(
@@ -1601,6 +1674,11 @@ def test_a_manifest_entry_with_a_shell_metacharacter_is_refused_by_name(
     that literal name is removed with no refusal at all, exactly the
     "filenames, not commands" hole `check_config_path` closes everywhere
     else a configured path reaches a Make recipe.
+
+    SUPERSEDED IN PART by stn-jez: a shell-metacharacter entry is also
+    never something the config derives, so the widened-manifest check
+    refuses the whole group before `_remove_entries` runs its own check --
+    Makefile now survives too.
     """
     config = {
         "output_dir": "out",
@@ -1627,7 +1705,10 @@ def test_a_manifest_entry_with_a_shell_metacharacter_is_refused_by_name(
     assert bad_entry in (result.stdout + result.stderr), (
         f"the entry should be named in the refusal: {result.stderr!r}"
     )
-    assert not (generated / "Makefile").exists()
+    assert (generated / "Makefile").exists(), (
+        "stn-jez: nothing is removed for a package whose manifest widens "
+        "what the config authorises, Makefile included"
+    )
 
 
 # --- a glob whose expansion lands outside the package is refused -----------
@@ -1641,6 +1722,11 @@ def test_a_glob_entry_whose_expansion_resolves_outside_the_package_is_refused(
     'linked/*.txt' globs against whatever `linked` actually points to. The
     entry never needed to itself be absolute or '..'-escaping -- only one
     path SEGMENT of it needs to be a symlink leaving the package.
+
+    SUPERSEDED IN PART by stn-jez: 'linked/*.txt' is also never something
+    the config derives, so the widened-manifest check refuses the whole
+    group before `_remove_entries` runs its own check -- Makefile now
+    survives too.
     """
     config = {
         "output_dir": "out",
@@ -1667,7 +1753,10 @@ def test_a_glob_entry_whose_expansion_resolves_outside_the_package_is_refused(
         "a glob entry must never be allowed to expand outside the package, "
         "even via a symlinked subdirectory inside it"
     )
-    assert not (generated / "Makefile").exists()
+    assert (generated / "Makefile").exists(), (
+        "stn-jez: nothing is removed for a package whose manifest widens "
+        "what the config authorises, Makefile included"
+    )
 
 
 # --- RESOLVED vs UNRESOLVED (architecture T1) -------------------------------
@@ -1900,6 +1989,7 @@ def test_sweep_never_rmdirs_a_directory_outside_the_package_tree(
             json.dumps(
                 {
                     "manifest_version": 1,
+                    "stencil_version": "0.1.0",
                     "package": "demo",
                     "dir": "demo",
                     "entries": [1, 2, 3],
@@ -1912,6 +2002,7 @@ def test_sweep_never_rmdirs_a_directory_outside_the_package_tree(
             json.dumps(
                 {
                     "manifest_version": 999,
+                    "stencil_version": "0.1.0",
                     "package": "demo",
                     "dir": "demo",
                     "entries": ["Makefile"],
@@ -1921,20 +2012,105 @@ def test_sweep_never_rmdirs_a_directory_outside_the_package_tree(
             id="unknown-manifest-version",
         ),
         pytest.param(
-            '{"manifest_version": 1, "package": "demo", "dir": "demo", '
+            '{"manifest_version": 1, "stencil_version": "0.1.0", '
+            '"package": "demo", "dir": "demo", '
             '"entries": ["safe"], "entries": ["Makefile"]}',
             "duplicate",
             id="duplicate-entries-key",
+        ),
+        # --- stn-jez: a manifest missing (or lying about the type of) a
+        # field write_manifest has always emitted, checked LAST inside
+        # read_manifest -- below manifest_version and entries, which is why
+        # the two fixtures just above still have to carry stencil_version.
+        pytest.param(
+            json.dumps(
+                {
+                    "manifest_version": 1,
+                    "stencil_version": "0.1.0",
+                    "dir": "demo",
+                    "entries": ["Makefile"],
+                }
+            ),
+            '"package"',
+            id="stn-jez-package-missing",
+        ),
+        pytest.param(
+            json.dumps(
+                {
+                    "manifest_version": 1,
+                    "stencil_version": "0.1.0",
+                    "package": "demo",
+                    "entries": ["Makefile"],
+                }
+            ),
+            '"dir"',
+            id="stn-jez-dir-missing",
+        ),
+        pytest.param(
+            json.dumps(
+                {
+                    "manifest_version": 1,
+                    "package": "demo",
+                    "dir": "demo",
+                    "entries": ["Makefile"],
+                }
+            ),
+            '"stencil_version"',
+            id="stn-jez-stencil_version-missing",
+        ),
+        pytest.param(
+            json.dumps(
+                {
+                    "manifest_version": 1,
+                    "stencil_version": "0.1.0",
+                    "package": 42,
+                    "dir": "demo",
+                    "entries": ["Makefile"],
+                }
+            ),
+            '"package"',
+            id="stn-jez-package-not-a-string",
+        ),
+        pytest.param(
+            json.dumps(
+                {
+                    "manifest_version": 1,
+                    "stencil_version": "0.1.0",
+                    "package": "demo",
+                    "dir": 42,
+                    "entries": ["Makefile"],
+                }
+            ),
+            '"dir"',
+            id="stn-jez-dir-not-a-string",
+        ),
+        pytest.param(
+            json.dumps(
+                {
+                    "manifest_version": 1,
+                    "stencil_version": 42,
+                    "package": "demo",
+                    "dir": "demo",
+                    "entries": ["Makefile"],
+                }
+            ),
+            '"stencil_version"',
+            id="stn-jez-stencil_version-not-a-string",
         ),
     ],
 )
 def test_a_malformed_manifest_is_refused_by_name_nothing_removed(
     tmp_path, generate_package, raw_content, match
 ):
-    """GREEN already: stn-2x4.4's `read_manifest` already raises
-    `ManifestError` for each of these, and `_clean_one_directory` already
-    treats that as a whole-package refusal rather than falling back to the
-    config.
+    """The first four cases are GREEN already: stn-2x4.4's `read_manifest`
+    already raises `ManifestError` for each of them, and `_clean_one_directory`
+    already treats that as a whole-package refusal rather than falling back
+    to the config. The six `stn-jez-*` cases are RED until `read_manifest`
+    also requires `package`, `dir` and `stencil_version` -- the three fields
+    `write_manifest` has always emitted but that were previously read
+    permissively, which is what let a manifest missing `package` entirely
+    slip past `_clean_one_directory`'s ownership guard (see that function's
+    docstring).
     """
     config = {
         "output_dir": "out",
@@ -1954,6 +2130,65 @@ def test_a_malformed_manifest_is_refused_by_name_nothing_removed(
     assert manifest_path.exists(), "the damaged manifest itself must survive too"
 
 
+def _complete_manifest_document(**overrides) -> dict:
+    """A manifest write_manifest could plausibly have written, so each
+    direct `read_manifest` test below breaks exactly one field."""
+    document = {
+        "manifest_version": MANIFEST_VERSION,
+        "stencil_version": "0.1.0",
+        "package": "demo",
+        "dir": "demo",
+        "entries": ["Makefile"],
+    }
+    document.update(overrides)
+    return document
+
+
+@pytest.mark.parametrize(
+    "key",
+    ["package", "dir", "stencil_version"],
+)
+def test_read_manifest_refuses_a_missing_writer_field_directly(tmp_path, key):
+    """DIRECT call, test_config_fail_closed.py's convention for a function
+    that raises on its own: `read_manifest` requires `package`, `dir` and
+    `stencil_version` (write_manifest has emitted all three since manifest
+    v1 -- verified: `git show 1e25490`), and a manifest missing one entirely
+    must raise `ManifestError` naming that field, not silently read as if
+    the field were merely absent from the diagnostic context."""
+    document = _complete_manifest_document()
+    del document[key]
+    manifest_path = tmp_path / MANIFEST_NAME
+    manifest_path.write_text(json.dumps(document))
+
+    with pytest.raises(ManifestError, match=f'"{key}"'):
+        read_manifest(manifest_path)
+
+
+@pytest.mark.parametrize(
+    "key",
+    ["package", "dir", "stencil_version"],
+)
+def test_read_manifest_refuses_a_non_string_writer_field_directly(tmp_path, key):
+    """Same field, the other malformed shape: present but not a string."""
+    document = _complete_manifest_document(**{key: 42})
+    manifest_path = tmp_path / MANIFEST_NAME
+    manifest_path.write_text(json.dumps(document))
+
+    with pytest.raises(ManifestError, match=f'"{key}"'):
+        read_manifest(manifest_path)
+
+
+def test_read_manifest_still_reads_a_complete_manifest_directly(tmp_path):
+    """The control: a manifest carrying every field write_manifest has
+    always emitted, correctly typed, still reads -- the required-field
+    checks refuse an absence, never a presence."""
+    document = _complete_manifest_document()
+    manifest_path = tmp_path / MANIFEST_NAME
+    manifest_path.write_text(json.dumps(document))
+
+    assert read_manifest(manifest_path) == document
+
+
 def test_an_oversized_manifest_is_refused_by_name_nothing_removed(
     tmp_path, generate_package
 ):
@@ -1971,6 +2206,7 @@ def test_an_oversized_manifest_is_refused_by_name_nothing_removed(
         json.dumps(
             {
                 "manifest_version": 1,
+                "stencil_version": "0.1.0",
                 "package": "demo",
                 "dir": "demo",
                 "entries": huge_entries,
@@ -2131,9 +2367,12 @@ def test_a_question_mark_glob_entry_does_not_sweep_the_authors_own_files(
     removed every file in the package -- the author's own `thesis.md`,
     `research.bib` and `sub/keep.md` included -- and exited 0.
 
-    The legitimately manifested `Makefile` must still be removed: a refused
-    entry is a per-entry skip, not a whole-package refusal (the shape
-    `test_manifest_survives_a_partial_clean` already pins).
+    SUPERSEDED IN PART by stn-jez: '?*' and 'sub/?*' are also never
+    something the config derives, so the widened-manifest check now refuses
+    the whole group before `_remove_entries` (and its own
+    `check_glob_vocabulary` call) ever runs -- `Makefile` now survives
+    alongside the author's own files, rather than still being removed next
+    to the refusal.
     """
     config = {
         "output_dir": "out",
@@ -2166,9 +2405,9 @@ def test_a_question_mark_glob_entry_does_not_sweep_the_authors_own_files(
         assert path.is_file() and path.read_text() == text, (
             f"{path.name} is the author's own file and was swept up by '?*'"
         )
-    assert not (generated / "Makefile").exists(), (
-        "Makefile is a legitimately manifested entry and should still have "
-        "been removed despite the refusal next to it"
+    assert (generated / "Makefile").exists(), (
+        "stn-jez: nothing is removed for a package whose manifest widens "
+        "what the config authorises, Makefile included"
     )
 
 
@@ -2352,22 +2591,36 @@ def test_a_symlinked_intermediate_directory_does_not_traceback_after_deleting(
 
     It also means the sweep's `relative_to`/`is_relative_to` guards were
     lexical tests on an unresolved path rather than containment checks.
+
+    The second template below (`dest: "sub/x.txt"`) is stn-jez's doing: the
+    widened-manifest check refuses any entry the config does not derive, so
+    "sub/x.txt" has to be a real, config-derived destination -- not merely
+    appended to the manifest by hand as this test used to -- or the
+    reproduction below would be refused before it ever reached the sweep
+    this test is actually about.
     """
     config = {
         "output_dir": "out",
-        "templates": [{"src": "Makefile.j2"}],
+        "templates": [
+            {"src": "Makefile.j2"},
+            {"src": "Makefile.j2", "dest": "sub/x.txt"},
+        ],
         "packages": {"demo": {"name": "Demo", "package_type": "none"}},
     }
     generated = generate_package(config)
 
+    # Swap the real "sub" gen just wrote for a symlink pointing at a fresh
+    # "real" directory holding the same relative file, reproducing an
+    # intermediate directory that is a symlink pointing INSIDE the package.
+    # The manifest already names "sub/x.txt" -- write_manifest recorded it
+    # from `package_entries` -- so nothing needs to be added by hand.
+    (generated / "sub" / "x.txt").unlink()
+    (generated / "sub").rmdir()
     (generated / "real").mkdir()
     (generated / "real" / "x.txt").write_text("generated")
     os.symlink("real", generated / "sub")
 
     manifest_path = generated / MANIFEST_NAME
-    manifest = json.loads(manifest_path.read_text())
-    manifest["entries"].append("sub/x.txt")
-    manifest_path.write_text(json.dumps(manifest))
 
     result = run_cli("clean", "demo", cwd=tmp_path)
 
@@ -2388,22 +2641,22 @@ def test_an_entry_that_cannot_be_unlinked_is_a_named_problem_not_a_traceback(
     permission error was a traceback halfway through deleting -- the exact
     shape `_main`'s clean branch says in a comment that it refuses to
     create.
+
+    `dest: "locked/x.txt"` (stn-jez): the widened-manifest check refuses any
+    entry the config does not derive, so the entry under test has to be a
+    real, config-derived destination rather than spliced into the manifest
+    by hand -- otherwise this test would still pass, but for stn-jez's
+    refusal instead of the permission failure it exists to exercise.
     """
     config = {
         "output_dir": "out",
-        "templates": [{"src": "Makefile.j2"}],
+        "templates": [{"src": "Makefile.j2", "dest": "locked/x.txt"}],
         "packages": {"demo": {"name": "Demo", "package_type": "none"}},
     }
     generated = generate_package(config)
 
     locked = generated / "locked"
-    locked.mkdir()
-    (locked / "x.txt").write_text("generated")
-
     manifest_path = generated / MANIFEST_NAME
-    manifest = json.loads(manifest_path.read_text())
-    manifest["entries"] = ["locked/x.txt"]
-    manifest_path.write_text(json.dumps(manifest))
 
     locked.chmod(0o555)
     try:
@@ -2431,21 +2684,20 @@ def test_a_directory_that_cannot_be_rmdired_is_a_named_problem_not_a_traceback(
     """The same guard on the sweep's own `rmdir`: an emptied directory whose
     PARENT is not writable cannot be removed, and that is a named failure,
     never a traceback after the files underneath it are already gone.
+
+    `dest: "sub/x.txt"` (stn-jez): the widened-manifest check refuses any
+    entry the config does not derive, so the entry under test has to be a
+    real, config-derived destination -- otherwise this test would still
+    pass, but for stn-jez's refusal instead of the rmdir failure it exists
+    to exercise.
     """
     config = {
         "output_dir": "out",
-        "templates": [{"src": "Makefile.j2"}],
+        "templates": [{"src": "Makefile.j2", "dest": "sub/x.txt"}],
         "packages": {"demo": {"name": "Demo", "package_type": "none"}},
     }
     generated = generate_package(config)
-
-    (generated / "sub").mkdir()
-    (generated / "sub" / "x.txt").write_text("generated")
-
     manifest_path = generated / MANIFEST_NAME
-    manifest = json.loads(manifest_path.read_text())
-    manifest["entries"] = ["sub/x.txt"]
-    manifest_path.write_text(json.dumps(manifest))
 
     generated.chmod(0o555)
     try:
@@ -2502,4 +2754,150 @@ def test_a_non_mapping_templates_entry_is_a_named_problem_not_a_traceback(tmp_pa
     assert "templates" in result.stderr
     assert not (tmp_path / "out" / "aaa" / "Makefile").exists(), (
         "aaa had a manifest and should still have been cleaned"
+    )
+
+
+# =============================================================================
+# stn-jez (operator ruling): A MANIFEST MAY NARROW WHAT THE CONFIG
+# AUTHORISES, NEVER WIDEN IT.
+#
+# The field-presence fix earlier in this file (the "a manifest stencil did
+# not write" section) stops a MALFORMED manifest, not a FORGED one: every
+# field it requires is free to an attacker -- `stencil_version` is what
+# `stencil version` prints, `package` is a package id read off the config
+# being attacked, `dir` defaults to the package id. A manifest with every
+# field correct and naming the right package can still list an entry the
+# config never derives for it. `_clean_one_directory` now compares the
+# manifest's own entries against `_config_derived_entries` for every package
+# configured with this directory, on the config_readable=True path only, and
+# refuses BY NAME -- removing nothing for the package -- when an entry is
+# not in that authorised set, or when the manifest's own "dir" does not
+# match the package's configured one.
+# =============================================================================
+
+
+def test_a_manifest_entry_the_config_does_not_derive_is_refused_and_nothing_removed(
+    tmp_path, generate_package
+):
+    config = {
+        "output_dir": "out",
+        "templates": [{"src": "Makefile.j2"}],
+        "packages": {"demo": {"name": "Demo", "package_type": "none"}},
+    }
+    generated = generate_package(config)
+    manifest_path = generated / MANIFEST_NAME
+    manifest = json.loads(manifest_path.read_text())
+    manifest["entries"].append(".env")
+    manifest_path.write_text(json.dumps(manifest))
+    (generated / ".env").write_text("SECRET=1\n")
+
+    result = run_cli("clean", "demo", cwd=tmp_path)
+
+    assert result.returncode != 0, (
+        "an entry the config does not derive must be refused, not honoured"
+    )
+    assert "Traceback" not in result.stderr, result.stderr
+    combined = result.stdout + result.stderr
+    assert ".env" in combined, f"the widened entry should be named: {combined!r}"
+    assert (generated / ".env").exists(), "a widened entry must not be removed"
+    assert (generated / "Makefile").exists(), (
+        "nothing should be removed for a package whose manifest widens"
+    )
+    assert manifest_path.exists(), "the manifest survives a refusal"
+
+
+def test_a_manifest_whose_dir_does_not_match_the_configured_one_is_refused(
+    tmp_path, generate_package
+):
+    config = {
+        "output_dir": "out",
+        "templates": [{"src": "Makefile.j2"}],
+        "packages": {"demo": {"name": "Demo", "package_type": "none"}},
+    }
+    generated = generate_package(config)
+    manifest_path = generated / MANIFEST_NAME
+    manifest = json.loads(manifest_path.read_text())
+    manifest["dir"] = "somewhere-else"
+    manifest_path.write_text(json.dumps(manifest))
+
+    result = run_cli("clean", "demo", cwd=tmp_path)
+
+    assert result.returncode != 0, (
+        "a manifest whose 'dir' does not match the package's configured "
+        "one must be refused"
+    )
+    assert "Traceback" not in result.stderr, result.stderr
+    combined = result.stdout + result.stderr
+    assert '"dir"' in combined, f"the dir mismatch should be named: {combined!r}"
+    assert (generated / "Makefile").exists(), (
+        "nothing should be removed for a package whose manifest's dir "
+        "does not match"
+    )
+    assert manifest_path.exists(), "the manifest survives a refusal"
+
+
+def test_a_manifest_naming_a_strict_subset_of_the_configs_entries_still_cleans(
+    tmp_path, generate_package
+):
+    """The narrowing half of the invariant: fewer entries than the config
+    would derive is the NORMAL case (a doc dropped mid-package, say) and
+    must keep working exactly as it always has -- only WIDENING is new."""
+    config = {
+        "output_dir": "out",
+        "templates": MAKEFILE_TEMPLATES,
+        "packages": {"demo": {"name": "Demo", "package_type": "none"}},
+    }
+    generated = generate_package(config)
+    manifest_path = generated / MANIFEST_NAME
+    manifest = json.loads(manifest_path.read_text())
+    manifest["entries"] = ["Makefile"]
+    manifest_path.write_text(json.dumps(manifest))
+
+    result = run_cli("clean", "demo", cwd=tmp_path)
+
+    assert result.returncode == 0, result.stderr
+    assert not (generated / "Makefile").exists()
+    assert (generated / "docker-compose.yml").exists(), (
+        "narrowing removes only what the manifest names, not a "
+        "config-derived superset"
+    )
+
+
+def test_a_forged_manifest_is_honoured_in_degraded_mode_because_nothing_else_can_name_the_files(
+    tmp_path,
+):
+    """DOCUMENTED LIMIT, not a defect (operator: "a limit with no fix is
+    documentation"). When the config cannot be read at all, the manifest is
+    the ONLY thing that can name what a package's directory holds -- the
+    same trade stn-p9a documents for the degraded path generally. A forged
+    entry the widening check above would otherwise refuse survives here,
+    because on this path there is nothing to check it against.
+    """
+    initially_fine = copy.deepcopy(GOOD_AND_BROKEN_CONFIG)
+    del initially_fine["packages"]["broken"]["show_download"]
+    write_config(tmp_path, initially_fine)
+    setup = run_cli("gen", "good", cwd=tmp_path)
+    assert setup.returncode == 0, setup.stderr
+
+    manifest_path = tmp_path / "good" / MANIFEST_NAME
+    manifest = json.loads(manifest_path.read_text())
+    manifest["entries"].append(".env")
+    manifest_path.write_text(json.dumps(manifest))
+    (tmp_path / "good" / ".env").write_text("SECRET=1\n")
+
+    # Now break the sibling package so the WHOLE config fails to parse --
+    # clean_generated's config_readable becomes False for every package in
+    # scope, "good" included, even though "good" is not what is broken.
+    write_config(tmp_path, GOOD_AND_BROKEN_CONFIG)
+
+    result = run_cli("clean", "good", cwd=tmp_path)
+
+    assert result.returncode == 0, (
+        f"good has its own manifest; the degraded path must still succeed "
+        f"for it: {result.stderr}"
+    )
+    assert not (tmp_path / "good" / ".env").exists(), (
+        "documented limit: with the config unreadable, the manifest is the "
+        "sole authority and a forged entry is removed along with "
+        "everything else -- this is the trade, not a bug"
     )
