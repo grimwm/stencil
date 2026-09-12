@@ -2488,3 +2488,220 @@ def test_the_package_directorys_own_name_is_followed_and_that_is_the_second_resi
         "package directory's own name is meant to be followed here"
     )
     assert not (output_base / "demo").is_dir() or (output_base / "demo").is_symlink()
+
+
+# --- stn-bux: a make file of higher precedence beside the generated one ----
+#
+# GNU Make prefers GNUmakefile, then makefile, then Makefile (in that exact
+# order) when no makefile is named on the command line. A GNUmakefile
+# planted beside a generated Makefile REPLACES it entirely for every `make`
+# invocation that follows, silently -- measured, on the architecture
+# review's reproduction: `make format-md` printed `SHADOW-WINS uid=501`
+# with the generated Makefile untouched and unread on disk. Nothing inside
+# the generated Makefile's own contents can defend against this, because
+# `make` never opens it, so the mitigation is a refusal at `gen` time.
+
+
+def _is_case_insensitive_fs(directory: Path) -> bool:
+    """Detect rather than assume (stn-6mcb.4's amendment): write a name and
+    ask the filesystem about its upper-cased spelling. True on this
+    checkout's macOS APFS volume and expected on Windows; False on ext4 and
+    most Linux CI, which is exactly why this is a runtime probe and not a
+    `sys.platform` guard -- `sys.platform` cannot see a case-sensitive
+    volume mounted on a Mac, or the reverse."""
+    probe = directory / "stn-bux-case-probe.txt"
+    probe.write_text("x")
+    return probe.with_name(probe.name.upper()).exists()
+
+
+def test_gen_refuses_a_gnumakefile_of_higher_precedence(tmp_path):
+    """The reproduction itself. `GNUmakefile` is the highest name in make's
+    own precedence and coexists with `Makefile` as a distinct directory
+    entry on every filesystem, case-sensitive or not (measured: `listdir`
+    shows both), so this test needs no skip anywhere."""
+    config_dir, package_dir, _target = _planted_package(tmp_path)
+    (package_dir / "GNUmakefile").write_text("SHADOW\n")
+
+    result = run_cli("gen", "demo", cwd=config_dir)
+
+    assert result.returncode != 0, (
+        f"rc={result.returncode}, stdout={result.stdout[:400]!r}"
+    )
+    assert "Traceback" not in result.stderr, result.stderr
+    assert "GNUmakefile" in result.stderr, result.stderr
+
+
+def test_the_refusal_happens_before_anything_is_written_on_a_fresh_output_directory(
+    tmp_path,
+):
+    """The stn-h5q guarantee extended to this refusal: a fresh package
+    directory -- gen has never succeeded here -- must come out of a refused
+    run holding exactly what was planted, nothing more. Without this, `gen`
+    could refuse the Makefile it is not allowed to write while still
+    rendering the other templates and the manifest around it -- a
+    half-generated package that looks generated."""
+    config_dir, package_dir, _target = _planted_package(
+        tmp_path,
+        templates=[
+            {"src": "Makefile.j2"},
+            {"src": "docker-compose.yml.j2"},
+        ],
+    )
+    (package_dir / "GNUmakefile").write_text("SHADOW\n")
+    before = sorted(p.name for p in package_dir.iterdir())
+
+    result = run_cli("gen", "demo", cwd=config_dir)
+
+    assert result.returncode != 0, (
+        f"rc={result.returncode}, stdout={result.stdout[:400]!r}"
+    )
+    after = sorted(p.name for p in package_dir.iterdir())
+    assert after == before, (
+        f"a refused run changed the package directory: before={before}, "
+        f"after={after}"
+    )
+
+
+def test_a_config_declaring_dest_gnumakefile_is_not_refused_by_its_own_output(
+    tmp_path,
+):
+    """GENERALISED, not hardcoded to `Makefile`: a consumer that declares
+    `dest: GNUmakefile` writes the HIGHEST-precedence name there is, so
+    nothing can ever shadow it and regenerating over its own prior output
+    must not be refused by that very output."""
+    write_config(
+        tmp_path,
+        {
+            "output_dir": "out",
+            "templates": [{"src": "Makefile.j2", "dest": "GNUmakefile"}],
+            "packages": {"demo": {"name": "Demo", "package_type": "none"}},
+        },
+    )
+
+    first = run_cli("gen", "demo", cwd=tmp_path)
+    assert first.returncode == 0, first.stderr
+    assert (tmp_path / "out" / "demo" / "GNUmakefile").exists()
+
+    second = run_cli("gen", "demo", cwd=tmp_path)
+    assert second.returncode == 0, (
+        "a package's own previously-generated GNUmakefile must not shadow "
+        f"itself on regeneration: {second.stderr!r}"
+    )
+
+
+def test_a_package_that_writes_no_makefile_is_not_refused_by_a_gnumakefile(
+    tmp_path,
+):
+    """A GNUmakefile beside a package that never writes any make-file name
+    at all is none of this check's business -- there is nothing here for
+    `make` to run instead of, so nothing is shadowed."""
+    config_dir, package_dir, _target = _planted_package(
+        tmp_path, templates=[{"src": "docker-compose.yml.j2"}]
+    )
+    (package_dir / "GNUmakefile").write_text("unrelated\n")
+
+    result = run_cli("gen", "demo", cwd=config_dir)
+
+    assert result.returncode == 0, result.stderr
+    assert (package_dir / "docker-compose.yml").exists()
+
+
+def test_gen_refuses_a_lowercase_makefile_of_higher_precedence(tmp_path):
+    """`makefile` (all-lowercase) sits between `GNUmakefile` and `Makefile`
+    in make's precedence, so it shadows a generated `Makefile` exactly the
+    way `GNUmakefile` does.
+
+    THIS TEST CANNOT BE CONSTRUCTED on a case-insensitive filesystem
+    (stn-6mcb.4's amendment): `makefile` and `Makefile` are ONE directory
+    entry there -- measured, writing `makefile` beside an existing
+    `Makefile` overwrites it in place and `os.listdir` still shows one
+    name. The fixture would silently collapse into the same-inode case
+    covered separately below, so this skips with the reason rather than
+    asserting on a setup that is not what it claims to be."""
+    config_dir, package_dir, _target = _planted_package(tmp_path)
+    if _is_case_insensitive_fs(package_dir):
+        pytest.skip(
+            "case-insensitive filesystem: 'makefile' and 'Makefile' are "
+            "one directory entry here, so this fixture cannot be built "
+            "(stn-6mcb.4 amendment)"
+        )
+    (package_dir / "makefile").write_text("SHADOW\n")
+
+    result = run_cli("gen", "demo", cwd=config_dir)
+
+    assert result.returncode != 0, (
+        f"rc={result.returncode}, stdout={result.stdout[:400]!r}"
+    )
+    assert "Traceback" not in result.stderr, result.stderr
+    assert "makefile" in result.stderr, result.stderr
+
+
+def test_a_same_inode_makefile_entry_does_not_false_refuse(tmp_path):
+    """The amendment's central point: on a case-insensitive filesystem the
+    directory entry for the file this call is about to write as `Makefile`
+    can be STORED as `makefile` -- one inode, one entry, either case reads
+    it back. That is a higher-precedence NAME in the listing that is in
+    fact stencil's own file, and refusing it would break regeneration for
+    every package on such a filesystem.
+
+    Skips on a case-sensitive filesystem, where renaming `Makefile` to
+    `makefile` leaves a GENUINE second name with nothing at `Makefile`
+    beneath it -- a real shadow, not the false positive this test is
+    about."""
+    config_dir, package_dir, _target = _planted_package(tmp_path)
+    if not _is_case_insensitive_fs(package_dir):
+        pytest.skip(
+            "requires a case-insensitive filesystem, where 'makefile' and "
+            "'Makefile' collapse to one directory entry (stn-6mcb.4 "
+            "amendment); on a case-sensitive one this setup is a genuine "
+            "shadow rather than the false positive under test"
+        )
+
+    first = run_cli("gen", "demo", cwd=config_dir)
+    assert first.returncode == 0, first.stderr
+
+    # Case-only rename: still one inode, now stored lower-case -- measured
+    # with os.path.samefile() returning True for this exact pair.
+    os.rename(package_dir / "Makefile", package_dir / "makefile")
+    entries = os.listdir(package_dir)
+    assert "makefile" in entries and "Makefile" not in entries, (
+        f"test setup: {entries}"
+    )
+
+    second = run_cli("gen", "demo", cwd=config_dir)
+    assert second.returncode == 0, (
+        "regenerating over its own file, spelled in a different case, "
+        f"must not be refused: {second.stderr!r}"
+    )
+
+
+def test_gen_dry_run_refuses_a_gnumakefile_of_higher_precedence(tmp_path):
+    """`--dry-run` runs the same pre-pass and nothing else (stn-h5q), so a
+    preview must report the same refusal a real run would rather than
+    printing a `Would write: out/demo/Makefile` line for a write `gen`
+    could never actually make."""
+    config_dir, package_dir, _target = _planted_package(tmp_path)
+    (package_dir / "GNUmakefile").write_text("SHADOW\n")
+
+    result = run_cli("gen", "demo", "--dry-run", cwd=config_dir)
+
+    assert result.returncode != 0, (
+        f"rc={result.returncode}, stdout={result.stdout[:400]!r}"
+    )
+    assert "GNUmakefile" in result.stderr, result.stderr
+    assert not (package_dir / "Makefile").exists()
+
+
+def test_an_ordinary_package_with_only_the_generated_makefile_still_generates(
+    tmp_path,
+):
+    """The regression guard: an ORDINARY package that writes only `Makefile`
+    and nothing of higher precedence must keep generating, on this
+    checkout's case-insensitive filesystem included -- the same platform
+    the same-inode guard above exists for."""
+    config_dir, package_dir, _target = _planted_package(tmp_path)
+
+    result = run_cli("gen", "demo", cwd=config_dir)
+
+    assert result.returncode == 0, result.stderr
+    assert (package_dir / "Makefile").exists()

@@ -2507,6 +2507,115 @@ def walk_dir_fd(base_fd: int, relative: str) -> tuple[int, str]:
             os.close(pending_fd)
 
 
+# stn-bux: GNU Make's own name precedence, applied before `gen` writes.
+#
+# GNU Make prefers GNUmakefile, then makefile, then Makefile (in that exact
+# order) when nothing is named on the command line. A GNUmakefile planted
+# beside a generated Makefile therefore REPLACES it entirely for every
+# `make` that follows -- measured, the architecture review's reproduction:
+# `make format-md` printed `SHADOW-WINS uid=501` with the generated
+# Makefile untouched and unread on disk. Nothing inside the generated
+# Makefile's own contents can defend against this, since `make` never opens
+# it, so the mitigation has to be a refusal at `gen` time -- the operator's
+# chosen outcome, not a hardening of the Makefile itself.
+_MAKE_PRECEDENCE = ("GNUmakefile", "makefile", "Makefile")
+
+
+def refuse_shadowed_makefile(
+    package_id: str, pkg_path: Path, targets: list[tuple[str, str]]
+) -> None:
+    """Refuse when `pkg_path` already holds a make-file name STRICTLY
+    HIGHER in `_MAKE_PRECEDENCE` than the one `targets` is about to write,
+    and that this call is not itself writing.
+
+    GENERALISED rather than hardcoded to `Makefile`: `targets` is
+    `write_targets`'s return value, so it says exactly what THIS call is
+    about to write. A consumer declaring `dest: GNUmakefile` writes the
+    highest name in the precedence, so there is nothing above it to be
+    shadowed by, and this refuses nothing for that package's own output.
+    Only the TOP-LEVEL component of each destination is considered -- a
+    nested `dest: sub/Makefile` is not a name `make` reads from the
+    package directory itself, the same restriction `write_targets`'
+    docstring already states for `where`.
+
+    THE LISTING, NEVER A PROBE -- measured, this is not a style choice.
+    `(pkg_path / 'makefile').exists()` answers True whenever `Makefile`
+    exists, on this checkout's case-insensitive macOS APFS volume (and on
+    Windows): a probe-based check would refuse EVERY package there.
+    `os.listdir` returns the STORED directory-entry name, which is the one
+    thing that can tell "Makefile is here" from "makefile is here" apart.
+    It is also, independently, the exact rule `make` itself applies rather
+    than a workaround for `exists()`'s blind spot: measured on this same
+    case-insensitive checkout, GNU Make 3.81 ran `Makefile` even though
+    `test -f GNUmakefile` answered YES with only `gnumakefile` (all
+    lowercase) on disk. Make compares directory-entry names EXACTLY, so
+    reading the listing is doing what make does, not compensating for it.
+
+    THE SAME-INODE GUARD is what keeps that listing check from refusing
+    ordinary regeneration on that same filesystem. `makefile` and
+    `Makefile` are ONE directory entry there -- measured: writing
+    `Makefile` and then `makefile` leaves `os.listdir` reporting a single
+    name holding `makefile`'s content, one inode, `os.path.samefile()` True
+    for the pair. So a directory whose stored entry happens to be
+    `makefile` while this call is about to write `Makefile` presents what
+    LOOKS LIKE a higher-precedence name in the listing and is in fact
+    stencil's own file under its other spelling. `os.path.samefile` against
+    the name this call writes is what tells a genuine GNUmakefile (a
+    different inode, measured `samefile() == False`) from that false
+    positive apart.
+    """
+    own_names = {
+        Path(relative).parts[0]
+        for _where, relative in targets
+        if Path(relative).parts and Path(relative).parts[0] in _MAKE_PRECEDENCE
+    }
+    if not own_names:
+        # Nothing this call writes has a name make's precedence cares
+        # about at all -- a GNUmakefile sitting beside such a package
+        # shadows nothing of this call's making.
+        return
+    own_name = min(own_names, key=_MAKE_PRECEDENCE.index)
+    higher = _MAKE_PRECEDENCE[: _MAKE_PRECEDENCE.index(own_name)]
+    if not higher:
+        # own_name is already GNUmakefile, the highest precedence there
+        # is -- nothing can shadow it.
+        return
+    try:
+        entries = os.listdir(pkg_path)
+    except FileNotFoundError:
+        # A fresh package directory that does not exist yet: nothing is
+        # planted there for gen to be shadowed by, same reasoning
+        # checked_write_target's own lstat pre-pass uses.
+        entries = []
+    for entry in entries:
+        if entry not in higher:
+            continue
+        try:
+            if os.path.samefile(pkg_path / entry, pkg_path / own_name):
+                # The same-inode case above: this IS the file this call
+                # is about to write, stored under a different-precedence
+                # spelling. Not a shadow.
+                continue
+        except OSError:
+            pass
+        # THE MESSAGE: names the file, says what `make` would run
+        # instead, and says what stops happening -- "delete or rename it"
+        # alone was ruled insufficient by the architecture review, because
+        # a GNUmakefile that `include`s the generated Makefile to add
+        # local targets is a real pattern this refusal does not
+        # distinguish from an attacker's plant; the reader needs to know
+        # the cost of leaving it in place, not only a way to clear it.
+        # THE PATH GOES LAST, `_safe`'s discipline: it is the part most
+        # likely to be pushed off the end by _MAX_PROBLEM_CHARS, and it is
+        # the part the reader can most easily reconstruct themselves.
+        raise ValueError(
+            f"Package {package_id}: {entry!r} outranks the {own_name!r} "
+            "this writes in make's name precedence, so `make` here would "
+            "run it instead. Nothing in this package is refreshed until it "
+            f"is removed or renamed: {pkg_path / entry}"
+        )
+
+
 def checked_write_target(
     package_id: str, where: str, root: Path, pkg_path: Path, relative: str
 ) -> Path:
@@ -2961,10 +3070,19 @@ def generate_package(
     # same reason; nothing else about the order changes.
     config_templates = list(config.get("templates", []))
     template_defs = injected_templates(context) + config_templates
-    for where, relative in write_targets(context, template_defs):
+    targets = write_targets(context, template_defs)
+    for where, relative in targets:
         checked_write_target(
             package_id, where, output_base, pkg_resolved, relative
         )
+
+    # stn-bux: beside the loop above, for the same reason -- so a refusal
+    # here leaves a fresh package directory untouched too. Runs under
+    # `--dry-run` exactly like the loop above does: this whole pre-pass sits
+    # above every branch that reads `dry_run`, so a preview reports the
+    # same refusal a real run would rather than promising a write `gen`
+    # could never actually make.
+    refuse_shadowed_makefile(package_id, pkg_resolved, targets)
 
     existed_before = output_dir.exists()
     if not existed_before and dry_run:
