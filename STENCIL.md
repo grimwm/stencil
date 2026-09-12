@@ -310,6 +310,42 @@ convention rather than stencil's.
 | `clean`        | Remove generated files                                                                                            |
 | `clean-pkg`    | Remove package-specific generated files                                                                           |
 
+### Compose File Pinning
+
+Every target above that drives compose does so through two Make variables: `DC ?= docker compose` names the implementation (override to `DC="podman compose"`, unchanged from before),
+and `COMPOSE_FILES ?= docker-compose.yml` names the file(s) that implementation is pinned to.
+Because of the pin, a `docker-compose.override.yml` sitting in the package directory next to the
+markdown — or a `.env` setting `COMPOSE_FILE` — is **ignored**, not auto-discovered and merged
+the way plain `docker compose` would. To merge one back in, name it explicitly:
+
+```
+make doc COMPOSE_FILES="docker-compose.yml docker-compose.override.yml"
+```
+
+- **Bare paths, not flags.** `COMPOSE_FILES` is a space-separated list of compose files, not a
+  string of compose arguments — the Makefile adds each file's `-f` itself. Writing
+  `COMPOSE_FILES="-f docker-compose.yml"` fails, and loudly: `-f` is a word like any other, so
+  it gets a `-f` of its own and compose is handed `-f -f -f docker-compose.yml`, which ends in
+  `open .../-f: no such file or directory`.
+- **Order matters, and `docker-compose.yml` stays first.** With more than one `-f`, compose
+  takes the *first* file's directory as the project directory — the value that becomes both the
+  compose project name and the base every relative volume source in the file resolves against.
+  Naming an override first would change both of those for a package whose own files never moved.
+- **If you rename the compose template's `dest:`, rename `COMPOSE_FILES` to match.** A `.config.yaml`
+  can render `docker-compose.yml.j2` under another name (see `dest:` under
+  [Configuration](#configuration)) — say, `compose.yaml`, which works today purely because
+  plain compose auto-discovers it. Under the pin it does not: compose looks for the literal
+  name(s) in `COMPOSE_FILES` and refuses with `no configuration file provided` if the rendered
+  file isn't among them. That is the fix working as intended — a silently-broken build becomes
+  a loud one.
+- **No spaces in a `COMPOSE_FILES` entry on Windows.** The generated Makefile's Windows pull
+  guard embeds the compose invocation inside a `powershell -Command "..."` string; a path
+  containing a space is not quoted for that context and breaks it.
+- **This is a pin, not a new configuration surface.** The reviewable, version-controlled way to
+  customize what compose builds is still the template search path — overriding
+  `docker-compose.yml.j2` (or `Makefile.j2`) in your own `templates_dir`, which stencil searches
+  before its bundled templates. See [Extending Stencil](#extending-stencil) below.
+
 ## Extending Stencil
 
 ### Custom Templates
