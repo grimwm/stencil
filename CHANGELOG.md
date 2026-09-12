@@ -16,23 +16,31 @@ How the version gets bumped is written down in
   this in `stn-vhm`, `stn-c25` and `stn-k73`; three keys on the output side
   were still exempt, and each was a different way out of the tree.
 
-  **This is a behaviour change.** A config whose top-level `output_dir` points
-  outside the config file's directory generated and cleaned at exit 0
-  yesterday; today it is refused, on every command, with an error naming the
-  key. `output_dir` is resolved relative to the config *file*, and it must now
-  stay under that file's directory. The supported way to put build products
-  somewhere else is the **package-level** `output_dir`, whose escape is
-  deliberate, documented, and untouched by this release — a config that was
-  using the top-level key to reach outside the tree wants that one instead.
+  **This is a behaviour change**, in two places. A top-level `output_dir`
+  that escapes the config file's directory generated and cleaned at exit 0
+  yesterday and is refused today; and `package_name` is now checked for
+  every package type, where before it was read only by `zip` and `doc`, so
+  a `package_name: "handouts/x.zip"` that worked yesterday is refused.
   Measured before the decision was taken: no consumer config sets the
-  top-level key at all, across cs234's four configs and cs425's three.
+  top-level `output_dir` at all, across cs234's four configs and cs425's
+  three, and every `package_name` in them is a plain filename.
+
+  **Which check reaches which command.** The shape and string checks — not a
+  string, `..`, absolute, `~`, whitespace, a metacharacter — run in the
+  config pre-flight, so every command gets them. The *containment* check,
+  which is the only half that can see a symlinked `output_dir`, runs where
+  `output_base` is computed, which `gen` and `clean` reach and `install` and
+  `list` return above. So a string-clean `output_dir: out` whose `out` is a
+  symlink pointing outside is refused by `gen` and `clean`, and accepted by
+  `install` — which never writes through `output_base`, so nothing outside
+  the tree is touched either way; the refusal is deferred, not skipped.
 
   What each of the four closes:
 
   - `stn-pe3` — the resolved output base must stay under the config
-    directory. Every path `clean` unlinks and every line of the managed
-    `.gitignore` section is relative to it, so an escaping value made it the
-    ground a delete stood on: `output_dir: ../victim-base` plus
+    directory. Every path `clean` unlinks is relative to it, so an escaping
+    value made it the ground a delete stood on: `output_dir: ../victim-base`
+    plus
     `stencil clean --all` removed a file outside the config directory and
     exited 0. The check also catches an `output_dir` whose *string* is
     perfectly ordinary and which is itself a symlink pointing out, which no
@@ -49,7 +57,11 @@ How the version gets bumped is written down in
     message naming the path *inside* it, so nothing in the output hinted at
     where the bytes went. The package directory is now contained before
     anything is created, so a refused run touches nothing, and `--dry-run`
-    refuses too rather than previewing a write it would not perform.
+    refuses too rather than previewing a write it would not perform. The
+    check is a snapshot taken before the writes, so "touches nothing" holds
+    absent concurrent modification of the output tree; anyone who can swap
+    a directory for a symlink mid-run can already write wherever the
+    running user can.
     **What this closes is the package directory itself.** A symlinked
     subdirectory below it, and a brand image's destination, still follow
     links out of the tree; both are filed with reproductions as `stn-h5q`
@@ -63,11 +75,23 @@ How the version gets bumped is written down in
     `..`, shell or glob metacharacter. It is validated whenever the key is
     present, not only for the package types that consume it.
 
-  Still outstanding, and named here so the boundary of this change is not
-  mistaken for the whole problem: the **package-level** `output_dir` is not
-  itself path-validated, and reaches a Make variable that recipes expand
-  (`stn-1a4`); and the component-level writes below a contained package
-  directory remain as described above (`stn-h5q`).
+  **Where to put build products instead, stated carefully.** The
+  package-level `output_dir` is the key for that, and its escape is
+  deliberate and untouched here — but it is not the same key doing the same
+  job from a different scope, so this is not a drop-in migration. It moves a
+  package's *build products* relative to the package directory; the
+  top-level key decides where *scaffolding is generated*. Anyone using the
+  top-level key to keep generated scaffolding out of the config directory
+  has no migration path and should move the config file instead. And the
+  package-level key is **not itself path-validated yet** — it reaches a Make
+  variable that recipes expand, so an unvalidated value there is worse than
+  the one just closed, not better (`stn-1a4`).
+
+  Also still outstanding, named so the boundary of this change is not
+  mistaken for the whole problem: the component-level writes below a
+  contained package directory (`stn-h5q`), and the managed `.gitignore`
+  section naming paths without the top-level `output_dir` prefix, so it
+  ignores nothing whenever that key is set (`stn-r5v`).
 
 - **The browser-backed services no longer take their configuration, or their
   driver script, from the consumer's package directory** (`stn-jeq`, `stn-7ki`,

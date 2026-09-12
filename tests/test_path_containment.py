@@ -690,7 +690,10 @@ def test_generate_package_raises_valueerror_for_a_symlinked_package_dir(
     env = build_environment(loaded, config_dir)
     output_base = config_dir / "out"
 
-    with pytest.raises(ValueError, match="demo"):
+    # NOT match="demo": the package id appears in essentially every message
+    # this function can raise, so it would pass without the containment check
+    # existing at all. Match the sentence only containment produces.
+    with pytest.raises(ValueError, match="outside the output directory"):
         generate_package(env, loaded, output_base, "demo", False, config_dir)
 
     assert list(outside.iterdir()) == [], (
@@ -872,3 +875,85 @@ def test_an_ordinary_package_name_still_generates(name):
     was written) must keep working."""
     contexts = package_contexts(config(package_type="zip", package_name=name))
     assert contexts["demo"]["package_name"] == name
+
+
+# --- stn-vhr, the report itself: escaped, and with no class name ------------
+
+
+def test_gen_escapes_a_control_character_in_the_resolved_refusal_path(tmp_path):
+    """The refusal message carries a RESOLVED FILESYSTEM PATH, and that path
+    is a symlink's target -- so the escape sequence lives in the link target
+    STRING, committed in the tree, with no control byte in any file and no
+    need for the target to exist.
+
+    `check_config_path` cannot help: it repr's what the CONFIG declared, and
+    this is what the filesystem resolved to, which it never sees. So the
+    escaping has to happen at the printer, and this pins that it does --
+    `clean` escaped this same string via `_safe` while `gen` printed it raw,
+    the two halves of one report disagreeing about one path.
+
+    `--dry-run`, deliberately: the preview is the cheapest thing for a
+    reviewer to run over an untrusted branch, and it was enough to repaint
+    the terminal.
+    """
+    import os
+
+    config_dir = tmp_path / "cfg"
+    config_dir.mkdir()
+    (config_dir / "out").mkdir()
+    os.symlink("../../evil\x1b[2Jpwned", config_dir / "out" / "demo")
+
+    write_config(
+        config_dir,
+        {
+            "output_dir": "out",
+            "templates": [{"src": "Makefile.j2"}],
+            "packages": {"demo": {"name": "Demo", "package_type": "none"}},
+        },
+    )
+
+    result = run_cli("gen", "demo", "--dry-run", cwd=config_dir)
+
+    assert result.returncode != 0
+    assert "\x1b" not in result.stderr, (
+        "a raw escape byte reached the terminal from the resolved path: "
+        f"{result.stderr!r}"
+    )
+    assert "\\x1b" in result.stderr, (
+        "the control character must be reported in its escaped form, the "
+        f"way clean's printer already does: {result.stderr!r}"
+    )
+
+
+def test_a_gen_refusal_carries_no_python_class_name(tmp_path):
+    """`_generate`'s narrow ValueError handler exists so a containment
+    refusal reads as the config message it is. Without it the broad handler
+    below reports `demo: ValueError: Package demo: ...`, putting a Python
+    class name in front of a message meant for someone editing YAML --
+    which package_contexts' own docstring argues at length must never
+    happen. Nothing pinned that, so the handler survived deletion."""
+    import os
+
+    config_dir = tmp_path / "cfg"
+    config_dir.mkdir()
+    (config_dir / "out").mkdir()
+    outside = config_dir / "outside"
+    outside.mkdir()
+    os.symlink(outside, config_dir / "out" / "demo")
+
+    write_config(
+        config_dir,
+        {
+            "output_dir": "out",
+            "templates": [{"src": "Makefile.j2"}],
+            "packages": {"demo": {"name": "Demo", "package_type": "none"}},
+        },
+    )
+
+    result = run_cli("gen", "demo", cwd=config_dir)
+
+    assert result.returncode != 0
+    assert "ValueError" not in result.stderr, (
+        "a config refusal must not carry a Python class name: "
+        f"{result.stderr!r}"
+    )

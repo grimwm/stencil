@@ -2238,8 +2238,26 @@ def checked_output_base(config: dict, config_dir: Path) -> Path:
         _raise_config_problems([str(error)])
 
     candidate = (config_dir / value) if value else config_dir
-    resolved_config_dir = config_dir.resolve()
-    resolved_candidate = candidate.resolve()
+    # Guarded for the same reason contained_path guards its own pair, and
+    # spelled here rather than inherited because this function deliberately
+    # does NOT route through that helper: an unguarded OSError would leave
+    # _main, which catches only ValueError around this call, printing the
+    # bare traceback stn-40a exists to remove -- from the very function that
+    # closes stn-40a. Measured on this interpreter, none of the symlink
+    # cases raises (a loop returns the path unresolved, a broken link
+    # resolves to its dangling target, a missing path resolves lexically);
+    # the guard is for a genuine OSError, such as an unreadable ancestor or
+    # a path component that is not a directory.
+    try:
+        resolved_config_dir = config_dir.resolve()
+        resolved_candidate = candidate.resolve()
+    except OSError as error:
+        _raise_config_problems(
+            [
+                f"Package config: output_dir {value!r} could not be "
+                f"resolved: {error}"
+            ]
+        )
     if not resolved_candidate.is_relative_to(resolved_config_dir):
         _raise_config_problems(
             [
@@ -3211,7 +3229,20 @@ def _main():
         if failures:
             print(
                 "Error: these packages could not be generated:\n  "
-                + "\n  ".join(failures),
+                # _safe on every line, exactly as clean's sibling printer
+                # does it above, and for a sharper reason than a package id:
+                # generate_package's containment refusal (stn-vhr) puts a
+                # RESOLVED FILESYSTEM PATH in the message, and that path is
+                # the target of a symlink -- so the escape lives in the link
+                # target STRING, committed in the tree, with no control byte
+                # in any file and no need for the target to exist. Measured
+                # before this was added: `gen --dry-run` printed a raw ESC
+                # and repainted the terminal, while `clean` rendered the
+                # SAME string as `\x1b[2J`, because only this side was
+                # missing. check_config_path cannot help here -- it repr's
+                # what the CONFIG declared, and this is what the filesystem
+                # resolved to, which it never sees.
+                + "\n  ".join(_safe(failure) for failure in failures),
                 file=sys.stderr,
             )
             print(
@@ -3225,7 +3256,8 @@ def _main():
     package_id = args.pkg
     problem = _generate(package_id)
     if problem:
-        print(f"Error: {problem}", file=sys.stderr)
+        # _safe for the reason the --all printer above says at length.
+        print(f"Error: {_safe(problem)}", file=sys.stderr)
         if "nothing was generated" in problem:
             list_packages(config)
         sys.exit(1)

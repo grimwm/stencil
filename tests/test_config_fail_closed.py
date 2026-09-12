@@ -276,7 +276,7 @@ def test_a_non_string_output_dir_raises_valueerror_not_typeerror():
 # neither shadows the other.
 
 
-@pytest.mark.parametrize("value", [7, 0, False, []])
+@pytest.mark.parametrize("value", [7, 0, False, True, [], {}, 1.5])
 def test_a_non_string_top_level_output_dir_raises_valueerror_not_typeerror(value):
     """Before 0.39.0, `_main` computed
     `output_base = (config_dir / output_dir_raw).resolve()` with no shape
@@ -285,6 +285,14 @@ def test_a_non_string_top_level_output_dir_raises_valueerror_not_typeerror(value
     naive `if not value: return None` swallows into "output base is the
     config directory", the same silent mis-read stn-40a exists to close --
     which is why `check_output_dir` tests the type BEFORE falsiness.
+
+    `True` is in the matrix for the opposite reason to `False`: it is the
+    TRUTHY bool, the one a "falsiness first" reader assumes the falsiness
+    branch never sees, so it is the value most likely to be let through by
+    a later "simplification". `{}` covers the falsy non-list container and
+    `1.5` the numeric that is not an int. Only `None` and `""` fall
+    through to "the output base is the config directory", which is what a
+    blank key has always meant.
     """
     config = {"output_dir": value, "packages": {"demo": package()}}
     with pytest.raises(ValueError, match="output_dir"):

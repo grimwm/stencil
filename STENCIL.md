@@ -261,18 +261,37 @@ This allows projects to override or extend the default templates.
 
 `output_dir` is resolved **relative to this file**, not to the working directory, and it must stay
 under this file's directory. A value that escapes — `../build`, an absolute path, or a directory
-that is itself a symlink pointing out — is refused with an error naming the key, on every command.
-That is a change in behaviour: such a config generated at exit 0 before 0.39.0. The key that sends
-build products elsewhere is the **package-level** `output_dir`, whose escape is deliberate and
-documented — see [The Manifest](#the-manifest) — so a config that was reaching outside the tree
-wants that key instead. Nothing about a package-level `output_dir` changes here.
+that is itself a symlink pointing out — is refused with an error naming the key. That is a change
+in behaviour: such a config generated at exit 0 before 0.39.0.
 
-The same rule now covers the two other paths that name the output side. A package's `dir` is
-refused if it resolves outside the output tree, so a symlinked package directory can no longer
-take `gen`'s writes out of it — that check covers **the package directory itself**, and not a
-symlinked subdirectory below it or a brand image's destination, which `stn-h5q` tracks with
-reproductions. And `package_name` is now checked as what it is, a filename in the package
-directory: no separator, no whitespace, no `..`, no shell or glob metacharacter.
+Two halves of that check reach different commands, which is worth knowing before you rely on it.
+The **string** checks — not a string, `..`, absolute, `~`, whitespace, a metacharacter — run in the
+config pre-flight, so every command applies them. The **containment** check, the only half that can
+see an `output_dir` that is itself a *symlink* out of the tree, runs where the output base is
+computed: `gen` and `clean` reach it, while `install` and `list` return above it. `install` never
+writes through the output base, so nothing outside the tree is touched either way — the refusal is
+deferred to the next `gen` or `clean`, not skipped.
+
+If you were using the top-level key to build somewhere else, the **package-level** `output_dir` is
+the supported way to do that and is untouched here — but read it as a different key rather than the
+same one from another scope: it moves a package's *build products* relative to its package
+directory, while this one decides where *scaffolding is generated*. If you were using it to keep
+generated scaffolding out of the config directory, there is no equivalent key; move the config
+file. Note also that the package-level key is **not itself path-validated yet** (`stn-1a4`), so it
+is not a safer place to put an untrusted value.
+
+The same containment rule now covers a package's `dir`, so a symlinked package directory can no
+longer take `gen`'s writes out of the output tree. **That check covers the package directory
+itself, and nothing below it.** A symlink at any path *inside* a real package directory — the
+rendered file itself, a subdirectory a nested `dest` writes through, or a brand image's
+destination — is still followed, and `gen` and `clean` do not even agree about which of those they
+resolve, so such a package can generate at exit 0 and then be permanently un-cleanable. `stn-h5q`
+tracks all of it with reproductions.
+
+And `package_name` is now checked as what it is, a filename in the package directory: no separator,
+no whitespace, no `..`, no shell or glob metacharacter. It is checked for every package type, where
+before only `zip` and `doc` ever read it — so a `package_name` carrying a path, on a package type
+that ignored it, is refused now where it was silently accepted before.
 
 A handful of keys can also be set at this top level — `lang`, `brand`, `brand-alt`, and
 `show_download` — to give every package in the config the same default without repeating it. Each
