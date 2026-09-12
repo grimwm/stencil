@@ -76,19 +76,31 @@ integration = pytest.mark.integration
 
 TEMPLATES_DIR = Path(__file__).parent.parent / "stencil" / "templates"
 
-# A DC value containing a dash, so CONTAINER (derived from DC by
-# `$(firstword $(subst -, ,$(DC)))`, used for the `image inspect` probe) reads
-# as "sentinel" while the compose sentinel itself reads as "sentinel-compose".
-# Without the dash, both would be the same string and a search for the
-# sentinel could not tell a runtime probe apart from a compose invocation --
-# exactly the ambiguity `docker image inspect ... || docker compose pull`
-# already has for the literal word "docker".
+# A DC value containing a dash, so CONTAINER/STENCIL_CONTAINER (derived from
+# DC by `$(firstword $(subst -, ,$(DC)))`, used for the `image inspect`
+# probe) reads as "sentinel" while the compose sentinel itself reads as
+# "sentinel-compose". Without the dash, both would be the same string and a
+# search for the sentinel could not tell a runtime probe apart from a compose
+# invocation -- exactly the ambiguity `docker image inspect ... || docker
+# compose pull` already has for the literal word "docker".
 SENTINEL = "sentinel-compose"
 
 # Scrubbed from every `make -n` subprocess: a developer with any of these set
 # in their shell would otherwise make this whole tier pass vacuously, seeing
-# their own override rather than the Makefile's default.
-_SCRUBBED_ENV_VARS = ("COMPOSE_FILES", "DC", "MAKEFLAGS")
+# their own override rather than the Makefile's default. CONTAINER and
+# STENCIL_CONTAINER are the image-probe runtime this module's CONTAINER tier
+# exists to pin (stn-9o5); GNUMAKEFLAGS and MAKEFILES are two more
+# injection/behavior surfaces `make` reads from the environment that nothing
+# here deliberately exercises via a developer's own shell.
+_SCRUBBED_ENV_VARS = (
+    "COMPOSE_FILES",
+    "DC",
+    "MAKEFLAGS",
+    "CONTAINER",
+    "STENCIL_CONTAINER",
+    "GNUMAKEFLAGS",
+    "MAKEFILES",
+)
 
 # What every generated compose invocation must expand to, immediately after
 # the sentinel, once this task's fix lands.
@@ -204,10 +216,10 @@ def test_every_compose_invocation_names_its_file(
 
     Reads the EXPANSION (`make -n DC=<sentinel>`), not the template text, so a
     variable that is defined and merely unused cannot satisfy this. The
-    sentinel carries a dash so it cannot be confused with CONTAINER, which
-    `ensure_image`'s `image inspect` probe derives from DC and which the
-    ticket's own investigation flags as indistinguishable from a plain
-    substring search for "docker".
+    sentinel carries a dash so it cannot be confused with
+    CONTAINER/STENCIL_CONTAINER, which `ensure_image`'s `image inspect` probe
+    derives from DC and which the ticket's own investigation flags as
+    indistinguishable from a plain substring search for "docker".
 
     PARAMETRIZED OVER OS, on the make command line (the same idiom
     tests/test_pipeline.py, tests/test_pdf_ua_gate.py and
@@ -409,9 +421,10 @@ def makefile_templates() -> list[Path]:
 _DC_REFERENCE_RE = re.compile(r"\$[({]DC[)}]")
 
 # Everywhere a bare $(DC) (or ${DC}) is allowed to appear in any *.j2
-# template: deriving CONTAINER from it, and the STENCIL_COMPOSE definition
-# itself. Deliberately NOT a subcommand denylist ("run", "build", "pull") --
-# that would miss exec, ps, cp, logs, and whatever compose adds next.
+# template: deriving CONTAINER/STENCIL_CONTAINER from it, and the
+# STENCIL_COMPOSE definition itself. Deliberately NOT a subcommand denylist
+# ("run", "build", "pull") -- that would miss exec, ps, cp, logs, and
+# whatever compose adds next.
 _ALLOWED_DC_WINDOWS = (
     re.compile(r"\$\(firstword \$\(subst -, ,\$[({]DC[)}]\)\)"),
     re.compile(
@@ -469,8 +482,9 @@ def test_bare_dc_only_appears_in_the_two_sanctioned_forms():
             source = lines[line - 1]
             # A make comment cannot invoke anything, and Makefile-base.j2's
             # own comments necessarily quote $(DC) while explaining what DC
-            # is for and why CONTAINER is derived from it the long way. Only
-            # a line make would RUN can leave compose unpinned.
+            # is for and why CONTAINER/STENCIL_CONTAINER is derived from it
+            # the long way. Only a line make would RUN can leave compose
+            # unpinned.
             if source.lstrip().startswith("#"):
                 continue
             offenders.setdefault(template.name, []).append(
@@ -622,20 +636,29 @@ def env(tmp_path):
     return build_environment({}, tmp_path)
 
 
-def _run_make_on_rendered_partial(env, tmp_path, template_name: str, context: dict):
+def _run_make_on_rendered_partial(
+    env, tmp_path, template_name: str, context: dict, *, appendix: str = "", targets=()
+):
     """Render one Makefile partial ALONE -- the way a consumer's own
     Makefile.j2 could `{% include %}` it without Makefile-base.j2 first, per
     AGENTS.md -- write it as a real Makefile, and run `make` on it directly.
 
-    No target is passed: the guard each partial carries is a top-level
-    `ifeq`/`$(error ...)`, evaluated while make READS the file, before any
-    goal is even chosen -- so this fails during parsing regardless of which
-    target a caller would have picked.
+    No target is passed by default: the guard each partial carries is a
+    top-level `ifeq`/`$(error ...)`, evaluated while make READS the file,
+    before any goal is even chosen -- so this fails during parsing
+    regardless of which target a caller would have picked.
+
+    `appendix` is a consumer's OWN Makefile text, appended after the
+    rendered partial -- the same a-la-carte composition AGENTS.md documents,
+    used by the STENCIL_CONTAINER escape-hatch test below to add an
+    `override` directive and a target that actually calls `ensure_image`.
+    `targets` names the goal(s) to run when a caller needs the appendix's own
+    target evaluated rather than the default (first) one.
     """
-    text = env.get_template(template_name).render(context)
+    text = env.get_template(template_name).render(context) + appendix
     (tmp_path / "Makefile").write_text(text)
     return subprocess.run(
-        ["make", "--no-print-directory", "-n"],
+        ["make", "--no-print-directory", "-n", *targets],
         cwd=tmp_path,
         capture_output=True,
         text=True,
@@ -684,6 +707,428 @@ def test_makefile_pkg_guard_fires_without_makefile_base(require_make, env, tmp_p
     assert result.returncode != 0, outcome("make -n (Makefile-pkg.j2 alone)", result)
     assert "STENCIL_COMPOSE" in combined, (
         f"the failure does not name STENCIL_COMPOSE:\n{combined}"
+    )
+
+
+# === (g): the image probe's runtime cannot be repointed -------------------
+#
+# stn-9o5. `ensure_image`'s `image inspect` probe USED TO READ
+# `CONTAINER ?= $(firstword $(subst -, ,$(DC)))` -- an environment value, a
+# `make -e`, a command-line assignment or a `MAKEFLAGS=VAR=value` all win over
+# `?=`, so the probe ran whatever binary name was planted, with the package
+# directory as cwd, regardless of what DC/STENCIL_COMPOSE actually pulled.
+# IT NOW READS `override STENCIL_CONTAINER = $(firstword $(subst -, ,$(DC)))`,
+# with both `ensure_image` arms on `$(STENCIL_CONTAINER)`.
+#
+# Both names are checked below, and they carry different weight now that the
+# rename has landed. STENCIL_CONTAINER is the LIVE invariant: it is the name
+# the template reads, and every route below is a real assertion about it.
+# CONTAINER is a REGRESSION PIN: the template no longer reads that name, so
+# those instances pass because nothing looks at it, and they exist to fail if
+# the old spelling ever comes back. They are deliberately kept and
+# deliberately not load-bearing -- said plainly here because this module's
+# standing rule is that a test which cannot fail is decoration, and the honest
+# answer is which half is which.
+
+# Every route by which a value can reach a make variable without editing the
+# Makefile text itself. GNUMAKEFLAGS is included deliberately even though it
+# is inert on this repository's most common local `make` -- see
+# _skip_if_gnumakeflags_dead below.
+_INJECTION_ROUTES = (
+    "environment",
+    "environment_dash_e",
+    "command_line",
+    "MAKEFLAGS",
+    "GNUMAKEFLAGS",
+)
+
+# A value distinguishing "the probe ran something planted" from "the probe
+# ran the DC-derived runtime" at a glance in a failure message -- deliberately
+# not a real binary name, since every test below runs `make -n` and never
+# executes the line it inspects.
+PLANTED_RUNTIME = "PLANTED-RUNTIME-MARKER"
+
+
+def _make_major_version() -> int:
+    """Best-effort major version parsed from `make --version`'s first line.
+
+    Feature-detection input for the GNUMAKEFLAGS route alone. MEASURED: every
+    other route in _INJECTION_ROUTES delivers an assignment identically on
+    GNU Make 3.81 (macOS's system make) and 4.3 (this project's CI image), so
+    nothing else here needs to know the version at all.
+    """
+    result = subprocess.run(["make", "--version"], capture_output=True, text=True)
+    match = re.search(r"GNU Make (\d+)\.", result.stdout)
+    return int(match.group(1)) if match else 0
+
+
+def _skip_if_gnumakeflags_dead(route: str) -> None:
+    """Skip (never xfail) a GNUMAKEFLAGS case on a `make` that ignores it.
+
+    MEASURED directly against a real generated package, on the `?=` template
+    as it stands today: `GNUMAKEFLAGS=CONTAINER=evil` and
+    `GNUMAKEFLAGS=COMPOSE_FILES=` both leave GNU Make 3.81 (macOS's system
+    make) completely unaffected -- CONTAINER still derives from DC and
+    COMPOSE_FILES still defaults to docker-compose.yml, so even the KNOWN,
+    already-fixed COMPOSE_FILES empty-value guard does not fire. On GNU Make
+    4.3 (this project's CI image) the identical assignment IS honored. A
+    route that does not exist on this host cannot be asserted against here
+    without lying about what was checked, so this skips rather than either
+    xfailing (which would report a route problem that isn't one) or asserting
+    (which would fail for a reason unrelated to stn-9o5's fix). THE ROUTE
+    ITSELF IS NOT REMOVED FROM THE PARAMETRIZATION -- it still runs, and
+    still matters, in CI on GNU Make 4.3. Do not delete it because a local
+    run shows a string of skips.
+    """
+    if route == "GNUMAKEFLAGS" and _make_major_version() < 4:
+        pytest.skip(
+            "GNUMAKEFLAGS is inert on this host's make (GNU Make "
+            f"{_make_major_version() or '?'}.x); MEASURED live on GNU Make "
+            "4.3 in CI. See _skip_if_gnumakeflags_dead's docstring."
+        )
+
+
+def _deliver(
+    package: Path,
+    route: str,
+    target: str,
+    var_name: str,
+    var_value: str,
+    *,
+    dc: str = SENTINEL,
+    os_name: str | None = None,
+):
+    """`<var_name>=<var_value>` delivered to `make -n <target> DC=<dc>` by `route`.
+
+    Deliberately NOT built on make_n(): make_n() has no env hook at all, and
+    -- the finding that matters most in this tier -- make_n() builds its
+    environment from clean_env(), whose _SCRUBBED_ENV_VARS now contains
+    MAKEFLAGS (and GNUMAKEFLAGS) precisely so a developer's own shell cannot
+    steer this tier. A MAKEFLAGS/GNUMAKEFLAGS test built on make_n() would
+    therefore never deliver either variable to make AT ALL, and would pass
+    both "marker absent" and "derived runtime present" vacuously against the
+    unfixed template -- a dead route indistinguishable from a closed one.
+    This helper starts from the same clean_env() and then adds back exactly
+    the one variable the route under test is supposed to carry.
+    """
+    argv = ["make", "--no-print-directory", "-n"]
+    env = clean_env()
+    if route == "environment_dash_e":
+        argv.append("-e")
+    argv.append(target)
+    argv.append(f"DC={dc}")
+    if os_name is not None:
+        argv.append(f"OS={os_name}")
+    if route in ("environment", "environment_dash_e"):
+        env[var_name] = var_value
+    elif route == "command_line":
+        argv.append(f"{var_name}={var_value}")
+    elif route == "MAKEFLAGS":
+        env["MAKEFLAGS"] = f"{var_name}={var_value}"
+    elif route == "GNUMAKEFLAGS":
+        env["GNUMAKEFLAGS"] = f"{var_name}={var_value}"
+    else:
+        raise ValueError(f"unknown route {route!r}")
+    return subprocess.run(argv, cwd=package, capture_output=True, text=True, env=env)
+
+
+@pytest.mark.parametrize("os_name", ["Darwin", "Windows_NT"])
+@pytest.mark.parametrize("route", _INJECTION_ROUTES)
+@pytest.mark.parametrize("name", ["CONTAINER", "STENCIL_CONTAINER"])
+def test_a_planted_runtime_never_reaches_the_probe(
+    require_make, pages_package, name, route, os_name
+):
+    """A planted CONTAINER/STENCIL_CONTAINER must never reach `ensure_image`.
+
+    name="STENCIL_CONTAINER" IS THE LIVE HALF. The template reads that name,
+    and `override` beats every origin below -- environment, `make -e`, the
+    command line, `MAKEFLAGS=VAR=value` and `GNUMAKEFLAGS=VAR=value`.
+    MEASURED: mutating the template's `override` back to a plain `=` turns
+    the environment_dash_e, command_line and MAKEFLAGS instances red on both
+    OS arms, so this is asserting `override` specifically and not merely the
+    rename.
+
+    name="CONTAINER" IS A REGRESSION PIN, and passes because the template no
+    longer reads that name at all. Before the rename these were the red ones:
+    `?=` only skips assignment when the variable is ALREADY defined, which an
+    exported, -e, command-line or MAKEFLAGS-delivered CONTAINER is before make
+    reaches the derivation, and each route printed the planted value
+    immediately before ` image inspect`. They are kept so that restoring the
+    old spelling fails here rather than silently reopening stn-3y8.
+
+    NOT CLOSED, and deliberately not asserted here: `MAKEFLAGS='--eval %:
+    STENCIL_CONTAINER = x'` beats `override` on every GNU Make 4.x, because
+    `--eval` can carry a pattern-specific assignment. Filed as stn-2je with
+    its reproduction. It is absent from _INJECTION_ROUTES because it would be
+    red, not because it does not exist.
+
+    EVERY ROUTE CARRIES ITS OWN POSITIVE CONTROL, in the same test instance,
+    and this is the finding that matters most for this tier. make_n() builds
+    its environment from clean_env(), whose _SCRUBBED_ENV_VARS already
+    contains MAKEFLAGS -- so a MAKEFLAGS test built on make_n() never
+    delivers MAKEFLAGS to make at all, and, MEASURED against today's UNFIXED
+    template, it would satisfy BOTH assertions below (marker absent, derived
+    runtime present) for having delivered nothing. A dead route is
+    indistinguishable from a closed one without a control that proves
+    delivery. So the SAME route is used, in the SAME test, to send
+    `COMPOSE_FILES=` and require the existing, already-fixed (stn-qli)
+    empty-value $(error) to fire -- MEASURED to fire for every route this
+    host's make honors. `_deliver()` (not make_n()) is used for both halves
+    specifically so neither can go through make_n()'s scrubbing by accident.
+
+    GNUMAKEFLAGS is skipped rather than asserted on a `make` that ignores it
+    -- see _skip_if_gnumakeflags_dead. The route stays in the
+    parametrization because it is live, and checked, in CI.
+    """
+    _skip_if_gnumakeflags_dead(route)
+
+    planted = _deliver(
+        pages_package, route, "format-md", name, PLANTED_RUNTIME, os_name=os_name
+    )
+    assert planted.returncode == 0, outcome(
+        f"make -n format-md ({name}={PLANTED_RUNTIME} via {route}, OS={os_name})",
+        planted,
+    )
+    assert PLANTED_RUNTIME not in planted.stdout, (
+        f"a planted {name}={PLANTED_RUNTIME!r} via {route} (OS={os_name}) "
+        f"reached the image probe:\n{planted.stdout}"
+    )
+    derived_marker = (
+        f'"{SENTINEL.split("-")[0]} image inspect'
+        if os_name == "Windows_NT"
+        else f'{SENTINEL.split("-")[0]} image inspect'
+    )
+    assert derived_marker in planted.stdout, (
+        f"the DC-derived runtime ({SENTINEL.split('-')[0]!r}, from "
+        f"DC={SENTINEL!r}) does not appear before ' image inspect' -- the "
+        f"probe line did not run at all, which would make the assertion "
+        f"above vacuous:\n{planted.stdout}"
+    )
+    # THE POSIX MARKER IS A SUBSTRING OF THE WINDOWS ONE, so the assertion
+    # above cannot tell the arms apart on its own. MEASURED: inverting
+    # `ifeq ($(OS),Windows_NT)` in Makefile-base.j2 left every Darwin instance
+    # GREEN with the PowerShell line rendered, and only the Windows arms went
+    # red. Asserting the other arm is ABSENT is what closes that.
+    if os_name != "Windows_NT":
+        assert "powershell" not in planted.stdout, (
+            f"OS={os_name} rendered the Windows arm of ensure_image -- the "
+            f"ifeq is inverted:\n{planted.stdout}"
+        )
+
+    control = _deliver(
+        pages_package, route, "format-md", "COMPOSE_FILES", "", os_name=os_name
+    )
+    combined = control.stdout + control.stderr
+    assert control.returncode != 0, outcome(
+        f"POSITIVE CONTROL: COMPOSE_FILES= via {route} (OS={os_name}) did "
+        "not error -- the route does not reach make at all, so the "
+        "assertions above prove nothing about it",
+        control,
+    )
+    assert "COMPOSE_FILES" in combined, (
+        f"the control's failure does not name COMPOSE_FILES, so the route "
+        f"may not be the one that fired:\n{combined}"
+    )
+
+
+@pytest.mark.parametrize("os_name", ["Darwin", "Windows_NT"])
+@pytest.mark.parametrize(
+    ("dc_spelling", "runtime"),
+    [
+        ("docker compose", "docker"),
+        ("docker-compose", "docker"),
+        ("podman compose", "podman"),
+        ("podman-compose", "podman"),
+    ],
+)
+def test_the_probe_names_the_implementation_dc_names(
+    require_make, pages_package, dc_spelling, runtime, os_name
+):
+    """The probe-and-pull-agree invariant, asserted rather than argued.
+
+    All four spellings pipeline.compose_command() falls through must derive
+    the SAME runtime `ensure_image` uses for `image inspect` as the one
+    STENCIL_COMPOSE actually pulls with -- "docker compose"/"docker-compose"
+    -> docker, "podman compose"/"podman-compose" -> podman. This holds on the
+    template today (the derivation itself is not the bug; an override
+    reaching around it is) and must keep holding once CONTAINER becomes
+    STENCIL_CONTAINER, so it is pinned here independently of the injection
+    tests above.
+
+    PARAMETRIZED OVER OS: the Windows arm wraps the same derivation in a
+    powershell -Command string, and a POSIX-only run would never exercise it.
+    """
+    result = make_n(pages_package, "format-md", f"OS={os_name}", dc=dc_spelling)
+    assert result.returncode == 0, outcome(
+        f"make -n format-md DC={dc_spelling!r} OS={os_name}", result
+    )
+    expected = (
+        f'"{runtime} image inspect \''
+        if os_name == "Windows_NT"
+        else f"{runtime} image inspect '"
+    )
+    assert expected in result.stdout, (
+        f"DC={dc_spelling!r} (OS={os_name}) did not derive {runtime!r} "
+        f"immediately before \"image inspect '\":\n{result.stdout}"
+    )
+
+
+@pytest.mark.parametrize("os_name", ["Darwin", "Windows_NT"])
+def test_a_composition_may_override_the_runtime_with_an_override_directive(
+    require_make, env, tmp_path, os_name
+):
+    """The documented escape hatch: a consumer's own
+    `override STENCIL_CONTAINER = ...`, written after including
+    Makefile-base.j2, must win.
+
+    LIVE, not decoration: MEASURED, reverting either `ensure_image` arm to
+    `$(CONTAINER)` turns this red on the matching OS arm, because the
+    consumer's override then reaches a name the recipe no longer reads. It was
+    red before the rename too, when Makefile-base.j2 defined no
+    STENCIL_CONTAINER at all and the consumer's override was simply inert.
+
+    Renders Makefile-base.j2 ALONE, via _run_make_on_rendered_partial's
+    `appendix`, the same a-la-carte composition AGENTS.md documents a
+    consumer using -- so this is not testing stencil's own Makefile.j2, it is
+    testing what a consumer who only includes the base partial can do after
+    it.
+    """
+    context = get_template_context(
+        "demo", {"packages": {"demo": {"name": "Demo", "package_type": "none"}}}
+    )
+    appendix = (
+        "\n\noverride STENCIL_CONTAINER = nerdctl\n\n"
+        "probe: ## probe target\n"
+        "\t$(call ensure_image,test-image,probe)\n"
+    )
+    result = _run_make_on_rendered_partial(
+        env,
+        tmp_path,
+        "Makefile-base.j2",
+        context,
+        appendix=appendix,
+        targets=("probe", f"OS={os_name}"),
+    )
+    assert result.returncode == 0, outcome(
+        f"make -n probe (consumer override, OS={os_name})", result
+    )
+    expected = (
+        '"nerdctl image inspect \''
+        if os_name == "Windows_NT"
+        else "nerdctl image inspect '"
+    )
+    assert expected in result.stdout, (
+        f"the consumer's `override STENCIL_CONTAINER = nerdctl` (OS={os_name}) "
+        f"did not reach the probe:\n{result.stdout}"
+    )
+
+
+@pytest.mark.parametrize("os_name", ["Darwin", "Windows_NT"])
+def test_the_runtime_is_reread_when_dc_is_assigned_later(
+    require_make, env, tmp_path, os_name
+):
+    """`override STENCIL_CONTAINER =` must stay RECURSIVE, not `:=`.
+
+    Makefile-base.j2's comment claims a DC assigned after the include is still
+    read where the probe is used. MEASURED, and the reason this test exists:
+    mutating that `=` to `:=` left the ENTIRE suite green -- 737 passed --
+    while the generated probe silently froze on DC's default. This is the
+    composition path AGENTS.md documents, so the claim is reachable and now
+    pinned.
+
+    Goes red against `:=`, which derives "docker" from the default
+    `DC ?= docker compose` at the point of definition rather than "podman"
+    from the consumer's later assignment.
+    """
+    context = get_template_context(
+        "demo", {"packages": {"demo": {"name": "Demo", "package_type": "none"}}}
+    )
+    appendix = (
+        "\n\nDC = podman-compose\n\n"
+        "probe: ## probe target\n"
+        "\t$(call ensure_image,test-image,probe)\n"
+    )
+    result = _run_make_on_rendered_partial(
+        env,
+        tmp_path,
+        "Makefile-base.j2",
+        context,
+        appendix=appendix,
+        targets=("probe", f"OS={os_name}"),
+    )
+    assert result.returncode == 0, outcome(
+        f"make -n probe (DC assigned after the include, OS={os_name})", result
+    )
+    expected = (
+        '"podman image inspect \''
+        if os_name == "Windows_NT"
+        else "podman image inspect '"
+    )
+    assert expected in result.stdout, (
+        f"a DC assigned AFTER the include was not re-read (OS={os_name}) -- "
+        f"the derivation is simply-expanded rather than recursive:\n"
+        f"{result.stdout}"
+    )
+
+
+def test_a_target_specific_assignment_still_wins(require_make, tmp_path):
+    """DOCUMENTED BEHAVIOUR, not a guard -- GREEN before and after stn-9o5's
+    fix, because it pins a fact about GNU Make itself rather than about
+    stencil's templates.
+
+    Makefile-base.j2's comment states that a consumer's
+    `override STENCIL_CONTAINER = ...` is the supported escape hatch, and
+    that a plain assignment after it is silently ignored. That second half is
+    an unqualified claim worth pinning precisely, because it is measurably
+    NOT the whole story: a consumer's TARGET-SPECIFIC assignment
+    (`probe: STENCIL_CONTAINER = x`) beats the global override for that one
+    target, and a PATTERN-SPECIFIC assignment (`patterned-%: STENCIL_CONTAINER = x`)
+    beats it for every target matching the pattern -- both of those are
+    assignments too, and neither is "ignored". Only an unqualified, global,
+    non-override, non-target-specific assignment loses. MEASURED on GNU Make
+    3.81 and (per this ticket's own investigation) 4.3.
+
+    Reaching this requires a consumer's OWN Makefile, independent of any
+    stencil template, which can already run anything -- so this is not
+    exercising stencil's templates at all, only the GNU Make semantics the
+    template comment relies on to make its claim.
+    """
+    (tmp_path / "Makefile").write_text(
+        "override STENCIL_CONTAINER = base\n"
+        "STENCIL_CONTAINER = ignored\n"
+        "\n"
+        "direct: STENCIL_CONTAINER = direct_value\n"
+        "direct:\n"
+        "\t@echo VALUE=$(STENCIL_CONTAINER)\n"
+        "\n"
+        "patterned-%: STENCIL_CONTAINER = pattern_value\n"
+        "patterned-x:\n"
+        "\t@echo VALUE=$(STENCIL_CONTAINER)\n"
+        "\n"
+        "plain:\n"
+        "\t@echo VALUE=$(STENCIL_CONTAINER)\n"
+    )
+    result = subprocess.run(
+        ["make", "--no-print-directory", "-n", "direct", "patterned-x", "plain"],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        # clean_env() like every other make call in this module: harmless
+        # today because `override` wins anyway, but this test is about
+        # precedence, and a developer's own STENCIL_CONTAINER is precisely the
+        # thing that must not be able to steer a precedence test.
+        env=clean_env(),
+    )
+    assert result.returncode == 0, outcome("make -n direct patterned-x plain", result)
+    assert "VALUE=direct_value" in result.stdout, (
+        f"a target-specific assignment did not beat the global override:\n{result.stdout}"
+    )
+    assert "VALUE=pattern_value" in result.stdout, (
+        f"a pattern-specific assignment did not beat the global override:\n{result.stdout}"
+    )
+    assert "VALUE=base" in result.stdout, (
+        f"a plain global assignment AFTER `override` was not ignored -- the "
+        f"override itself did not hold:\n{result.stdout}"
     )
 
 

@@ -699,7 +699,7 @@ nothing for a reference that carries a digest, even when that exact image is pre
 locally under it, while the bare-tag form of the same probe prints the id — so the old
 `ensure_image` guard could never succeed once a digest was pinned, and every `make doc`,
 `make pdf` and `make format-md` would have pulled again on every build. The guard runs
-`docker image inspect <ref>` now (through `$(CONTAINER)`, derived from `$(DC)` so a
+`docker image inspect <ref>` now (through `$(STENCIL_CONTAINER)`, derived from `$(DC)` so a
 podman-only host probes with `podman` rather than a hardcoded `docker`), which checks the
 reference actually named, digest included — stricter than the old probe was ever able to
 be, since it also catches a wrong digest rather than only a missing name.

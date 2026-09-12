@@ -531,8 +531,44 @@ USER_SUPPLIED_MAKE_VARIABLES = {"with"}
 
 _MAKE_PLAIN_REF_RE = re.compile(r"(?<!\$)\$[({]([A-Za-z_][A-Za-z0-9_-]*)")
 _MAKE_CALL_TARGET_RE = re.compile(r"(?<!\$)\$[({]call\s+([A-Za-z_][A-Za-z0-9_-]*)")
+# LEADING DIRECTIVES ARE PART OF A DEFINITION. `override STENCIL_CONTAINER =`
+# in Makefile-base.j2 (stn-3y8) is a definition, and without the
+# `(?:(?:override|export)[ \t]+)*` prefix this pattern does not see it -- the
+# name then falls out of make_variables_required() as a residual the file
+# itself defines, and MAKE_CONTRACT["Makefile-base.j2"] == set() goes red
+# pointing at a name that appears in no recipe, which is the hardest version
+# of this failure to diagnose. `export` is recognized alongside `override`
+# (in either order, and repeated) because it is the same shape of directive;
+# leaving it out would plant the identical landmine for whoever reaches for
+# it next. The `override` half IS exercised, loudly and by name: narrowing
+# this pattern back makes
+# test_a_makefile_partial_requires_only_the_recorded_make_variables
+# [Makefile-base.j2] fail with `assert {'STENCIL_CONTAINER'} == set()`. An
+# earlier draft of this comment claimed the widening changed no recorded
+# residual, which was true of the templates it was written against and false
+# by the time it landed in the same commit as the `override` it exists for.
+# The `export` half has no such cover -- no bundled partial begins a line with
+# it -- which is what the direct test below is for.
+#
+# STILL INVISIBLE TO THIS PATTERN, so the "identical landmine" list is honest
+# rather than implied-complete: `define FOO =` / `endef`, `override define`,
+# `X ::= 1`, `X != echo 1`, and `private FOO = 1`. All of those fail LOUDLY --
+# the name surfaces as an unrecorded residual -- which is the tolerable
+# direction. The one wrong-direction case is a `define` BODY: its lines are
+# recipe text, so an `export SHELLVAR=1` inside one is recorded as a make
+# definition and silently subtracts a real requirement. No bundled partial
+# uses `define` today; add handling here before one does.
+#
+# THE LEADING CLASS IS `[ ]*`, NOT `[ \t]*`, AND THAT NARROWING IS
+# LOAD-BEARING. A make variable definition cannot be tab-indented -- a leading
+# tab makes the line a RECIPE. With `[ \t]*` still in front, a recipe line
+# such as `\texport FOO=bar cmd` (a SHELL export, handed to /bin/sh) would
+# register FOO as a make definition and silently subtract it from the
+# residual, hiding a real cross-partial requirement. The directives widen what
+# counts as a definition; this keeps that widening from reaching into recipes.
 _MAKE_DEFINITION_RE = re.compile(
-    r"^[ \t]*([A-Za-z_][A-Za-z0-9_-]*)[ \t]*(?::=|\?=|\+=|=)", re.MULTILINE
+    r"^[ ]*(?:(?:override|export)[ \t]+)*([A-Za-z_][A-Za-z0-9_-]*)[ \t]*(?::=|\?=|\+=|=)",
+    re.MULTILINE,
 )
 _MAKE_FOREACH_LOOP_VAR_RE = re.compile(
     r"(?<!\$)\$[({]foreach\s+([A-Za-z_][A-Za-z0-9_-]*)\s*,"
@@ -594,6 +630,47 @@ MAKE_CONTRACT_CONFIGS = (
 )
 
 MAKE_PARTIALS = tuple(sorted(MAKE_CONTRACT))
+
+
+def test_a_definition_is_recognized_through_its_leading_directives():
+    """`override STENCIL_CONTAINER = ...` is a definition, and a tab-indented
+    shell `export` is not.
+
+    The `override` half has other cover: narrowing _MAKE_DEFINITION_RE back
+    makes test_a_makefile_partial_requires_only_the_recorded_make_variables
+    [Makefile-base.j2] fail with `assert {'STENCIL_CONTAINER'} == set()`,
+    since that partial now begins a line with `override`. The `export` half
+    and the `[ ]*` NARROWING have none -- no bundled partial begins a line
+    with `export`, and MEASURED, restoring `[ \t]*` in front of the
+    directives is caught by NOTHING in this suite except the SHELLVAR
+    assertion below. That narrowing is the piece of this test that earns its
+    place.
+
+    Goes red against the narrow pattern on the first assertion (STENCIL_CONTAINER
+    missing), and red against a pattern that keeps `[ \t]*` in front of the
+    directives on the last (SHELLVAR wrongly recorded as defined, which would
+    silently subtract a real cross-partial requirement from every residual).
+    """
+    text = (
+        "override STENCIL_CONTAINER = $(firstword $(subst -, ,$(DC)))\n"
+        "export EXPORTED := 1\n"
+        "override export BOTH = 2\n"
+        "PLAIN ?= 3\n"
+        "export NO_OPERATOR\n"
+        "\texport SHELLVAR=1 some-command\n"
+    )
+    defined = set(_MAKE_DEFINITION_RE.findall(text))
+    assert "STENCIL_CONTAINER" in defined, "an `override` definition was not seen"
+    assert "EXPORTED" in defined, "an `export` definition was not seen"
+    assert "BOTH" in defined, "stacked directives were not seen"
+    assert "PLAIN" in defined, "an ordinary definition stopped being seen"
+    assert "NO_OPERATOR" not in defined, (
+        "`export NAME` with no assignment operator is not a definition"
+    )
+    assert "SHELLVAR" not in defined, (
+        "a TAB-indented `export` is a shell command inside a recipe, not a "
+        "make definition -- recording it would subtract a real requirement"
+    )
 
 
 @pytest.mark.parametrize("partial", MAKE_PARTIALS)
