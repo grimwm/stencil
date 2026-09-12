@@ -381,10 +381,10 @@ def test_check_pdf_checks_the_same_files_the_pdf_target_wrote(doc_package):
     checked = set()
     for line in makefile.splitlines():
         stripped = line.strip()
-        if stripped.startswith("$(DC) run --rm pdf "):
+        if stripped.startswith("$(STENCIL_COMPOSE) run --rm pdf "):
             # `... pdf <stem>.html <stem>.pdf`
             written.add(stripped.split()[-1])
-        elif stripped.startswith("$(DC) run --rm check-pdf"):
+        elif stripped.startswith("$(STENCIL_COMPOSE) run --rm check-pdf"):
             checked.update(stripped.split()[4:])
 
     assert written, "the pdf target writes nothing; the fixture has no documents"
@@ -408,7 +408,7 @@ def test_every_checked_filename_carries_the_output_suffix(doc_package):
     line = next(
         stripped
         for stripped in (line.strip() for line in makefile.splitlines())
-        if stripped.startswith("$(DC) run --rm check-pdf")
+        if stripped.startswith("$(STENCIL_COMPOSE) run --rm check-pdf")
     )
 
     names = line.split()[4:]
