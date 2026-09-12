@@ -170,6 +170,51 @@ Missing compose is a skip locally and a hard failure in CI, since a tier that
 silently stops running is the failure mode this repository already learned from
 its pre-push hook.
 
+### A passing test's output is deleted; a failing test's is kept
+
+`pyproject.toml` sets `tmp_path_retention_policy = "failed"`, and the reason is
+arithmetic rather than tidiness. Each generated package is about **10.75MB** —
+`html-template.html` at 5.30MB and `slide-template.html` at 5.32MB, each
+carrying its own inlined Bootstrap, highlight.js, Mermaid and fonts. The unit
+tier alone retained **823MB across 310 directories** per run, and pytest's
+default keeps the last **three** runs. A 7.7GB tmpfs `/tmp` does not hold that,
+and when it ran out the run did not fail like a disk failure: `51 failed, 540 passed, 157 errors`, almost all `OSError: [Errno 28]` on unrelated tests, with
+the harness capturing the output hitting ENOSPC of its own (`stn-7im`).
+
+**The fix is retention, not package size.** The 10.75MB is the deliberate trade
+recorded elsewhere in this file — a handout that makes no network request — and
+nothing here argues with it. What does not scale is keeping it for every
+passing test, three runs deep.
+
+Measured on the same full container-tier run, before and after: the basetemp
+tree went from **4.0GB to 117MB** — a 34x reduction, 872 tests passing either
+way.
+
+The cost being accepted: **a test that passed no longer leaves its generated
+package to look at**, and reading a generated Makefile is how several of these
+bugs were found. Buy it back for a debugging session:
+
+```bash
+pytest -o tmp_path_retention_policy=all
+```
+
+Two things support it. `tests/conftest.py` prints the basetemp and its free
+space in every run's header, so the number is in the log of the run that
+failed rather than in a postmortem someone thinks to do; and it annotates a
+*failing* test when space is low, at the moment of failure — with retention
+`failed`, passing tests free their trees as they go, so a run that genuinely
+exhausted the disk can look healthy by the time the summary is written.
+`tests/test_tmp_footprint.py` guards both, and guards the policy behaviourally
+by running an inner pytest against this repository's own `pyproject.toml`
+rather than asserting on the setting's string.
+
+The other candidate fix — having the tier share one generated package instead
+of running `stencil gen` per test — was deliberately **not** taken here. It is
+a wall-clock change rather than a disk one, it is a much larger change to the
+fixtures, and it is `stn-vda`. Concurrency is a third thing again: two runs
+sharing a `--basetemp`, or the one fixed browser image tag, corrupt each other
+(`stn-zim`).
+
 ## Architecture Overview
 
 **stencil is a scaffolding generator, not a renderer.** It never invokes pandoc.

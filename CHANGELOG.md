@@ -11,6 +11,26 @@ How the version gets bumped is written down in
 
 ## 0.38.0
 
+- **The test tier no longer keeps every passing test's output**
+  (`stn-0ot`, closing `stn-7im`). `tmp_path_retention_policy = "failed"`:
+  measured, each generated package is ~10.75MB of inlined assets, the unit
+  tier retained 823MB across 310 directories per run, and pytest kept three
+  runs — which exhausted a 7.7GB tmpfs and produced `51 failed, 540 passed, 157 errors` that named the disk nowhere a reader would connect to the cause.
+  A failing test still keeps its tree, which is the one you want to look at;
+  `-o tmp_path_retention_policy=all` restores the old behaviour for a
+  debugging session.
+
+  Measured after the change, on the same full container-tier run: the
+  basetemp tree went from **4.0GB to 117MB**, a 34x reduction, with 872
+  tests passing either way.
+
+- **A run says where its temp tree is and how much room it has**, in the
+  header of every run, and a failing test is annotated when space is low — at
+  the moment of failure, because with the new policy a run that exhausted the
+  disk mid-way looks healthy by summary time.
+
+  Nothing in a generated package changed; this is the suite only.
+
 - **The CLI tests run the code under test** (`stn-12v`). `tests/test_cli.py`
   drives stencil as a subprocess, which imported whatever `pip install -e`
   put on the path — one checkout. Run from a git worktree, that meant the
