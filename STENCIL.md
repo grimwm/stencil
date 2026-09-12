@@ -420,6 +420,25 @@ make doc COMPOSE_FILES="docker-compose.yml docker-compose.override.yml"
 Create any `.j2` file and add it to your `.config.yaml` templates list. Templates have access to
 all package configuration fields plus derived variables like `has_web`, `has_mysql`, `has_docs`.
 
+#### `html-to-pdf.js.j2` and `Dockerfile.browser.j2` now travel together
+
+Overriding `html-to-pdf.js.j2` still works, and still takes effect: the pdf service's image is
+built from your package directory, so the copy `stencil gen` renders there is the one that gets
+built in. What changed is that the script is **run from inside the image** rather than from the
+mounted package directory — Node decides whether a `.js` file is CommonJS or an ES module from the
+nearest `package.json` to the file, and from the mount that was yours.
+
+Two consequences worth knowing before you override either file:
+
+- If you also override `Dockerfile.browser.j2`, keep its `COPY html-to-pdf.js` line. Without it the
+  pdf service starts with `Cannot find module`, and the script's own diagnostic — the one that
+  explains a missing tools directory — cannot run, because the script is not there to run it.
+- `docker compose run --rm pdf …` on its own now runs whichever script was baked the last time the
+  image was built. `make pdf` runs `docker compose build pdf` first and is unaffected; if you
+  invoke the service by hand while editing the script, build first. The `check-access` service does
+  not have this property — its script is inlined into `docker-compose.yml`, so an edit there takes
+  effect immediately.
+
 ### Custom Document Features
 
 To add a new conditional feature (e.g., `draft`):

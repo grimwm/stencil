@@ -511,6 +511,79 @@ def test_the_browser_image_installs_from_the_pinned_manifest_and_lockfile(doc_pa
     assert f"ENV PATH={pipeline.BROWSER_NODE_MODULES}/.bin:$PATH\n" in dockerfile
 
 
+def test_the_pdf_driver_is_baked_into_the_image_at_the_pinned_path(doc_package):
+    """stn-7ki. The three places that name the baked script must agree.
+
+    The filename is written down in the Dockerfile, in the compose entrypoint
+    and in pipeline.BROWSER_SCRIPT_PATH rather than reaching the two templates
+    through a shared context key, because adding one means editing generate.py.
+    This is what stops those three drifting: a rename that misses one produces
+    an image whose pdf service cannot start, and `Cannot find module` is a poor
+    way to find that out.
+    """
+    dockerfile = (doc_package / "Dockerfile.browser").read_text()
+    compose = yaml.safe_load((doc_package / "docker-compose.yml").read_text())
+
+    assert (
+        f"COPY {pipeline.BROWSER_SCRIPT} {pipeline.BROWSER_SCRIPT_PATH}" in dockerfile
+    ), "Dockerfile.browser no longer bakes the pdf driver into the image"
+    assert compose["services"]["pdf"]["entrypoint"] == [
+        "node",
+        pipeline.BROWSER_SCRIPT_PATH,
+    ], "the pdf service is not running the baked script"
+
+    # AFTER the install, or every edit to the script pays for `npm ci` again.
+    assert dockerfile.index("COPY " + pipeline.BROWSER_SCRIPT) > dockerfile.index(
+        f"RUN cd {pipeline.BROWSER_TOOLS_DIR} && npm ci"
+    ), "the COPY was moved above npm ci, which invalidates the install layer"
+
+
+def test_the_baked_scripts_manifest_cannot_reopen_either_defect(doc_package):
+    """Two keys that must stay ABSENT from {BROWSER_TOOLS_DIR}/package.json.
+
+    That file is the derived npm manifest, and baking html-to-pdf.js beside it
+    made it load-bearing in a second way nobody would guess from its contents:
+
+    - It is now the nearest package.json TO THE SCRIPT, so it is what decides
+      the script is CommonJS. A ``"type": "module"`` key here would reopen
+      stn-7ki *inside the image*, where no consumer could even see the cause.
+    - ``package.json`` is one of puppeteer's thirteen lilconfig searchPlaces,
+      and after the chdir this directory is the FIRST one on the upward walk.
+      A ``puppeteer`` key here would be read as configuration -- stn-jeq, with
+      the payload moved into stencil's own artifact rather than the consumer's.
+
+    Both hold by construction today: npm_manifest emits name, version, private
+    and dependencies and nothing else. Neither is asserted anywhere else, and
+    the manifest is exactly the thing a future pin-map change edits.
+    """
+    manifest = json.loads(
+        pipeline.npm_manifest(pipeline.BROWSER_MANIFEST_NAME, pipeline.BROWSER_NPM_PINS)
+    )
+    assert "type" not in manifest, (
+        'the browser manifest declares a "type", which decides how Node parses '
+        "the baked html-to-pdf.js beside it -- that is stn-7ki, reopened inside "
+        "the image"
+    )
+    assert "puppeteer" not in manifest, (
+        'the browser manifest declares a "puppeteer" key, which puppeteer reads '
+        "as configuration from the very directory the script chdirs into -- that "
+        "is stn-jeq, reopened in stencil's own artifact"
+    )
+
+    # And the two working directories the chdir depends on. After the script
+    # moves itself out of the mount, these are the only reason a RELATIVE
+    # argument from the generated Makefile (OUT := . for a package with no
+    # output_dir) still resolves inside it.
+    dockerfile = (doc_package / "Dockerfile.browser").read_text()
+    compose = yaml.safe_load((doc_package / "docker-compose.yml").read_text())
+    assert dockerfile.rstrip().endswith("WORKDIR /workspace"), (
+        "Dockerfile.browser no longer leaves the image's working directory in "
+        "the mount, so a relative argument to the pdf service resolves nowhere"
+    )
+    for name in ("pdf", "check-access"):
+        assert compose["services"][name]["working_dir"] == "/workspace", name
+
+
 def test_html_to_pdf_js_roots_its_resolution_at_the_pinned_tools_dir(doc_package):
     """stn-cnm: puppeteer and pdf-lib must resolve from pipeline.BROWSER_TOOLS_DIR
     (module.createRequire rooted at "{{ browser_tools_dir }}/package.json", per
@@ -1589,14 +1662,39 @@ def bare_tools_workdir(rendered_pdf_page, tmp_path_factory):
 
 @pytest.mark.integration
 def test_html_to_pdf_ignores_a_decoy_in_the_workspace(decoy_tools_workdir):
-    """ACCEPTANCE for stn-cnm. Same image, same mount, same entrypoint as the
-    generated pdf compose service -- pipeline.html_to_pdf runs
-    `node html-to-pdf.js document.html document.pdf` over a directory that
-    also carries decoy node_modules/{puppeteer,pdf-lib}, planted above.
+    """ACCEPTANCE for stn-cnm. Same image, same mounts and same entrypoint as
+    the generated pdf compose service, over a directory that also carries decoy
+    node_modules/{puppeteer,pdf-lib}, planted above.
 
     A decoy /workspace/node_modules/puppeteer with a wrong version must not
     be used by make pdf: exit 0, a PDF actually written, and neither decoy's
     marker anywhere in stderr.
+
+    WHAT THIS STOPPED BEING ABLE TO PROVE, said plainly rather than left for a
+    reader to discover. Since stn-7ki the script runs from
+    pipeline.BROWSER_SCRIPT_PATH, inside the image -- so module resolution
+    starts at /opt/tools and a decoy at /workspace/node_modules is out of reach
+    of a BARE require as well as a rooted one. This test would now pass with
+    the createRequire guard deleted, which it would not have before.
+
+    It is kept, and it is not the guard's test any more. WHAT HOLDS stn-cnm NOW
+    IS THE FAST, STATIC TIER IN THIS SAME FILE, by name so a reader can go and
+    check rather than take this on trust:
+
+    - test_html_to_pdf_js_roots_its_resolution_at_the_pinned_tools_dir -- the
+      createRequire needle and the resolved-path startsWith check;
+    - test_no_generated_js_bare_requires_a_pinned_browser_package -- the scan
+      over every generated .js;
+    - test_the_missing_tools_guard_names_the_pinned_dir -- the one runtime test
+      that still proves the guard FIRES, which it does by running the script
+      under a plain node image with no pipeline.BROWSER_TOOLS_DIR at all.
+
+    None of those is touched by the move and all stayed exactly as strict. The
+    first two run with no container runtime, so unlike this test they cannot be
+    skipped into silence. What this one still buys is a runtime proof that the
+    PINNED tree is what actually launches Chromium and writes the PDF, in a
+    directory built to tempt it otherwise: defence in depth, for one container
+    minute. Do not read its green as evidence about the guard.
     """
     result = pipeline.html_to_pdf(
         "document.html",
@@ -1622,6 +1720,17 @@ def test_html_to_pdf_ignores_a_decoy_in_the_workspace(decoy_tools_workdir):
 @pytest.mark.integration
 def test_a_workspace_decoy_would_win_a_bare_require(decoy_tools_workdir):
     """CONTROL, and it must assert the RIGHT half.
+
+    IT CONTROLS FOR A LOCATION THE SCRIPT NO LONGER OCCUPIES. This runs through
+    pipeline.run_in_browser, which writes its script INTO the workdir, so it
+    proves what a bare require reaching out of /workspace would find -- and
+    since stn-7ki the pdf driver runs from pipeline.BROWSER_SCRIPT_PATH
+    instead. Kept and relabelled rather than deleted: it is still the only
+    thing in this file that demonstrates the decoy fixture is well-formed, and
+    a malformed decoy is what would make the acceptance test above pass for the
+    wrong reason. Read it as "the fixture is real", not as "the acceptance test
+    discriminates" -- that second claim is gone, and the acceptance test's own
+    docstring now says so.
 
     The acceptance test's load-bearing assertion is exit 0; "the marker is
     absent from stderr" is vacuous unless something proves the decoy WOULD
@@ -1727,6 +1836,17 @@ def test_the_missing_tools_guard_names_the_pinned_dir(bare_tools_workdir):
         "document.html",
         "document.pdf",
         workdir=bare_tools_workdir,
+        # THE MOUNTED COPY, EXPLICITLY, and this is the one caller that wants
+        # it. Since stn-7ki the pdf service runs the copy BAKED into the
+        # browser image at pipeline.BROWSER_SCRIPT_PATH -- but the whole point
+        # of this test is a plain node image, which has no
+        # pipeline.BROWSER_TOOLS_DIR and therefore no baked script either.
+        # Left to the default, this would exit 1 with Node's own
+        # `Cannot find module '/opt/tools/html-to-pdf.js'` and the assertions
+        # below would be measuring the absence of a file rather than the guard
+        # they are named for. bare_tools_workdir puts the real generated script
+        # in the mount for exactly this.
+        script="/workspace/html-to-pdf.js",
         tag=pipeline.NODE_IMAGE,
         timeout=60,
     )

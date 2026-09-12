@@ -196,7 +196,16 @@
   # @media print rules the HTML already carries are the page geometry, so the
   # PDF and the browser's own Ctrl+P produce the same document.
   #
-  # Invoked as: docker compose run --rm pdf <input.html> <output.pdf>
+  # Invoked as: docker compose build pdf && docker compose run --rm pdf <in.html> <out.pdf>
+  #
+  # THE BUILD IS PART OF THE INVOCATION NOW, not a one-off setup step. The
+  # driver script is baked into the image (see the entrypoint below), so a bare
+  # `compose run` executes whichever html-to-pdf.js was baked the last time this
+  # image was built -- and the tag, `localhost/<package_id>_browser:latest`,
+  # carries no repository qualifier, so a package of the same id in ANOTHER
+  # checkout shares it. (Within one config the tag is per package, so packages
+  # here do not collide with each other.) `make pdf` already runs
+  # `$(DC) build pdf` first; this line is for anyone typing the command by hand.
   pdf:
     build:
       context: .
@@ -210,10 +219,24 @@
       # sources is `..` away, and `..` escapes a bind mount. Mounted separately.
       - {{ package_output_dir }}:/out:z
 {% endif %}
+    # /workspace, EVEN THOUGH THE SCRIPT IS NOT HERE ANY MORE. The pair is the
+    # design rather than a leftover: the Makefile passes `$(OUT)/Guide.html`,
+    # which is relative for a package with no output_dir, so the process has to
+    # START in the mount for a relative argument to mean anything.
+    # html-to-pdf.js resolves both of its arguments against this directory and
+    # then chdir()s out of it, before puppeteer can read a .puppeteerrc.cjs
+    # from it (stn-jeq). Moving working_dir instead would have meant changing
+    # what `make pdf` passes.
     working_dir: /workspace
+    # The script is run from the image rather than from the mount, because Node
+    # decides CommonJS-vs-ESM from the nearest package.json TO THE FILE, and at
+    # /workspace that is the consumer's own -- `{"type": "module"}` there turned
+    # this script into a parse error before any of its guards could speak
+    # (stn-7ki). Dockerfile.browser COPYs it in from this same directory, so a
+    # templates_dir override still reaches the image.
     entrypoint:
       - node
-      - html-to-pdf.js
+      - {{ browser_tools_dir }}/html-to-pdf.js
     restart: "no"
 
   # PDF/UA-1 (ISO 14289-1) conformance, which is a DIFFERENT STANDARD from the
