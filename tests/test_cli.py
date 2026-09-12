@@ -223,7 +223,19 @@ def test_a_single_good_package_still_fails_when_a_sibling_is_broken(tmp_path, ar
     next contributor does not "fix" it. A package-scoped command still reads
     every package's context, not only the one named -- the aggregated
     pre-flight has no narrower mode, and a broken sibling should not let a
-    package-scoped command sail past it while `--all` would have refused."""
+    package-scoped command sail past it while `--all` would have refused.
+
+    stn-p9a NARROWS this for `clean` specifically, and only when the named
+    package has its own manifest on disk: since neither package here was
+    ever generated, `good` has no manifest, so this case still takes the
+    config-derived path and the collective behaviour above still holds --
+    that is exactly why this test still asserts non-zero for `clean good`.
+    Once a manifest exists for the named package, clean no longer needs the
+    sibling's config at all and succeeds despite it; see
+    tests/test_manifest.py's
+    test_clean_of_a_single_manifest_backed_package_succeeds_despite_a_broken_sibling
+    for that case. `gen`'s collective behaviour is unchanged either way --
+    gen still fails closed on any broken sibling, manifest or not."""
     write_config(tmp_path, GOOD_AND_BROKEN_CONFIG)
 
     result = run_cli(*args, cwd=tmp_path)
