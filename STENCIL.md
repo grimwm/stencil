@@ -209,10 +209,22 @@ Two more cases fall out of the same design and are not bugs:
 
   This is the supported way to build somewhere else, and the escape is
   deliberate — unlike the *top-level* `output_dir`, which must stay under the
-  config file's directory (see [Configuration](#configuration) below). Note
-  that the package-level key is not itself path-validated yet: `stn-1a4`
-  tracks putting it through the same checks every other configured path
-  already gets.
+  config file's directory (see [Configuration](#configuration) below).
+
+  The key **is** path-validated as of 0.39.0 (`stn-1a4`): no shell or Make
+  metacharacter, no whitespace, no control character, no leading `~`, no
+  absolute path, no `#` (it would comment out the generated Makefile's
+  `OUT_HOST` assignment), and no glob metacharacter. The `..` escape is the
+  one clause that stays off, because it is this key's whole purpose.
+
+  Read what that escape means plainly, because the comfortable version is
+  wrong: *stencil* writes nothing there and `clean` deletes nothing there,
+  but **the package stencil generates does both**. The Makefile runs
+  `mkdir -p $(OUT_HOST)` and `rm -f $(OUT_HOST)/<your documents>`, and the
+  compose file bind-mounts that directory into a container whose processes
+  run as root. So an `output_dir` six levels up is a real instruction to
+  build and clean six levels up, not a contained one. That is the feature;
+  it is not a safe place to put a value you did not write yourself.
 
 - **Packages sharing one `dir` share one manifest, and one blast radius.**
   There is a single `.stencil-manifest.json` in that directory and `gen`
@@ -273,20 +285,62 @@ writes through the output base, so nothing outside the tree is touched either wa
 deferred to the next `gen` or `clean`, not skipped.
 
 If you were using the top-level key to build somewhere else, the **package-level** `output_dir` is
-the supported way to do that and is untouched here — but read it as a different key rather than the
-same one from another scope: it moves a package's *build products* relative to its package
-directory, while this one decides where *scaffolding is generated*. If you were using it to keep
-generated scaffolding out of the config directory, there is no equivalent key; move the config
-file. Note also that the package-level key is **not itself path-validated yet** (`stn-1a4`), so it
-is not a safer place to put an untrusted value.
+the supported way to do that — but read it as a different key rather than the same one from another
+scope: it moves a package's *build products* relative to its package directory, while this one
+decides where *scaffolding is generated*. If you were using it to keep generated scaffolding out of
+the config directory, there is no equivalent key; move the config file. The package-level key is
+path-validated as of 0.39.0 (`stn-1a4`) and keeps its `..` escape; see
+[what that escape actually means](#the-manifest) above before pointing it at
+anything you did not write yourself.
+
+`output_dir` and every package's `dir` are additionally refused if they start with `!` or `#` or
+contain a glob metacharacter. Those two values lead every line of the managed `.gitignore` section,
+where a line is a **pattern** rather than a path: a leading `!` negates it and re-includes files
+your own rules ignore, and a leading `#` comments it out. A `dir: "!solutions"` made `stencil install` un-ignore a handout's answer key.
+
+A package's `dir` must also name a directory of its own — `.` and `""` are refused. They made the
+package directory the config directory itself, which is the ground `clean` resolves every path it
+removes against.
 
 The same containment rule now covers a package's `dir`, so a symlinked package directory can no
-longer take `gen`'s writes out of the output tree. **That check covers the package directory
-itself, and nothing below it.** A symlink at any path *inside* a real package directory — the
-rendered file itself, a subdirectory a nested `dest` writes through, or a brand image's
-destination — is still followed, and `gen` and `clean` do not even agree about which of those they
-resolve, so such a package can generate at exit 0 and then be permanently un-cleanable. `stn-h5q`
-tracks all of it with reproductions.
+longer take `gen`'s writes out of the output tree — **and, since 0.39.0, every path below it as
+well** (`stn-h5q`). Before writing anything, `gen` checks each component of each destination under
+the package directory and refuses a symlink at any of them, a hardlinked file at the last (which no
+path check can see — the second name for the inode lives outside and `resolve()` reports the path
+contained, because it is), and any node that is not the kind of file `gen` writes. A FIFO planted at
+a destination used to hang `gen` forever. The check runs as one pass before the first write, so a
+refused run touches nothing, and the writes themselves use `O_NOFOLLOW`.
+
+What that makes symmetric is the **parent**: `gen` and `clean` now compute it with one function, so
+anything `gen` writes, `clean` can remove. `clean` also now removes a symlink standing where a
+generated file belongs even when it dangles or points at a directory — its type checks followed the
+link, so those were the two cases it silently skipped while reporting success. The final component stays asymmetric on purpose — `gen`
+refuses a link there because it would follow it, `clean` unlinks one without resolving it because
+removing the link is the only way such a package is ever cleanable again. `gen` is therefore
+slightly stricter than `clean`, never the reverse.
+
+Two limits, stated rather than implied. A symlink planted at an intermediate directory *between*
+that check and the write is still followed — `O_NOFOLLOW` covers the final component only — which
+needs write permission on one directory inside the output tree, and is filed as `stn-avv` with the
+descriptor-walk fix. And a `.stencil-manifest.json` you did not write is still trusted more than it
+should be: `stn-jez`.
+
+### Where the managed `.gitignore` goes
+
+`stencil install` writes its section into a `.gitignore` **beside the config file**, not in the
+directory you happened to run it from, and every line carries the top-level `output_dir` as well as
+the package's `dir` (`stn-jl3`). Both changed in 0.39.0. Before, a config with `output_dir: out`
+produced lines reading `demo/Makefile` for files at `out/demo/Makefile`, so the section ignored
+nothing stencil writes; and `stencil --config sub/.config.yaml install` from a repository root
+wrote its lines into the root's `.gitignore`, where none of them applied.
+
+If you have a `.gitignore` holding a stencil section written by an older version from a different
+working directory, `stencil install` now says so and you should delete that block — stencil no
+longer maintains it. It is not removed for you, because it may be in a different repository.
+
+One consequence of "beside the config file": the directory is the one holding the file `--config`
+resolves to, so if `.config.yaml` is itself a symlink, the `.gitignore` lands beside the link's
+*target*.
 
 And `package_name` is now checked as what it is, a filename in the package directory: no separator,
 no whitespace, no `..`, no shell or glob metacharacter. It is checked for every package type, where

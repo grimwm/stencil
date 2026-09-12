@@ -33,6 +33,8 @@ case that makes the brand one worth more than its severity suggests.
 from __future__ import annotations
 
 import json
+import os
+import sys
 
 import pytest
 
@@ -957,3 +959,733 @@ def test_a_gen_refusal_carries_no_python_class_name(tmp_path):
         "a config refusal must not carry a Python class name: "
         f"{result.stderr!r}"
     )
+
+
+# --- stn-17h: a package directory must be STRICTLY beneath the output base --
+#
+# Every containment check in this file asks whether a resolved path stays
+# UNDER a root, and `Path.relative_to` answers yes for a path EQUAL to that
+# root. So `dir: "."` passed all of them: `check_config_path` finds no `..`
+# in `Path(".").parts` (it is empty), and `_validated_package_dirs` then
+# places the package directory exactly ON the output base. With no top-level
+# `output_dir`, that base is the config directory -- the repository root.
+#
+# Nothing escapes anywhere, which is why this is a separate ticket from
+# stn-pe3 and stn-vhr rather than a case they missed.
+
+
+@pytest.mark.parametrize("value", [".", "", "./"])
+def test_a_package_dir_that_is_the_output_base_is_refused(value):
+    """A package needs its own directory, and these three spellings all name
+    the output base itself.
+
+    `dir` is a delete list's anchor: `clean` unions the manifest found in the
+    package directory with the config-derived entries and unlinks each one
+    under it. Anchored at the repository root, a planted
+    `.stencil-manifest.json` is a free-form list of files to remove -- see
+    the end-to-end test below, which is the ticket's own reproduction.
+    """
+    with pytest.raises(ValueError, match="dir"):
+        package_contexts(config(dir=value))
+
+
+def test_clean_refuses_a_package_dir_that_is_the_config_directory(tmp_path):
+    """stn-17h's reproduction, verbatim, and the reason this is a P1 rather
+    than a tidy-up.
+
+    BEFORE: `stencil clean demo` printed four `Removed` lines and exited 0,
+    having deleted a hand-written markdown file, a dotfile holding a secret,
+    and a whole source directory -- none of which stencil ever generated. The
+    manifest that named them is a gitignored JSON file, so planting one is
+    invisible in a diff.
+
+    Asserted on the FILES, not on the exit code. A refusal that still deletes
+    is the failure worth catching, and an exit code cannot see it.
+    """
+    import json
+
+    write_config(
+        tmp_path,
+        {
+            "templates": [{"src": "Makefile.j2"}],
+            "packages": {"demo": {"name": "Demo", "package_type": "none", "dir": "."}},
+        },
+    )
+    (tmp_path / "IMPORTANT.md").write_text("hand written\n")
+    (tmp_path / ".env").write_text("SECRET=1\n")
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "app.py").write_text("print(1)\n")
+    (tmp_path / MANIFEST_NAME).write_text(
+        json.dumps(
+            {
+                "manifest_version": MANIFEST_VERSION,
+                "package": "demo",
+                "dir": ".",
+                "entries": ["IMPORTANT.md", ".env", "src/app.py"],
+            }
+        )
+    )
+
+    result = run_cli("clean", "demo", cwd=tmp_path)
+
+    assert result.returncode != 0, (
+        f"rc={result.returncode}, stdout={result.stdout!r}, "
+        f"stderr={result.stderr!r}"
+    )
+    assert "Traceback" not in result.stderr, result.stderr
+    for survivor in ("IMPORTANT.md", ".env", "src/app.py"):
+        assert (tmp_path / survivor).exists(), (
+            f"{survivor} was deleted by a package that generated nothing: "
+            f"stdout={result.stdout!r}"
+        )
+
+
+def test_a_package_dir_symlinked_to_the_output_base_is_refused(tmp_path):
+    """The spelling no string check can see, and the reason the refusal
+    belongs in `contained_path` rather than only in the pre-flight.
+
+    `dir: demo` is an ordinary value that passes every character rule; the
+    equality that matters appears only after `resolve()`, when `out/demo` is
+    a link pointing back at `out`. The string check and the resolved check
+    are two halves of one rule here exactly as they are for `output_dir`
+    (stn-pe3) and for a symlinked package directory (stn-vhr).
+    """
+    import os
+
+    config_dir = tmp_path / "cfg"
+    config_dir.mkdir()
+    (config_dir / "out").mkdir()
+    os.symlink(config_dir / "out", config_dir / "out" / "demo")
+
+    write_config(
+        config_dir,
+        {
+            "output_dir": "out",
+            "templates": [{"src": "Makefile.j2"}],
+            "packages": {"demo": {"name": "Demo", "package_type": "none"}},
+        },
+    )
+
+    result = run_cli("gen", "demo", cwd=config_dir)
+
+    assert result.returncode != 0, (
+        f"rc={result.returncode}, stdout={result.stdout!r}, "
+        f"stderr={result.stderr!r}"
+    )
+    assert "Traceback" not in result.stderr, result.stderr
+    assert not (config_dir / "out" / "Makefile").exists(), (
+        "gen wrote through the link into the output base itself: "
+        f"stdout={result.stdout!r}"
+    )
+
+
+def test_gen_refuses_a_package_dir_that_is_the_output_base(tmp_path):
+    """gen and clean must agree. `clean` refusing alone would leave a package
+    that generates at exit 0 into the repository root and then cannot be
+    cleaned -- the permanently un-cleanable package of stn-9rn, arrived at
+    from the other side."""
+    write_config(
+        tmp_path,
+        {
+            "templates": [{"src": "Makefile.j2"}],
+            "packages": {"demo": {"name": "Demo", "package_type": "none", "dir": "."}},
+        },
+    )
+
+    result = run_cli("gen", "demo", cwd=tmp_path)
+
+    assert result.returncode != 0, (
+        f"rc={result.returncode}, stdout={result.stdout!r}, "
+        f"stderr={result.stderr!r}"
+    )
+    assert not (tmp_path / "Makefile").exists(), (
+        f"gen wrote into the config directory itself: stdout={result.stdout!r}"
+    )
+
+
+def test_gen_dry_run_refuses_a_package_dir_that_is_the_output_base(tmp_path):
+    """`--dry-run` is the cheapest thing a reviewer runs over an untrusted
+    branch, so it has to report the same refusal rather than previewing a
+    write it would not perform -- the argument stn-vhr already made for the
+    package directory it contains."""
+    write_config(
+        tmp_path,
+        {
+            "templates": [{"src": "Makefile.j2"}],
+            "packages": {"demo": {"name": "Demo", "package_type": "none", "dir": "."}},
+        },
+    )
+
+    result = run_cli("gen", "demo", "--dry-run", cwd=tmp_path)
+
+    assert result.returncode != 0, (
+        f"rc={result.returncode}, stdout={result.stdout!r}, "
+        f"stderr={result.stderr!r}"
+    )
+
+
+def test_a_package_dir_one_level_down_still_generates(tmp_path):
+    """The regression guard. Refusing the base must not start refusing the
+    ordinary arrangement every consumer config uses."""
+    write_config(
+        tmp_path,
+        {
+            "output_dir": "out",
+            "templates": [{"src": "Makefile.j2"}],
+            "packages": {"demo": {"name": "Demo", "package_type": "none"}},
+        },
+    )
+
+    result = run_cli("gen", "demo", cwd=tmp_path)
+
+    assert result.returncode == 0, result.stderr
+    assert (tmp_path / "out" / "demo" / "Makefile").exists()
+
+
+# --- stn-h5q: contain the WRITES, not only the directory --------------------
+#
+# stn-vhr contains the package DIRECTORY. In every case below the package
+# directory is a genuine directory that resolves cleanly and passes that
+# check -- what leaves the tree is a component BELOW it, which no
+# directory-level check can see. All four reproduced at exit 0, with the
+# success message naming the path INSIDE the tree.
+#
+# The asymmetry is the point rather than the severity. `clean` already
+# resolves each entry's PARENT and refuses one that lands outside
+# (_remove_entries); `gen` resolved nothing at all. So gen wrote a file
+# clean then refused to remove -- the permanently un-cleanable package of
+# stn-9rn, through a different door.
+
+pytestmark_h5q = pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="O_NOFOLLOW, symlinks and hardlinks do not behave the same on Windows",
+)
+
+
+def _planted_package(tmp_path, **config_overrides):
+    """A config directory with an `out/demo` package directory that already
+    exists, and a file OUTSIDE the tree worth protecting.
+
+    Returns (config_dir, package_dir, outside_file). The caller plants
+    whatever link it is testing and then runs `gen`.
+    """
+    config_dir = tmp_path / "cfg"
+    package_dir = config_dir / "out" / "demo"
+    package_dir.mkdir(parents=True)
+    outside = config_dir.parent / "outside"
+    outside.mkdir()
+    target = outside / "target.txt"
+    target.write_text("PRECIOUS\n")
+
+    cfg = {
+        "output_dir": "out",
+        "templates": [{"src": "Makefile.j2"}],
+        "packages": {"demo": {"name": "Demo", "package_type": "none"}},
+    }
+    cfg.update(config_overrides)
+    write_config(config_dir, cfg)
+    return config_dir, package_dir, target
+
+
+@pytestmark_h5q
+def test_gen_refuses_a_symlink_at_the_final_component(tmp_path):
+    """Reproduction (1). `render_templates` called `output_path.write_text`,
+    which opens O_WRONLY|O_CREAT|O_TRUNC with NO O_NOFOLLOW -- so a symlink
+    standing where a generated file goes was followed, and the rendered
+    Makefile landed on whatever it pointed at. rc=0, and the "Generated:"
+    line named the path inside the tree.
+
+    Asserted on the OUTSIDE FILE's content. An exit code cannot see a
+    successful write to the wrong place."""
+    config_dir, package_dir, target = _planted_package(tmp_path)
+    (package_dir / "Makefile").symlink_to(target)
+
+    result = run_cli("gen", "demo", cwd=config_dir)
+
+    assert result.returncode != 0, (
+        f"rc={result.returncode}, stdout={result.stdout[:400]!r}"
+    )
+    assert "Traceback" not in result.stderr, result.stderr
+    assert target.read_text() == "PRECIOUS\n", (
+        "gen followed a symlink at the file it writes and overwrote a file "
+        "outside the output tree"
+    )
+
+
+@pytestmark_h5q
+def test_gen_refuses_a_hardlink_at_the_final_component(tmp_path):
+    """Reproduction (2), and the one no path check can ever catch.
+
+    `resolve()` reports the path CONTAINED, because it is: the second name
+    for the inode lives outside and no `relative_to` can see it. The only
+    thing that distinguishes it is `st_nlink`, which is 2.
+
+    This is why the fix is a stat of every component rather than another
+    resolve-and-compare."""
+    config_dir, package_dir, target = _planted_package(tmp_path)
+    os.link(target, package_dir / "Makefile")
+    assert (package_dir / "Makefile").stat().st_nlink == 2, "test setup"
+
+    result = run_cli("gen", "demo", cwd=config_dir)
+
+    assert result.returncode != 0, (
+        f"rc={result.returncode}, stdout={result.stdout[:400]!r}"
+    )
+    assert "Traceback" not in result.stderr, result.stderr
+    assert target.read_text() == "PRECIOUS\n", (
+        "gen wrote through a hardlink and overwrote a file outside the tree"
+    )
+
+
+@pytestmark_h5q
+def test_gen_refuses_a_symlinked_intermediate_directory(tmp_path):
+    """Reproduction (3), and the gen/clean asymmetry stated as a test.
+
+    A nested `dest` is documented (`.vscode/settings.json`), and
+    `output_path.parent.mkdir(parents=True, exist_ok=True)` walks a link
+    happily. BEFORE: gen wrote `outside/Makefile` at rc=0 and `clean` then
+    refused that same entry by name, rc=1, on every run thereafter -- the
+    package could never be cleaned again.
+
+    So this asserts BOTH halves: nothing outside, and `clean` still works
+    afterwards. A fix that only refuses the write would still be a fix; one
+    that leaves clean broken would not."""
+    config_dir, package_dir, target = _planted_package(
+        tmp_path, templates=[{"src": "Makefile.j2", "dest": "sub/Makefile"}]
+    )
+    (package_dir / "sub").symlink_to(target.parent)
+
+    result = run_cli("gen", "demo", cwd=config_dir)
+
+    assert result.returncode != 0, (
+        f"rc={result.returncode}, stdout={result.stdout[:400]!r}"
+    )
+    assert "Traceback" not in result.stderr, result.stderr
+    assert not (target.parent / "Makefile").exists(), (
+        "gen walked a symlinked intermediate directory and wrote outside "
+        "the output tree"
+    )
+
+    assert str(package_dir / "sub") in result.stderr, (
+        "the refusal must name the symlinked COMPONENT, not only the "
+        f"declared dest -- the author edits the wrong line otherwise: "
+        f"{result.stderr!r}"
+    )
+
+    # AND THE RESIDUAL STATE, pinned rather than assumed clean. `clean`
+    # cannot clear this either: `_remove_entries` resolves the entry's
+    # parent, finds it outside the package, and refuses -- deliberately and
+    # permanently, because following the link is the one thing it must never
+    # do. So the package is un-generable AND un-cleanable until someone
+    # removes the link by hand, and the only thing that makes that a
+    # recoverable situation rather than a dead end is gen's message saying
+    # so. Asserting "nothing is left that clean cannot remove" would pass
+    # vacuously here -- gen wrote nothing -- which is why this asserts on
+    # clean's own exit code instead.
+    cleaned = run_cli("clean", "demo", cwd=config_dir)
+    assert "Traceback" not in cleaned.stderr, cleaned.stderr
+    assert cleaned.returncode != 0, (
+        "clean is expected to refuse this entry; if that changed, the "
+        "recovery advice in gen's refusal has to change with it"
+    )
+    assert "delete the link yourself" in result.stderr, (
+        "gen must say how to recover, because `stencil clean` cannot -- and "
+        "the advice must survive _safe's truncation, which is why the "
+        f"message is kept short: {result.stderr!r}"
+    )
+
+
+@pytestmark_h5q
+def test_gen_refuses_a_symlink_at_the_brand_destination(tmp_path):
+    """Reproduction (4). `copy_brand_image` takes real care with its SOURCE
+    -- it opens with O_NOFOLLOW, and says in a comment that a link swapped
+    in after the check must fail rather than quietly read elsewhere -- and
+    then opened its DESTINATION with a bare `open(destination, "wb")`.
+
+    The destination is the half that WRITES, so it is the half that
+    mattered."""
+    config_dir, package_dir, target = _planted_package(
+        tmp_path,
+        brand="logo.svg",
+        **{"brand-alt": "Logo"},
+        packages={
+            "demo": {
+                "name": "Demo",
+                "package_type": "none",
+                "docs": ["README.md"],
+            }
+        },
+    )
+    (config_dir / "logo.svg").write_text("<svg/>\n")
+    (package_dir / "logo.svg").symlink_to(target)
+
+    result = run_cli("gen", "demo", cwd=config_dir)
+
+    assert result.returncode != 0, (
+        f"rc={result.returncode}, stdout={result.stdout[:400]!r}"
+    )
+    assert "Traceback" not in result.stderr, result.stderr
+    assert target.read_text() == "PRECIOUS\n", (
+        "copy_brand_image followed a symlink at its destination"
+    )
+
+
+@pytestmark_h5q
+def test_a_refused_write_target_stops_gen_before_anything_is_written(tmp_path):
+    """The stn-vhr guarantee, extended from the package directory to the
+    files inside it: a refused run must touch NOTHING, so the check is a
+    pre-pass over every destination rather than a guard at each write.
+
+    Without it, a package whose third template lands on a planted link is
+    left with two rendered files and no manifest -- a half-generated
+    package that looks generated."""
+    config_dir, package_dir, target = _planted_package(
+        tmp_path,
+        templates=[
+            {"src": "Makefile.j2"},
+            {"src": "docker-compose.yml.j2"},
+        ],
+    )
+    # A manifest from an earlier, successful run. generate_package unlinks
+    # this before rendering, so the pre-pass has to sit ABOVE that unlink,
+    # not merely above the mkdir: a refused run that destroyed the manifest
+    # would push the next `clean` onto its config-derived fallback, which is
+    # exactly the trustworthy-list guarantee the manifest exists to give.
+    (package_dir / MANIFEST_NAME).write_text('{"kept": true}\n')
+    (package_dir / "docker-compose.yml").symlink_to(target)
+
+    before = {
+        path.relative_to(package_dir): path.read_bytes()
+        for path in package_dir.rglob("*")
+        if path.is_file() and not path.is_symlink()
+    }
+
+    result = run_cli("gen", "demo", cwd=config_dir)
+
+    assert result.returncode != 0, (
+        f"rc={result.returncode}, stdout={result.stdout[:400]!r}"
+    )
+    after = {
+        path.relative_to(package_dir): path.read_bytes()
+        for path in package_dir.rglob("*")
+        if path.is_file() and not path.is_symlink()
+    }
+    assert after == before, (
+        "a refused run changed the package directory: it must touch "
+        f"nothing at all. stdout={result.stdout[:400]!r}"
+    )
+    assert not (package_dir / "Makefile").exists(), (
+        "the first template was written before the second was refused: "
+        f"stdout={result.stdout[:400]!r}"
+    )
+
+
+@pytestmark_h5q
+def test_a_nested_dest_through_a_real_directory_still_generates(tmp_path):
+    """The regression guard for the documented case. `.vscode/settings.json`
+    is in STENCIL.md, and walking components to refuse a symlinked one must
+    not start refusing an ordinary subdirectory that gen creates itself."""
+    config_dir, package_dir, _target = _planted_package(
+        tmp_path, templates=[{"src": "Makefile.j2", "dest": "sub/Makefile"}]
+    )
+
+    result = run_cli("gen", "demo", cwd=config_dir)
+
+    assert result.returncode == 0, result.stderr
+    assert (package_dir / "sub" / "Makefile").exists()
+
+
+@pytestmark_h5q
+def test_regenerating_over_gens_own_output_still_works(tmp_path):
+    """The most common operation in the tool, and the one a component-walking
+    check is most likely to break: `gen` overwrites its own output on every
+    run, so an ordinary existing file (`st_nlink == 1`, not a link) must not
+    be mistaken for a planted one. A slip of one character here stops
+    stencil working on every existing project, which is a worse outcome than
+    the bug being fixed.
+
+    Deliberately exercises all three write sites on the second pass -- a
+    template, a nested `dest` whose intermediate directory now exists, and
+    the copied brand image, whose destination `copy_brand_image` names
+    itself rather than taking it from the template list -- plus the manifest
+    the first run left behind."""
+    config_dir, package_dir, _target = _planted_package(
+        tmp_path,
+        templates=[
+            {"src": "Makefile.j2"},
+            {"src": "Makefile.j2", "dest": "sub/Makefile"},
+        ],
+        brand="logo.svg",
+        **{"brand-alt": "Logo"},
+        packages={
+            "demo": {
+                "name": "Demo",
+                "package_type": "none",
+                "docs": ["README.md"],
+            }
+        },
+    )
+    (config_dir / "logo.svg").write_text("<svg/>\n")
+
+    first = run_cli("gen", "demo", cwd=config_dir)
+    assert first.returncode == 0, first.stderr
+    assert (package_dir / "logo.svg").is_file(), "test setup: no brand copied"
+
+    second = run_cli("gen", "demo", cwd=config_dir)
+
+    assert second.returncode == 0, (
+        "regenerating over gen's own output was refused: "
+        f"{second.stderr!r}"
+    )
+    assert (package_dir / "sub" / "Makefile").exists()
+    assert (package_dir / "logo.svg").is_file()
+
+
+@pytestmark_h5q
+def test_gen_dry_run_refuses_a_planted_write_target(tmp_path):
+    """`--dry-run` is the cheapest thing a reviewer runs over an untrusted
+    branch -- this file's module docstring says exactly that about the brand
+    read -- so a preview that prints `Would write: out/demo/Makefile` for a
+    path the real run refuses is a lie about what `gen` would do.
+
+    Under `--dry-run` nothing is created and nothing is written, so the
+    pre-pass is the only thing that runs at all: this is the test that pins
+    it running there rather than at each write site."""
+    config_dir, package_dir, target = _planted_package(tmp_path)
+    (package_dir / "Makefile").symlink_to(target)
+
+    result = run_cli("gen", "demo", "--dry-run", cwd=config_dir)
+
+    assert result.returncode != 0, (
+        f"rc={result.returncode}, stdout={result.stdout[:400]!r}"
+    )
+    assert target.read_text() == "PRECIOUS\n"
+
+
+@pytestmark_h5q
+def test_gen_refuses_a_fifo_at_a_destination(tmp_path):
+    """The node type a symlink-and-hardlink check does not look at, found by
+    the adversarial review of this change's own plan.
+
+    A FIFO is neither a symlink nor a regular file, `O_NOFOLLOW` has nothing
+    to say about it, and `mkfifo` needs no privilege. Measured against the
+    draft that refused only those two types: `os.open(fifo,
+    O_WRONLY|O_CREAT|O_TRUNC|O_NOFOLLOW)` BLOCKED INDEFINITELY -- `stencil
+    gen` hung with no timeout, and `clean` then exited 0 leaving the FIFO in
+    place, because `_remove_entries` gates on `path.is_file()`. So the
+    cheapest of the five unhandled types produced both harms the ticket is
+    about at once.
+
+    The check is an allowlist for exactly this reason: a regular file with
+    one link at the last component, a directory at every other. Five node
+    types are refused by saying what IS allowed rather than by enumerating
+    what is not."""
+    config_dir, package_dir, _target = _planted_package(tmp_path)
+    os.mkfifo(package_dir / "Makefile")
+
+    result = run_cli("gen", "demo", cwd=config_dir, timeout=60)
+
+    assert result.returncode != 0, (
+        f"rc={result.returncode}, stdout={result.stdout[:400]!r}"
+    )
+    assert "Traceback" not in result.stderr, result.stderr
+
+
+@pytestmark_h5q
+def test_gen_refuses_a_symlinked_subdirectory_pointing_back_inside(tmp_path):
+    """gen is STRICTER than clean here, deliberately, and that is pinned
+    rather than left to be discovered.
+
+    `_remove_entries` permits an intermediate symlink that resolves back
+    inside the package -- it resolves the parent and the containment holds,
+    so `clean` cleans such a package happily. `gen` refuses it anyway: a
+    link is not something `gen` created, and following one is how the three
+    cases above went wrong.
+
+    So the invariant this change establishes is "gen is at least as strict
+    as clean", not "gen and clean agree". Anything gen writes, clean can
+    remove; the converse is not claimed."""
+    config_dir, package_dir, _target = _planted_package(
+        tmp_path, templates=[{"src": "Makefile.j2", "dest": "sub/Makefile"}]
+    )
+    (package_dir / "real").mkdir()
+    (package_dir / "sub").symlink_to(package_dir / "real")
+
+    result = run_cli("gen", "demo", cwd=config_dir)
+
+    assert result.returncode != 0, (
+        f"rc={result.returncode}, stdout={result.stdout[:400]!r}"
+    )
+    assert "symlink" in result.stderr, result.stderr
+
+
+def test_a_template_dest_derived_from_src_is_checked_too(tmp_path):
+    """`package_contexts` checks a DECLARED `dest` and skips the key when it
+    is absent -- and the destination is then `src` with `.j2` removed, while
+    `src` goes through no check anywhere.
+
+    Measured before the fix: `src: "a b.txt.j2"` generated `a b.txt` at exit
+    0, recorded it in the manifest, and `stencil clean` then refused ITS OWN
+    manifest entry for containing whitespace -- so the package was
+    permanently un-cleanable and the complaint named a "manifest entry" the
+    author never wrote. That is stn-9rn's harm exactly, arriving through the
+    key nobody checked.
+
+    The refusal names `src`, not `dest`: the author wrote `src`, and a
+    message naming a key that is not in their config sends them hunting."""
+    write_config(
+        tmp_path,
+        {
+            "templates": [{"src": "a b.txt.j2"}],
+            "packages": {"demo": {"name": "Demo", "package_type": "none"}},
+        },
+    )
+
+    result = run_cli("gen", "demo", cwd=tmp_path)
+
+    assert result.returncode != 0, (
+        f"rc={result.returncode}, stdout={result.stdout[:400]!r}"
+    )
+    assert "src" in result.stderr, result.stderr
+    assert not (tmp_path / "demo" / "a b.txt").exists(), (
+        "gen wrote a file clean would then refuse to remove"
+    )
+
+
+@pytestmark_h5q
+@pytest.mark.parametrize("kind", ["dangling", "directory"])
+def test_clean_removes_a_symlink_standing_where_a_generated_file_goes(
+    tmp_path, kind
+):
+    """gen's refusal says "`stencil clean` removes it". It has to be TRUE.
+
+    `_remove_entries` gated its removal on `Path.exists()` and
+    `Path.is_file()`, and BOTH follow a symlink -- `exists()` is False for a
+    dangling one, `is_file()` is False for one pointing at a directory. So
+    the two shapes that loop's `unlink()` was written to handle were the
+    exact two it never reached.
+
+    Measured before the fix: `stencil clean demo` exited 0 with twelve
+    `Removed` lines and the word `Makefile` in none of them, the link
+    survived, and `gen` then refused forever -- a package locked out of
+    regeneration by a refusal whose own advice did not work. The link points
+    OUT of the tree, inside a directory AGENTS.md says is routinely handed
+    to someone as a project of their own, and `clean` had just reported the
+    package clean.
+
+    Both halves are asserted: the link is gone, and `gen` works again."""
+    config_dir, package_dir, target = _planted_package(tmp_path)
+    link = package_dir / "Makefile"
+    if kind == "dangling":
+        link.symlink_to(target.parent / "not-there.txt")
+    else:
+        link.symlink_to(target.parent)
+
+    assert run_cli("gen", "demo", cwd=config_dir).returncode != 0
+
+    cleaned = run_cli("clean", "demo", cwd=config_dir)
+
+    assert "Traceback" not in cleaned.stderr, cleaned.stderr
+    assert not link.is_symlink(), (
+        "clean left the link in place while reporting success: "
+        f"rc={cleaned.returncode}, stdout={cleaned.stdout[:400]!r}"
+    )
+    assert target.parent.exists(), "clean removed the link's TARGET"
+
+    again = run_cli("gen", "demo", cwd=config_dir)
+    assert again.returncode == 0, (
+        "the package is still locked out of regeneration after the clean "
+        f"its own refusal recommended: {again.stderr!r}"
+    )
+
+
+@pytestmark_h5q
+def test_the_recovery_advice_says_clean_for_a_link_that_lands_inside(tmp_path):
+    """`clean`'s rule is about the resolved PARENT, not about links, so an
+    intermediate symlink pointing back INSIDE the package is one it handles
+    happily. Telling the author "clean cannot remove it either; delete the
+    link yourself" was false for that case -- and for the final-component
+    case it was already right -- so the advice branches on where the link
+    resolves rather than on which component it is."""
+    config_dir, package_dir, _target = _planted_package(
+        tmp_path, templates=[{"src": "Makefile.j2", "dest": "sub/Makefile"}]
+    )
+    (package_dir / "real").mkdir()
+    (package_dir / "sub").symlink_to(package_dir / "real")
+
+    result = run_cli("gen", "demo", cwd=config_dir)
+
+    assert result.returncode != 0
+    assert "stencil clean" in result.stderr, result.stderr
+    assert "delete the link yourself" not in result.stderr, result.stderr
+
+
+@pytestmark_h5q
+def test_the_refusal_survives_truncation_when_the_path_is_long(tmp_path):
+    """`_safe` truncates a problem at `_MAX_PROBLEM_CHARS`, and this message
+    carries a RESOLVED ABSOLUTE path -- whose length belongs to the machine,
+    not to the author. A GitHub Actions checkout reaches the limit on its
+    own, and `_generate` spends another sixty characters re-prefixing the
+    package id.
+
+    An earlier version of this message put the path in the middle, lost both
+    the diagnosis and the recovery off the end, and carried a comment
+    claiming it was kept short enough. What has to survive is the part that
+    tells the reader what to do, so the path goes last and this pins it."""
+    long_id = "a-reasonably-long-course-directory-name-for-2026-spring"
+    config_dir = tmp_path / "cfg"
+    package_dir = config_dir / "out" / long_id
+    package_dir.mkdir(parents=True)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "target.txt").write_text("PRECIOUS\n")
+    write_config(
+        config_dir,
+        {
+            "output_dir": "out",
+            "templates": [{"src": "Makefile.j2"}],
+            "packages": {long_id: {"name": "Demo", "package_type": "none"}},
+        },
+    )
+    (package_dir / "Makefile").symlink_to(outside / "target.txt")
+
+    result = run_cli("gen", long_id, cwd=config_dir)
+
+    assert result.returncode != 0
+    assert "symlink" in result.stderr, (
+        f"the diagnosis was truncated away: {result.stderr!r}"
+    )
+    assert "stencil clean" in result.stderr, (
+        f"the recovery advice was truncated away: {result.stderr!r}"
+    )
+
+
+@pytest.mark.parametrize("dest", ["*.txt", "x?.txt", "[abc].txt"])
+def test_a_template_dest_with_a_glob_metacharacter_is_refused(tmp_path, dest):
+    """The glob refusal is opt-in rather than part of `_UNSAFE_IN_PATH` --
+    globs are the point of a `package_sources` pattern -- and it was wired
+    to `docs`, `slides`, `dir` and both `output_dir`s, and not to this one.
+
+    Measured: `dest: "*.txt"` generated at exit 0, went into the manifest
+    verbatim, and `clean` then refused it as "not a recognized glob shape"
+    on every run thereafter. stn-9rn's permanently-un-cleanable package,
+    arriving through the very channel the shared destination list was added
+    to close.
+
+    There is a second edge: `install` then wrote `demo/*.txt` into the
+    managed section, which made the author's own `demo/notes.txt`
+    git-invisible."""
+    write_config(
+        tmp_path,
+        {
+            "templates": [{"src": "Makefile.j2", "dest": dest}],
+            "packages": {"demo": {"name": "Demo", "package_type": "none"}},
+        },
+    )
+
+    result = run_cli("gen", "demo", cwd=tmp_path)
+
+    assert result.returncode != 0, (
+        f"rc={result.returncode}, stdout={result.stdout[:400]!r}"
+    )
+    assert "glob metacharacter" in result.stderr, result.stderr

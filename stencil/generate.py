@@ -244,8 +244,17 @@ def show_download_default(package: dict, config: dict, package_id: str = "") -> 
     return True
 
 
-def check_config_path(package_id: str, where: str, value) -> str:
-    """Refuse a configured path that would not behave like a filename."""
+def check_config_path(
+    package_id: str, where: str, value, *, allow_parent: bool = False
+) -> str:
+    """Refuse a configured path that would not behave like a filename.
+
+    `allow_parent` keeps every clause except the `..` refusal, for the one
+    key whose escape is a documented feature rather than a mistake: a
+    package-level `output_dir` (stn-1a4). Keyword-only and defaulting to
+    False, so all six existing callers are byte-identical -- the escape has
+    to be asked for by name, at the one call site entitled to it.
+    """
     text = str(value)
     if _UNSAFE_IN_PATH.search(text):
         raise ValueError(
@@ -278,7 +287,7 @@ def check_config_path(package_id: str, where: str, value) -> str:
             f"Package {package_id}: {where} {text!r} is absolute. Paths are "
             "relative to the package directory."
         )
-    if ".." in Path(text).parts:
+    if not allow_parent and ".." in Path(text).parts:
         raise ValueError(
             f"Package {package_id}: {where} {text!r} escapes the package "
             "directory. Paths are relative to it and must stay inside."
@@ -317,7 +326,7 @@ def check_output_dir(config: dict) -> str | None:
         # base is the config directory. Preserved rather than refused.
         return None
     try:
-        return check_config_path("config", "output_dir", value)
+        text = check_config_path("config", "output_dir", value)
     except ValueError as error:
         # check_config_path's messages all end "escapes the package
         # directory. Paths are relative to it and must stay inside." --
@@ -339,6 +348,206 @@ def check_output_dir(config: dict) -> str | None:
             "under it. A package-level output_dir is the supported way to "
             "send a package's build products somewhere else.)"
         ) from error
+    # OUTSIDE the wrapper above, deliberately. That sentence corrects
+    # check_config_path's borrowed "escapes the package directory" ending
+    # and has nothing to say about a leading `!` or a glob -- appended to
+    # one of those it would answer a question the reader did not ask, and
+    # push the part they need closer to `_safe`'s truncation limit.
+    return check_gitignore_literal("config", "output_dir", text)
+
+
+def check_package_dir(package_id: str, value) -> str:
+    """`dir`'s string check: `check_config_path`, plus a refusal of a value
+    that names no directory at all (stn-17h).
+
+    `contained_path` is what actually holds this rule, because it sees the
+    RESOLVED path and therefore catches a symlinked `dir` as well as a
+    literal `"."`. This is the readable half: `Path(".").parts`,
+    `Path("").parts` and `Path("./").parts` are all empty, so all three
+    reach `output_base / value` as the output base itself, and reporting
+    that as "resolves to /some/abs/path, which IS the output directory"
+    asks the author to map an absolute path back to the two characters they
+    typed. Refused here by name instead, in the pre-flight that lists every
+    config problem at once.
+    """
+    text = check_gitignore_literal(
+        package_id, "dir", check_config_path(package_id, "dir", value)
+    )
+    if not Path(text).parts:
+        raise ValueError(
+            f"Package {package_id}: dir {text!r} names no directory, so the "
+            "package directory would be the output directory itself. A "
+            "package needs its own directory -- `clean` resolves every path "
+            "it removes under this one."
+        )
+    return text
+
+
+# A gitignore line is a PATTERN, not a path, and two characters change what
+# the whole line MEANS when they lead it: `!` negates (re-includes a path the
+# author's own rules ignore) and `#` comments the line out. `dir` and the
+# top-level `output_dir` are the two config values that become the leading
+# segment of every line in the managed section, so they are the two that can
+# do it.
+#
+# MEASURED, against a course-handout repository whose own .gitignore says
+# `*.pdf`, with `dir: "!solutions"`:
+#
+#   $ stencil install
+#   $ git check-ignore -v -- solutions/answers.pdf
+#   .gitignore:7:!solutions/answers*.pdf    solutions/answers.pdf
+#   $ git status --porcelain
+#   ?? solutions/
+#
+# `stencil install` -- the command whose entire purpose is to stop generated
+# files being committed -- UN-IGNORED the answer key and made it committable,
+# silently. That is the worst outcome available in this tool's problem
+# domain, and it is why the refusal is here rather than an escape (`\!` is
+# the documented gitignore escape and would work, but a `dir` beginning with
+# `!` is not a directory name anyone means).
+_GITIGNORE_LEADING = {"!": "negates the line, re-including files git would "
+                      "otherwise ignore", "#": "comments the line out"}
+
+
+def check_gitignore_literal(package_id: str, where: str, value: str) -> str:
+    """Refuse a value that would not behave like a literal path in the
+    managed `.gitignore` section (found by the adversarial review of
+    stn-jl3).
+
+    Applied to `dir` and the top-level `output_dir` only -- the two values
+    that lead a managed line. A metacharacter further along the line is
+    literal to git, so `docs` and the rest need nothing here; the glob
+    refusal below is the exception, because `*` matches anywhere in the
+    pattern and would widen what the section ignores rather than narrow it.
+
+    The glob message is spelled here rather than borrowed from
+    `check_no_glob`: that one explains itself in terms of `clean` expanding
+    a manifest entry back out, which is true for `docs` and `slides` and is
+    not what is wrong with a `*` in a directory name.
+    """
+    for character, effect in _GITIGNORE_LEADING.items():
+        if value.startswith(character):
+            raise ValueError(
+                f"Package {package_id}: {where} {value!r} starts with "
+                f"{character!r}, which {effect} in the .gitignore section "
+                "stencil manages. This names a directory, not a pattern."
+            )
+    if _GLOB_IN_PATH.search(value):
+        raise ValueError(
+            f"Package {package_id}: {where} {value!r} contains a glob "
+            "metacharacter (one of * ? [ ]). This names a directory, not a "
+            "pattern -- as the first segment of every line in the "
+            ".gitignore section stencil manages, it would match "
+            "directories stencil never wrote to."
+        )
+    return value
+
+
+def check_package_output_dir(package_id: str, value) -> str | None:
+    """The package-level ``output_dir``'s check (stn-1a4) -- the last package
+    path key with no validation of any kind, and the only one that lands in a
+    Make VARIABLE rather than a recipe word.
+
+    ``OUT_HOST := <value>`` is expanded by four recipes, so a metacharacter
+    here is a second command rather than a bad filename: the ticket's
+    ``"../../../../../../tmp/pwn; echo OWNED"`` made ``make doc`` run
+    ``mkdir -p .../tmp/pwn`` and then ``echo OWNED``.
+
+    ``..`` IS PERMITTED, deliberately and by operator ruling. STENCIL.md
+    documents a package-level ``output_dir`` that puts build products outside
+    the package directory as the supported way to build somewhere else, and a
+    consumer may depend on it -- so this is `check_config_path` with
+    `allow_parent=True` rather than a verbatim call. Worth knowing why that
+    distinction needed a ruling at all: the only `..` the test suite pinned
+    was in the DERIVED ``package_output_dir`` (``../../build/demo``, which
+    `get_template_context` computes), never in a DECLARED value, so a
+    verbatim call would have kept the whole suite green while removing the
+    feature. There is a test that declares the `..` now.
+
+    TWO REFUSALS BEYOND `check_config_path`'s class, both because of where
+    this value lands rather than what it is:
+
+    - ``#``. It introduces a comment in a Make ``:=`` assignment, and nothing
+      else stencil checks sits in one. Measured on GNU Make 3.81:
+      ``build#x`` makes ``OUT_HOST`` read as ``build``, so the Makefile
+      creates and ``rm -f``s one directory while the compose file's mount --
+      YAML keeps the ``#`` mid-scalar -- sends the container's output to
+      another. It is NOT added to `_UNSAFE_IN_PATH`, which every other path
+      key shares: ``#`` is harmless in a recipe word and in a filename, and
+      refusing ``notes#1.md`` would be a regression for no gain.
+    - A glob metacharacter. This names one directory, the argument
+      `check_no_glob` already makes for `docs` and `slides` -- and here a
+      value beginning with ``*`` or ``!`` additionally makes the generated
+      compose file unparseable YAML, since those are the alias and tag
+      indicators.
+
+    WHAT THIS KEY IS NOT CONTAINED AGAINST, said plainly because the
+    convenient version of this sentence is false. `stencil` itself writes
+    nothing there and `clean` deliberately removes nothing there (STENCIL.md
+    records that limit). The PACKAGE IT GENERATES is another matter: the
+    Makefile ``mkdir -p``s and ``rm -f``s under ``OUT_HOST`` and the compose
+    file bind-mounts it into a container that runs as root. That is what the
+    documented escape means, and it is the consumer's own build rather than
+    a containment gap in stencil -- but it must not be described as "nothing
+    writes there".
+    """
+    if value is None:
+        return None
+    # TYPE BEFORE FALSINESS, the ordering check_output_dir's docstring spends
+    # a paragraph on and for the identical reason: `0`, `False` and `[]` are
+    # falsy NON-STRINGS, and `if raw_output:` at the call site reads all
+    # three as "not set". The type check therefore has to run above that
+    # guard, not inside it.
+    if not isinstance(value, str):
+        raise ValueError(
+            f"Package {package_id}: output_dir {value!r} is "
+            f"{type(value).__name__}, not a string. output_dir names the "
+            "directory this package's build products go to."
+        )
+    if not value:
+        # "" is what an empty-but-present key has always meant here, and
+        # what check_output_dir preserves it as for the top-level key:
+        # products land beside the sources. The two keys must not disagree
+        # about two characters.
+        return None
+    text = check_config_path(package_id, "output_dir", value, allow_parent=True)
+    # ':' SEPARATES A COMPOSE VOLUME, and this value is interpolated into
+    # one. Measured with `docker compose config` on a generated package,
+    # `output_dir: "a:b"` emits `- ../a:b:/out:z` and parses as
+    # source=<config_dir>/a, target=b:/out, with the `:z` flag SILENTLY
+    # DROPPED -- so /out is never mounted, pandoc writes into the
+    # container's own filesystem and the products vanish, while OUT_HOST
+    # names a third directory. That is the `#` harm again, through a
+    # character far likelier to appear by accident: `C:/build` from a
+    # Windows author lands here, since Path() does not read it as absolute
+    # on POSIX.
+    if ":" in text:
+        raise ValueError(
+            f"Package {package_id}: output_dir {text!r} contains ':', which "
+            "separates the parts of the generated compose file's volume "
+            "mount. The output directory would not be mounted at all, and "
+            "the build's products would be written inside the container."
+        )
+    # A quote cannot chain a command here -- `;`, `$` and backtick are all
+    # refused above -- but it truncates one. Measured: `output_dir: "a'b"`
+    # generates at exit 0 and `make doc` dies with `unexpected EOF while
+    # looking for matching '`. Still a filename quietly doing something
+    # other than naming a file, which is the whole class.
+    if "'" in text or '"' in text:
+        raise ValueError(
+            f"Package {package_id}: output_dir {text!r} contains a quote "
+            "character, which would truncate the shell word the generated "
+            "Make recipe expands it into."
+        )
+    if "#" in text:
+        raise ValueError(
+            f"Package {package_id}: output_dir {text!r} contains '#', which "
+            "starts a comment in the generated Makefile's OUT_HOST "
+            "assignment. Make would read the part before it and the compose "
+            "file's mount would keep the whole string, so the build would "
+            "write to one directory and clean another."
+        )
+    return check_no_glob(package_id, "output_dir", text)
 
 
 def check_no_glob(package_id: str, where: str, value: str) -> str:
@@ -654,7 +863,7 @@ def get_template_context(package_id: str, config: dict) -> dict:
     # directory. Declared relative to the .config.yaml the way `dir` is, and
     # turned into a package-relative path here because every generated path
     # is package-relative.
-    raw_output = package.get("output_dir")
+    raw_output = check_package_output_dir(package_id, package.get("output_dir"))
     if raw_output:
         # The package directory is <top-level output_dir>/<dir>, so the path
         # back out to a config-relative output directory has to climb BOTH.
@@ -727,8 +936,8 @@ def get_template_context(package_id: str, config: dict) -> dict:
         # other configured path rather than a containment check at the
         # deletion site, so the mistake is reported by the pre-flight that
         # names all of them at once.
-        "package_dir": check_config_path(
-            package_id, "dir", package.get("dir", f"{package_id}")
+        "package_dir": check_package_dir(
+            package_id, package.get("dir", f"{package_id}")
         ),
         "package_type": package_type,
         "package_sources": package_sources,
@@ -1206,7 +1415,10 @@ def copy_brand_image(
     nofollow = getattr(os, "O_NOFOLLOW", 0)
     with (
         open(source, "rb", opener=lambda p, f: os.open(p, f | nofollow)) as src,
-        open(destination, "wb") as dst,
+        # stn-h5q. The SOURCE has taken this care since stn-ttg; the
+        # DESTINATION, which is the half that writes, was a bare
+        # open(..., "wb") and followed a symlink straight out of the tree.
+        open_for_write_nofollow(destination) as dst,
     ):
         shutil.copyfileobj(src, dst)
     print(f"Copied: {destination}")
@@ -1676,7 +1888,9 @@ def write_manifest(
         "dir": pkg_dir,
         "entries": sorted(entries),
     }
-    manifest_path.write_text(json.dumps(document, sort_keys=True, indent=2) + "\n")
+    write_text_nofollow(
+        manifest_path, json.dumps(document, sort_keys=True, indent=2) + "\n"
+    )
     print(f"Generated: {manifest_path}")
 
 
@@ -1858,6 +2072,386 @@ def read_manifest(path: Path) -> dict:
     return document
 
 
+def template_destinations(template_defs: list, context: dict) -> list[tuple[str, str]]:
+    """Every (template name, destination) pair one package will actually
+    render, `when` conditions already applied.
+
+    Lifted out of `render_templates` (stn-h5q) because `generate_package`'s
+    pre-pass has to check the same destinations BEFORE the renderer writes
+    the first of them, and two spellings of "which templates survive their
+    `when`" is the drift bug this file has already paid for three times --
+    see `package_entries`' docstring for the other two.
+    """
+    destinations = []
+    for tdef in template_defs:
+        if not when_holds(tdef, context):
+            continue
+        src = tdef["src"]
+        declared = tdef.get("dest")
+        # PROVENANCE-INDEPENDENT (adversarial review of stn-h5q, HIGH 3).
+        # `package_contexts` checks a DECLARED `dest` and skips the key when
+        # it is absent -- but the destination is then `src` with `.j2`
+        # removed, and `src` goes through no check anywhere. Measured:
+        # `src: "a b.txt.j2"` generated `a b.txt` at exit 0, recorded it in
+        # the manifest, and `clean` then refused ITS OWN manifest entry for
+        # containing whitespace -- a permanently un-cleanable package whose
+        # error names a "manifest entry" the author never wrote. That is
+        # stn-9rn's harm arriving through the one key nobody checked, and
+        # this is the single place both spellings of the destination now
+        # pass through.
+        #
+        # `where` names the key the AUTHOR wrote, not the one stencil
+        # derived, so the message points at the line to edit.
+        dest = declared if declared is not None else template_dest(src)
+        where = "dest" if declared is not None else "src"
+        check_config_path("config", where, dest)
+        # AND the glob refusal, which is opt-in rather than part of
+        # `_UNSAFE_IN_PATH` (globs are the point of a `package_sources`
+        # pattern) and was wired to docs, slides, dir and both output_dirs
+        # -- and not to this one. Measured: `dest: "*.txt"` generated at
+        # exit 0, went into the manifest verbatim, and `clean` then refused
+        # it as "not a recognized glob shape" forever. stn-9rn's harm again,
+        # through the very channel this function was added to close.
+        check_no_glob("config", where, dest)
+        destinations.append((src, dest))
+    return destinations
+
+
+def write_targets(context: dict, template_defs: list) -> list[tuple[str, str]]:
+    """Every (where, path-relative-to-the-package-directory) `gen` is about
+    to write for one package: each surviving template's destination, the
+    copied brand image, and the manifest.
+
+    `where` is the config key to name in a refusal, so an author reading one
+    is pointed at the line they wrote rather than at a filename stencil
+    derived.
+
+    Deliberately NOT `package_entries`. That function lists what a package
+    PRODUCES, including build artifacts `gen` never writes itself -- the
+    `Guide*.html` and `Guide*.pdf` globs `make` produces later. This lists
+    what THIS CALL writes, which is the only set a write-side check can say
+    anything about.
+    """
+    targets = [("dest", dest) for _src, dest in template_destinations(template_defs, context)]
+    if context.get("has_pages"):
+        # Named from the unresolved config string, which is how
+        # copy_brand_image names its destination and how package_entries
+        # reads it back (stn-8wt). A third spelling here would be the same
+        # drift with a new author.
+        brand_image = brand_image_path(context.get("config_brand"))
+        if brand_image:
+            targets.append(("brand", Path(brand_image).name))
+    targets.append(("manifest", MANIFEST_NAME))
+    return targets
+
+
+def contained_entry_parent(
+    package_id: str,
+    where: str,
+    declared: str,
+    unresolved: Path,
+    root: Path,
+    pkg_path: Path,
+) -> Path:
+    """Resolve one entry's PARENT directory and require it under both the
+    output base and the package directory. Returns the resolved parent.
+
+    ONE RULE, TWO CALLERS, which is the whole of stn-h5q's thesis: `clean`
+    has applied this since stn-2x4.6 (`_remove_entries`) and `gen` applied
+    nothing, so gen wrote a file clean then refused to remove. Two sides
+    resolving different components of the same path IS the defect class, so
+    a second copy of this five-line rule -- agreeing today, drifting later --
+    would have closed the symptom and left the cause. This file has paid for
+    that shape three times already; see `package_entries`' docstring.
+
+    Not folded into `contained_path`, which is a different rule: that one is
+    rooted at ONE base and is about a package DIRECTORY, and stn-17h now has
+    it refuse a candidate equal to its root -- correct for a package
+    directory, wrong here, where `dest: Makefile` legitimately has the
+    package directory itself as its parent.
+
+    THE PARENT ONLY, never the entry's own final component. That asymmetry
+    is deliberate on clean's side (`unlink` does not follow a final-component
+    symlink, so refusing one would make such a package permanently
+    un-cleanable) and gen checks that component separately, by lstat, in
+    `checked_write_target`. What the two sides share is exactly this: the
+    directory the entry sits in must be inside the tree.
+    """
+    try:
+        parent_resolved = unresolved.parent.resolve()
+    except OSError as error:
+        raise ValueError(
+            f"Package {package_id}: {where} {declared!r} could not be "
+            f"resolved: {error} -- refusing to touch it"
+        ) from error
+    if not (
+        parent_resolved.is_relative_to(root)
+        and parent_resolved.is_relative_to(pkg_path)
+    ):
+        raise ValueError(
+            f"Package {package_id}: {where} {declared!r} resolves to "
+            f"{parent_resolved}, outside the package directory {pkg_path} "
+            "-- refusing to touch it"
+        )
+    return parent_resolved
+
+
+def checked_write_target(
+    package_id: str, where: str, root: Path, pkg_path: Path, relative: str
+) -> Path:
+    """One path `gen` is about to write, checked at EVERY component below the
+    package directory (stn-h5q). Returns the joined path.
+
+    stn-vhr contains the package DIRECTORY. This is the half below it: in
+    every case stn-h5q reproduces, the package directory is a genuine
+    directory that resolves cleanly and passes that check, and what leaves
+    the tree is a component underneath -- which no directory-level check can
+    see.
+
+    THREE REFUSALS, and the second is the reason this stats components
+    rather than resolving the path again:
+
+    - A SYMLINK at any component. `write_text` opens O_WRONLY|O_CREAT|O_TRUNC
+      with no O_NOFOLLOW, and `mkdir(parents=True, exist_ok=True)` walks a
+      link happily, so both the file itself and a subdirectory a nested
+      `dest` writes through led straight out of the tree at exit 0.
+    - A HARDLINK at the final component (`st_nlink > 1` on a regular file).
+      `resolve()` reports such a path CONTAINED, because it is: the second
+      name for the inode lives outside and no `relative_to` can ever see it.
+      `st_nlink` is the only thing that distinguishes it.
+    - ANYTHING THAT IS NOT THE KIND OF FILE `gen` WRITES: a component that
+      exists but is not a directory where a directory must go, or a final
+      component that exists and is not a regular file. A FIFO planted at a
+      destination would otherwise block the whole run on `open`, and a
+      device node would be written to.
+
+    It also calls `contained_entry_parent`, the rule `clean` has applied to
+    every entry since stn-2x4.6 -- resolve the PARENT, require it under both
+    `root` and `pkg_path` -- because gen and clean resolving DIFFERENT
+    components of one path is the defect class stn-h5q is about, not a
+    detail of it.
+
+    WHAT THAT MAKES SYMMETRIC, stated exactly rather than generously: the
+    PARENT half. gen and clean now compute it with one function. The final
+    component is deliberately NOT symmetric and must not be made so -- gen
+    refuses a link there (it would follow it) while clean unlinks one
+    without resolving it (removing the link is the only way such a package
+    is ever cleanable again). Each side does what its own operation
+    requires. The two computations of the parent also differ in one way
+    worth knowing: at gen time the directory may not exist yet, so
+    `resolve()` is lexical, while clean runs after gen created it and
+    resolves for real. Same rule, same path, different ground truth
+    available.
+
+    `pkg_path` must already be resolved (`contained_path`'s return value),
+    the same contract `_remove_entries` has.
+
+    WHAT IT DOES NOT CLOSE, stated exactly rather than comfortably: a
+    symlink planted at an INTERMEDIATE directory between this check and the
+    write. The write sites add O_NOFOLLOW, which covers the final component
+    only, and `render_templates` joins its path unresolved -- so such a
+    write lands outside the output base with no containment left, and the
+    manifest then names entries whose parent `clean` resolves through the
+    same link, which means `clean` deletes there too.
+
+    An earlier draft of this paragraph borrowed stn-vhr's sentence -- "anyone
+    who can swap a directory for a symlink mid-run can already write wherever
+    the running user can" -- and that is NOT true here and is not repeated.
+    Swapping a component needs write permission on ONE directory inside the
+    output tree; being the running user is a different and much larger
+    capability, and the gap between them is exactly the deployment stencil
+    has (a CI runner, a shared teaching machine, an `out/` that arrived with
+    a merged pull request).
+
+    It is closable, with a descriptor walk -- `os.open(component,
+    O_RDONLY|O_DIRECTORY|O_NOFOLLOW)` per component and `dir_fd=` on the
+    write, so the object checked and the object written are the same inode
+    by construction. That is a larger change than this one and is filed with
+    its reproduction rather than described here as impossible.
+    """
+    check_config_path(package_id, where, relative)
+    target = pkg_path / relative
+
+    # THE COMPONENT WALK RUNS FIRST, and the order is a message decision
+    # rather than a correctness one. A symlinked intermediate directory
+    # fails both checks; the parent check reports it as "dest 'sub/Makefile'
+    # resolves to /somewhere/outside", which is true and sends the author to
+    # edit a config line that is not the problem, while the walk names
+    # `.../out/demo/sub` -- the link itself -- and says how to clear it.
+    parts = Path(relative).parts
+    current = pkg_path
+    for index, part in enumerate(parts):
+        current = current / part
+        try:
+            info = os.lstat(current)
+        except FileNotFoundError:
+            # Nothing here yet, so nothing below it either: `gen` creates
+            # this component and everything under it.
+            break
+        except OSError as error:
+            raise ValueError(
+                f"Package {package_id}: {where} {relative!r} could not be "
+                f"checked at {part!r}: {error} -- refusing to write it"
+            ) from error
+
+        last = index == len(parts) - 1
+        if stat.S_ISLNK(info.st_mode):
+            # NAMES THE COMPONENT, not only the declared value. For a nested
+            # `dest` the two differ -- the config says `sub/Makefile` and the
+            # link is `sub` -- and a message naming only the declared value
+            # sends the author to edit a config line that is not the problem.
+            #
+            # The recovery differs by which component it is, so the message
+            # says which. A link AT the file is removable by `stencil clean`,
+            # which unlinks a final component without resolving it
+            # (_remove_entries, and the test that pins it). A link at an
+            # INTERMEDIATE directory is not: `clean` refuses that entry
+            # because its parent resolves outside the package, deliberately
+            # and permanently, so only `rm` clears it.
+            #
+            # KEPT SHORT ON PURPOSE. `_safe` truncates a problem at
+            # _MAX_PROBLEM_CHARS, and these messages carry a resolved
+            # absolute path -- a first draft of this one explained itself at
+            # length and had the recovery advice, the part the reader needs,
+            # cut off the end.
+            # WHERE THE LINK GOES decides the advice, because `clean`'s
+            # rule is about the resolved PARENT rather than about links.
+            # A final-component link, and an intermediate one that lands
+            # back inside the package, are both removable by `clean`; only
+            # one resolving outside is not. Saying "clean cannot remove it"
+            # for all three was false for two of them.
+            try:
+                inside = current.resolve().is_relative_to(pkg_path)
+            except OSError:
+                inside = False
+            recovery = (
+                "`stencil clean` removes it"
+                if last or inside
+                else "`clean` cannot remove it either, so delete the link "
+                "yourself"
+            )
+            # THE PATH GOES LAST. `_safe` truncates at _MAX_PROBLEM_CHARS and
+            # this message carries a RESOLVED ABSOLUTE path, whose length
+            # belongs to the machine rather than to the author -- a GitHub
+            # Actions checkout reaches the limit on its own, and `_generate`
+            # spends another sixty characters re-prefixing the package id.
+            # An earlier version put the path in the middle and lost both
+            # the diagnosis and the recovery off the end, while still
+            # carrying a comment claiming it was kept short enough. Ordered
+            # so that what survives truncation is the part that tells the
+            # reader what to do.
+            raise ValueError(
+                f"Package {package_id}: {where} {relative!r} passes through "
+                f"a symlink -- refusing to write through it, "
+                f"{recovery}. The link is: {current}"
+            )
+
+        if not last:
+            if not stat.S_ISDIR(info.st_mode):
+                raise ValueError(
+                    f"Package {package_id}: {where} {relative!r} passes "
+                    f"through {part!r}, which exists and is not a directory "
+                    "-- refusing to write through it."
+                )
+            continue
+
+        if not stat.S_ISREG(info.st_mode):
+            raise ValueError(
+                f"Package {package_id}: {where} {relative!r} already exists "
+                "and is not a regular file -- refusing to write over it."
+            )
+        # st_nlink ONLY on a regular final component. Directories always
+        # have st_nlink >= 2 (`.` and the parent's entry), so leaking this
+        # rule onto intermediate components would refuse every config on
+        # earth -- and a directory hardlink is not a vector to cover anyway:
+        # `os.link()` on a directory is EPERM on macOS and unsupported on
+        # Linux.
+        if info.st_nlink > 1:
+            raise ValueError(
+                f"Package {package_id}: {where} {relative!r} is a hardlink "
+                f"(st_nlink={info.st_nlink}): the same file has another name "
+                "outside this package directory, which no path check can "
+                "see. Remove it and run `gen` again."
+            )
+
+    # Belt and braces, deliberately kept rather than trimmed as unreachable.
+    # With no symlink at any component the parent cannot resolve outside, so
+    # this should never fire for a path the walk just cleared -- but it is
+    # the rule `clean` applies, called through the one function both sides
+    # share, and the walk is a snapshot while this is a resolve. Cheap, and
+    # the day the walk gains a `break` in the wrong place this is what still
+    # holds the line.
+    contained_entry_parent(package_id, where, relative, target, root, pkg_path)
+
+    return target
+
+
+def open_for_write_nofollow(path: Path):
+    """`open(path, "wb")`, refusing a symlink at the final component.
+
+    The check-to-write window is small and it is real: `checked_write_target`
+    stats a path and the write happens afterwards. O_NOFOLLOW closes it for
+    the component that matters most -- the file itself -- by failing with
+    ELOOP rather than following a link swapped in meanwhile. This is the
+    spelling `copy_brand_image` already used for its SOURCE, applied to the
+    side that writes.
+
+    Windows has no O_NOFOLLOW; `getattr` there leaves the flags unchanged,
+    which is the same accommodation the brand read makes.
+    """
+    nofollow = getattr(os, "O_NOFOLLOW", 0)
+    # O_NONBLOCK, for the one node type O_NOFOLLOW says nothing about.
+    # `checked_write_target` refuses a FIFO at a destination, but that is a
+    # snapshot; one swapped in afterwards would otherwise block this open
+    # FOREVER -- no timeout, a CI job burning its whole wall clock -- and
+    # `mkfifo` needs no privilege at all. With O_NONBLOCK and no reader the
+    # same open fails ENXIO. On a regular file POSIX says the flag has no
+    # effect, so this costs the ordinary path nothing.
+    nonblock = getattr(os, "O_NONBLOCK", 0)
+    flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC | nofollow | nonblock
+    descriptor = os.open(path, flags, 0o666)
+    try:
+        return os.fdopen(descriptor, "wb")
+    except Exception:
+        # fdopen can raise between the open and the wrapper taking
+        # ownership, and the descriptor would leak for the life of the
+        # process. Every other failure path here closes itself.
+        os.close(descriptor)
+        raise
+
+
+def write_text_nofollow(path: Path, text: str, executable: bool = False) -> None:
+    """`Path.write_text` without following a symlink at the final component.
+
+    UTF-8, DECIDED RATHER THAN INHERITED. `Path.write_text` with no encoding
+    argument -- which is what these call sites used -- writes in the locale's
+    preferred encoding, so the bytes a generated Makefile got depended on the
+    shell that ran `stencil gen`. Everything stencil renders is UTF-8: the
+    templates are, the config is read as UTF-8 by yaml, and the pandoc
+    invocations in the generated compose file assume it. Switching to an
+    explicit `os.open` is the moment that inconsistency has to be settled one
+    way or the other, and settling it silently on a security fix is the thing
+    worth avoiding, so it is settled here, out loud: UTF-8 on every platform.
+    On any machine whose locale was already UTF-8 -- which is CI and every
+    developer machine this has run on -- nothing about the bytes changes.
+
+    `executable` marks the file `+x` through the descriptor just written,
+    rather than by re-opening the path: see the call site in
+    `render_templates`.
+    """
+    with open_for_write_nofollow(path) as handle:
+        handle.write(text.encode("utf-8"))
+        if executable:
+            descriptor = handle.fileno()
+            os.fchmod(
+                descriptor,
+                os.fstat(descriptor).st_mode
+                | stat.S_IXUSR
+                | stat.S_IXGRP
+                | stat.S_IXOTH,
+            )
+
+
 def generate_package(
     env: Environment,
     config: dict,
@@ -1886,9 +2480,26 @@ def generate_package(
     # the package directory itself, not a symlinked subdirectory nested
     # inside it or copy_brand_image's destination -- that gap is filed
     # separately as stn-h5q.
-    contained_path(
+    pkg_resolved = contained_path(
         package_id, "dir", context["package_dir"], output_dir, output_base
     )
+
+    # stn-h5q: check every path this call is about to write, at every
+    # component below the package directory, BEFORE anything is created.
+    # A pre-pass rather than a guard at each write site, so a refused run
+    # touches nothing -- the guarantee stn-vhr already gives for the package
+    # directory, extended to the files inside it. Without it, a package
+    # whose third template lands on a planted link is left with two rendered
+    # files and no manifest: a half-generated package that looks generated.
+    #
+    # `template_defs` is computed here rather than below the mkdir for the
+    # same reason; nothing else about the order changes.
+    config_templates = list(config.get("templates", []))
+    template_defs = injected_templates(context) + config_templates
+    for where, relative in write_targets(context, template_defs):
+        checked_write_target(
+            package_id, where, output_base, pkg_resolved, relative
+        )
 
     if not output_dir.exists():
         if dry_run:
@@ -1907,8 +2518,6 @@ def generate_package(
     if not dry_run and manifest_path.exists():
         manifest_path.unlink()
 
-    config_templates = list(config.get("templates", []))
-    template_defs = injected_templates(context) + config_templates
     if not template_defs:
         print(f"Error: No templates defined in config", file=sys.stderr)
         return None
@@ -1950,15 +2559,9 @@ def render_templates(
     dry_run: bool = False,
 ):
     """Render all templates to the output directory."""
-    templates = []
-
-    for tdef in template_defs:
-        if not when_holds(tdef, context):
-            continue
-        src = tdef["src"]
-        templates.append((src, tdef.get("dest", template_dest(src))))
-
-    for template_name, output_name in templates:
+    for template_name, output_name in template_destinations(
+        template_defs, context
+    ):
         try:
             template = env.get_template(template_name)
             content = template.render(**context)
@@ -1973,15 +2576,21 @@ def render_templates(
             else:
                 # Create parent directories if needed (for nested paths like .vscode/settings.json)
                 output_path.parent.mkdir(parents=True, exist_ok=True)
-                output_path.write_text(content)
-                # Set execute bit on shell scripts
-                if output_path.suffix == ".sh":
-                    output_path.chmod(
-                        output_path.stat().st_mode
-                        | stat.S_IXUSR
-                        | stat.S_IXGRP
-                        | stat.S_IXOTH
-                    )
+                # stn-h5q: O_NOFOLLOW. generate_package has already refused
+                # a symlink at this path; this closes the window between
+                # that check and this write.
+                # The execute bit is set THROUGH THE SAME DESCRIPTOR that
+                # was just written, never by re-opening the path
+                # (adversarial review of stn-h5q, MEDIUM 5). `Path.stat()`
+                # and `Path.chmod()` both follow symlinks, so a link swapped
+                # in between the write closing and the chmod would have got
+                # an arbitrary file marked executable -- a race the
+                # O_NOFOLLOW write closes for itself and reopened here.
+                # `fchmod` on the open fd cannot name anything but the file
+                # actually written.
+                write_text_nofollow(
+                    output_path, content, executable=output_path.suffix == ".sh"
+                )
                 print(f"Generated: {output_path}")
 
         except Exception as e:
@@ -2101,14 +2710,54 @@ def get_generated_files(config: dict) -> list[str]:
 
     contexts = package_contexts(config)
 
+    # stn-jl3. Every entry carries the top-level `output_dir` as well as the
+    # package `dir`, because that is where `gen` and `clean` both resolve to
+    # and this list is the only view git gets of it. Without it, a config
+    # with `output_dir: out` produced a managed section naming `demo/Makefile`
+    # for a file at `out/demo/Makefile`, so the section ignored NOTHING
+    # stencil writes and the whole generated tree was offered to the author
+    # as untracked.
+    #
+    # THE VALUE COMES FROM check_output_dir, not from `config.get`. That is
+    # the shape-checked declared string, and it is already computed on this
+    # path -- package_contexts above calls it -- so this adds no second
+    # spelling of a rule that lives in two places already. It is NOT
+    # `checked_output_base`, which returns a resolved ABSOLUTE path: useless
+    # as a gitignore prefix, and it needs a config_dir this function is not
+    # given.
+    #
+    # Note what that means for `install` specifically: `_main`'s install
+    # branch returns above `checked_output_base`, so on `install` this value
+    # has had its string checks and NOT the containment check. `..` and an
+    # absolute path are already refused by the string half, so the prefix
+    # cannot leave the tree; the deferred half is the symlink case, which
+    # `install` never writes through. Same split STENCIL.md records.
+    #
+    # `Path(value).parts` rather than a string test, so `.`, `./`, `./out`
+    # and `out/` normalize the way git needs: a leading `./` matches nothing
+    # at all in a gitignore pattern, which is a silent way to ignore nothing.
+    declared = check_output_dir(config)
+    output_parts = Path(declared).parts if declared else ()
+    prefix = "/".join(output_parts) + "/" if output_parts else ""
+
     for package_id, context in contexts.items():
         package = config["packages"][package_id]
         pkg_dir = package.get("dir", package_id)
 
-        for entry in package_entries(package_id, package, context, config_templates):
-            entries.add(f"{pkg_dir}/{entry}")
+        # NORMALIZED, exactly like the output_dir prefix above and for the
+        # identical reason -- the comment there stated the rule and the next
+        # statement did not apply it to the segment that also leads every
+        # line. Measured with git check-ignore: `dir: "./demo"` produced
+        # `out/./demo/Makefile`, `dir: "demo/"` produced `out/demo//Makefile`,
+        # and git matched NEITHER, so `install` printed every line and
+        # ignored nothing -- stn-jl3's own failure mode one segment down.
+        # A trailing slash is an ordinary typing habit.
+        pkg_segment = "/".join(Path(pkg_dir).parts)
 
-        entries.add(f"{pkg_dir}/{MANIFEST_NAME}")
+        for entry in package_entries(package_id, package, context, config_templates):
+            entries.add(f"{prefix}{pkg_segment}/{entry}")
+
+        entries.add(f"{prefix}{pkg_segment}/{MANIFEST_NAME}")
 
     return sorted(entries)
 
@@ -2215,6 +2864,31 @@ def contained_path(
             f"{candidate_resolved}, outside the output directory "
             f"{root_resolved} -- refusing to touch it"
         ) from None
+    # stn-17h. STRICTLY beneath, not merely "not outside". `relative_to`
+    # answers yes for a path EQUAL to the root, so every containment check
+    # in this file endorsed `dir: "."` -- which anchors the package
+    # directory ON the output base, and with no top-level `output_dir` that
+    # base is the config directory. Nothing escapes anywhere, which is why
+    # no check saw it: a planted `.stencil-manifest.json` is then a
+    # free-form list of files under the repository root for `clean` to
+    # unlink, and it removed a hand-written source file, a dotfile and a
+    # whole directory at exit 0.
+    #
+    # Checked HERE rather than only in the pre-flight because this is the
+    # one helper `gen` (generate_package) and `clean`
+    # (_validated_package_dirs) both go through, so one rule reaches both
+    # sides -- and because the equality that matters is the RESOLVED one:
+    # `dir: demo` is a perfectly ordinary string when `out/demo` is a
+    # symlink pointing back at `out`, which no string check can see.
+    if candidate_resolved == root_resolved:
+        raise ValueError(
+            f"Package {package_id}: {where} {declared!r} resolves to "
+            f"{candidate_resolved}, which IS the output directory rather "
+            "than a directory inside it. A package needs its own "
+            "directory: every path `clean` removes is resolved under this "
+            "one, so naming the output directory itself makes the whole "
+            "tree above the package a delete list."
+        )
     return candidate_resolved
 
 
@@ -2302,7 +2976,7 @@ def _validated_package_dirs(
     for pid, package in scope.items():
         raw_dir = package.get("dir", pid)
         try:
-            check_config_path(pid, "dir", raw_dir)
+            check_package_dir(pid, raw_dir)
         except ValueError as error:
             problems.append(str(error))
             continue
@@ -2377,22 +3051,14 @@ def _remove_entries(
 
         unresolved = pkg_path / entry
         try:
-            parent_resolved = unresolved.parent.resolve()
-        except OSError as error:
-            problems.append(
-                f"Package {package_id}: manifest entry {entry!r} could not "
-                f"be resolved: {error} -- refusing to touch it"
+            # stn-h5q: the same helper `gen`'s write-side check calls, so
+            # the two sides cannot drift. The messages below used to be
+            # spelled here; they now come from that one function.
+            parent_resolved = contained_entry_parent(
+                package_id, "manifest entry", entry, unresolved, root, pkg_path
             )
-            continue
-        if not (
-            parent_resolved.is_relative_to(root)
-            and parent_resolved.is_relative_to(pkg_path)
-        ):
-            problems.append(
-                f"Package {package_id}: manifest entry {entry!r} resolves "
-                f"to {parent_resolved}, outside the package directory "
-                f"{pkg_path} -- refusing to touch it"
-            )
+        except ValueError as error:
+            problems.append(str(error))
             continue
 
         # Rebuilt on `parent_resolved`, NEVER on `unresolved.parent`. The
@@ -2424,9 +3090,20 @@ def _remove_entries(
 
     removed = []
     for _, path in paths_with_depth:
-        if not path.exists():
+        # `is_symlink()` FIRST, and it is not decoration. `Path.exists()`
+        # follows a link (False for a dangling one) and `Path.is_file()`
+        # follows it too (False for a link to a directory), so the two
+        # symlink shapes this loop's `unlink()` was written to handle were
+        # the exact two it never reached. Measured on the branch that added
+        # gen's own symlink refusal: `gen` said "`stencil clean` removes
+        # it", `clean` then exited 0 with twelve Removed lines and the word
+        # Makefile in none of them, and the link -- pointing out of the
+        # tree, inside a directory AGENTS.md says is handed to someone as a
+        # project of their own -- survived, with the package locked out of
+        # regeneration forever.
+        if not (path.is_symlink() or path.exists()):
             continue
-        if path.is_file():
+        if path.is_symlink() or path.is_file():
             if dry_run:
                 print(f"Would remove {path}")
             else:
@@ -2434,8 +3111,7 @@ def _remove_entries(
                 # above. unlink() removes the directory entry itself and
                 # never follows a final-component symlink, so this is
                 # correct for an ordinary symlink living inside the package
-                # even though `path.is_file()` above followed it to check
-                # type.
+                # even though the type checks above follow it.
                 try:
                     path.unlink()
                 except OSError as error:
@@ -2527,8 +3203,12 @@ def _remove_path(path: Path, dry_run: bool, problems: list[str]) -> None:
     reports an ordinary entry -- kept separate so the manifest is always the
     LAST thing printed and removed for its package. Guarded the same way
     too: a manifest that cannot be unlinked is a named problem, never a
-    traceback after every file it named is already gone."""
-    if not path.exists():
+    traceback after every file it named is already gone.
+
+    The `is_symlink()` half is the same fix `_remove_entries` needed: a
+    manifest replaced by a dangling link would otherwise be skipped here and
+    survive a clean that reported success."""
+    if not (path.is_symlink() or path.exists()):
         return
     if dry_run:
         print(f"Would remove {path}")
@@ -2858,13 +3538,25 @@ def clean_generated(
     return problems
 
 
-def install_gitignore(config: dict, dry_run: bool = False):
+def install_gitignore(config: dict, config_dir: Path, dry_run: bool = False):
     """Install or update .gitignore with stencil-managed entries.
 
     Uses marker comments to manage a section within .gitignore, allowing
     stencil to update its entries without disturbing user entries.
+
+    BESIDE THE CONFIG FILE, not in the working directory (stn-jl3). Every
+    entry this writes is relative to the config file's directory -- that is
+    what `output_dir` and `dir` are relative to -- so a section written into
+    a `.gitignore` somewhere else names paths that do not exist from there.
+    `stencil --config sub/.config.yaml install` from a repository root wrote
+    a section none of whose lines applied, while the directory a fresh clone
+    actually opens got nothing.
+
+    `config_dir` is positional-required for the reason `brand_problem`'s is:
+    a default would let a caller forget it and get the old behaviour back
+    silently, which is the shape of defect this whole epic exists to close.
     """
-    gitignore_path = Path.cwd() / ".gitignore"
+    gitignore_path = config_dir / ".gitignore"
 
     entries = get_generated_files(config)
 
@@ -2875,7 +3567,13 @@ def install_gitignore(config: dict, dry_run: bool = False):
     stencil_section += f"{GITIGNORE_END}\n"
 
     if gitignore_path.exists():
-        content = gitignore_path.read_text()
+        # errors="replace", because this content is only ever pattern-matched
+        # and re-emitted around the managed section -- and a `.gitignore`
+        # that is not valid UTF-8 (a latin-1 comment, say) used to end the
+        # run in a UnicodeDecodeError traceback. encoding is explicit for
+        # the reason write_text_nofollow's docstring gives: the locale
+        # default made these bytes depend on the shell that ran stencil.
+        content = gitignore_path.read_text(encoding="utf-8", errors="replace")
 
         # Pattern to find existing stencil section (including markers)
         pattern = re.compile(
@@ -2904,10 +3602,41 @@ def install_gitignore(config: dict, dry_run: bool = False):
         print("-" * 40)
         print(new_content)
     else:
-        gitignore_path.write_text(new_content)
+        # Written with `write_text`, deliberately, and NOT through
+        # `write_text_nofollow` like everything stn-h5q covers. This is the
+        # AUTHOR's file, not one stencil generated: a `.gitignore` that is a
+        # symlink into a dotfiles repository is a thing people really do, and
+        # refusing it would break a working setup to guard a file whose whole
+        # content the author already controls.
+        gitignore_path.write_text(new_content, encoding="utf-8")
         print(f"{action} {gitignore_path}")
         for entry in entries:
             print(f"  {entry}")
+
+    # The section this used to write, if it is somewhere else. Named rather
+    # than removed: it is a file outside the config directory, possibly in
+    # another repository, and deleting from there is a worse hazard than
+    # leaving a stale block. But saying nothing would leave the author with
+    # two managed sections and stencil maintaining only one.
+    stale = Path.cwd() / ".gitignore"
+    if stale != gitignore_path and stale.is_file():
+        try:
+            # UnicodeDecodeError is a ValueError, NOT an OSError, so the
+            # guard below used to let it through -- and this block runs
+            # AFTER the write, so a non-UTF-8 .gitignore in the working
+            # directory ended a successful `install` with a traceback and
+            # rc=1. Measured with a latin-1 comment in the file.
+            if GITIGNORE_START in stale.read_text(
+                encoding="utf-8", errors="replace"
+            ):
+                print(
+                    f"Note: {stale} still holds a stencil section from an "
+                    "older version, which stencil no longer maintains. "
+                    "Delete that block; the managed section now lives beside "
+                    "the config file."
+                )
+        except (OSError, UnicodeDecodeError):
+            pass
 
 
 def main():
@@ -3048,7 +3777,7 @@ def _main():
         except ValueError as e:
             print(f"Error: {e}", file=sys.stderr)
             sys.exit(1)
-        install_gitignore(config, args.dry_run)
+        install_gitignore(config, config_dir, args.dry_run)
         return
 
     if "packages" not in config:

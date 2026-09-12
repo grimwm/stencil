@@ -42,7 +42,9 @@ from __future__ import annotations
 import copy
 import json
 import os
+import shutil
 import subprocess
+from pathlib import Path
 
 import pytest
 import yaml
@@ -77,9 +79,26 @@ def _on_disk(generated) -> set[str]:
 
 def _expected_slice(config: dict, package_id: str = "demo") -> set[str]:
     """get_generated_files' slice for one package, unprefixed, manifest
-    excluded -- the no-drift guarantee package_entries exists to keep true."""
+    excluded -- the no-drift guarantee package_entries exists to keep true.
+
+    THE TOP-LEVEL output_dir IS PART OF THE PREFIX (stn-jl3), and getting
+    that wrong here fails in the worst available direction rather than
+    loudly: a prefix of `demo/` against entries now spelled `out/demo/...`
+    matches nothing, `_expected_slice` returns an EMPTY SET, and
+    `test_manifest_entries_equal_get_generated_files_slice_end_to_end`
+    compares the manifest against nothing at all. The whole point of this
+    helper is to catch package_entries and get_generated_files drifting
+    apart; a vacuous version of it still passes forever. Never loosen the
+    match to fix a failure here -- widen the prefix to whatever
+    get_generated_files now prepends."""
+    declared = config.get("output_dir")
+    output_prefix = (
+        "/".join(Path(declared).parts) + "/"
+        if isinstance(declared, str) and Path(declared).parts
+        else ""
+    )
     pkg_dir = config["packages"][package_id].get("dir", package_id)
-    prefix = f"{pkg_dir}/"
+    prefix = f"{output_prefix}{pkg_dir}/"
     return {
         entry.removeprefix(prefix)
         for entry in get_generated_files(config)
@@ -308,6 +327,314 @@ def test_install_gitignore_lists_the_manifest(tmp_path):
     assert result.returncode == 0, result.stderr
     gitignore = (tmp_path / ".gitignore").read_text()
     assert f"demo/{MANIFEST_NAME}" in gitignore
+
+
+# --- stn-jl3: the managed section names what stencil ACTUALLY writes -------
+
+
+def _git_init(root):
+    """A hermetic repository to ask `git check-ignore` in.
+
+    Skips rather than fails without git, the way the container tier does --
+    but note that this tier is NOT marked integration, so on any machine
+    with git (which is every machine that can clone this repository) these
+    run in the ordinary unit pass. A guard that silently stops running is
+    the failure AGENTS.md already records.
+    """
+    if shutil.which("git") is None:
+        pytest.skip("git is not on PATH")
+    for command in (
+        ["git", "-c", "init.defaultBranch=main", "init"],
+        ["git", "config", "user.email", "test@example.com"],
+        ["git", "config", "user.name", "Test"],
+    ):
+        subprocess.run(command, cwd=root, check=True, capture_output=True)
+
+
+def _ignored(root, *relative) -> None:
+    for rel in relative:
+        assert (root / rel).is_file(), f"setup: {rel} was not generated"
+        check = subprocess.run(["git", "check-ignore", "-q", rel], cwd=root)
+        assert check.returncode == 0, (
+            f"git does not ignore {rel} -- the managed .gitignore section "
+            "does not name the path stencil actually writes to"
+        )
+
+
+
+def test_a_generated_file_is_actually_ignored_by_git(tmp_path):
+    """The ticket's own reproduction (stn-jl3), run rather than read: with a
+    top-level output_dir set, `stencil gen` writes to out/demo/Makefile but
+    the managed .gitignore section named demo/Makefile -- no 'out/' prefix
+    -- so every file stencil actually produced was offered to the author as
+    untracked. Reading the rendered section's text would have missed this
+    the same way it already shipped once: a substring check on 'Makefile'
+    passes whether or not the prefix is there. Only git's own answer, via
+    `git check-ignore`, proves the section covers the path stencil wrote to.
+    """
+    _git_init(tmp_path)
+
+    config = {
+        "output_dir": "out",
+        "templates": [{"src": "Makefile.j2"}],
+        "packages": {"demo": {"name": "Demo", "package_type": "none"}},
+    }
+    write_config(tmp_path, config)
+
+    gen_result = run_cli("gen", "demo", cwd=tmp_path)
+    assert gen_result.returncode == 0, gen_result.stderr
+
+    install_result = run_cli("install", cwd=tmp_path)
+    assert install_result.returncode == 0, install_result.stderr
+
+    _ignored(tmp_path, f"out/demo/{MANIFEST_NAME}", "out/demo/Makefile")
+
+
+def test_the_gitignore_lands_beside_the_config_not_the_cwd(tmp_path):
+    """install_gitignore's other half: it wrote to Path.cwd() / '.gitignore'
+    rather than beside the config file it just read, and every entry it
+    writes is config-relative. So `stencil --config sub/.config.yaml
+    install` run from anywhere else produced a .gitignore in the wrong
+    place, with entries that do not even apply there, while the config's
+    own directory -- the one a fresh clone would actually open -- got
+    nothing. Runs `install` from a directory that is not the config's own,
+    and checks both where the file landed and that git still recognizes the
+    generated file once it does.
+    """
+    _git_init(tmp_path)
+
+    project = tmp_path / "project"
+    project.mkdir()
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+
+    config = {
+        "output_dir": "out",
+        "templates": [{"src": "Makefile.j2"}],
+        "packages": {"demo": {"name": "Demo", "package_type": "none"}},
+    }
+    config_path = write_config(project, config)
+
+    gen_result = run_cli("gen", "demo", cwd=project)
+    assert gen_result.returncode == 0, gen_result.stderr
+
+    install_result = run_cli("--config", str(config_path), "install", cwd=elsewhere)
+    assert install_result.returncode == 0, install_result.stderr
+
+    assert (project / ".gitignore").is_file(), (
+        "install_gitignore wrote nowhere near the config it read -- the "
+        "config's own directory got no .gitignore at all"
+    )
+    assert not (elsewhere / ".gitignore").exists(), (
+        "install_gitignore wrote into Path.cwd() instead of beside the "
+        "config file it was told to read"
+    )
+
+    check = subprocess.run(
+        ["git", "check-ignore", "-q", "out/demo/Makefile"], cwd=project
+    )
+    assert check.returncode == 0, (
+        "the .gitignore that landed beside the config does not actually "
+        "ignore the file stencil generated there"
+    )
+
+
+def test_the_managed_entries_stay_unprefixed_when_output_dir_is_unset():
+    """stn-jl3's fix teaches get_generated_files to prefix every entry with
+    the top-level output_dir. Most configs never set one -- STENCIL.md's own
+    example spells the default as the literal '.' -- so the fix has to
+    normalize a missing key and an explicit '.' to the same empty prefix, or
+    every consumer without output_dir set would wake up to a spurious './'
+    segment in their .gitignore the day this ships. Pinned against the exact
+    entry set, not a substring, so the fix cannot satisfy this by getting
+    one entry right while leaving another one prefixed.
+    """
+    packages = {"demo": {"name": "Demo", "package_type": "none"}}
+    templates = [{"src": "Makefile.j2"}]
+    expected = {
+        f"demo/{MANIFEST_NAME}",
+        "demo/Makefile",
+        "demo/format-package-lock.json",
+    }
+
+    no_output_dir = {"templates": templates, "packages": copy.deepcopy(packages)}
+    dot_output_dir = {
+        "output_dir": ".",
+        "templates": templates,
+        "packages": copy.deepcopy(packages),
+    }
+
+    assert set(get_generated_files(no_output_dir)) == expected
+    assert set(get_generated_files(dot_output_dir)) == expected
+
+
+@pytest.mark.parametrize("declared", ["out", "./out", "out/"])
+def test_the_output_dir_prefix_is_normalized_before_it_becomes_a_pattern(
+    tmp_path, declared
+):
+    """A gitignore line is a pattern, and `./out/demo/Makefile` matches
+    NOTHING -- measured with `git check-ignore`, which is the only reason
+    this is asserted by running git rather than by reading the section.
+    `check_config_path` accepts all three spellings, STENCIL.md's own
+    example writes the default as a bare `.`, and a consumer who types
+    `output_dir: ./out` would otherwise get a managed section that looks
+    completely correct and ignores nothing at all."""
+    _git_init(tmp_path)
+    write_config(
+        tmp_path,
+        {
+            "output_dir": declared,
+            "templates": [{"src": "Makefile.j2"}],
+            "packages": {"demo": {"name": "Demo", "package_type": "none"}},
+        },
+    )
+
+    assert run_cli("gen", "demo", cwd=tmp_path).returncode == 0
+    assert run_cli("install", cwd=tmp_path).returncode == 0
+
+    _ignored(tmp_path, "out/demo/Makefile")
+
+
+@pytest.mark.parametrize("declared_dir", ["demo", "./demo", "demo/", "a//b"])
+def test_the_package_dir_segment_is_normalized_too(tmp_path, declared_dir):
+    """The same normalization, one segment down, and it was missed.
+
+    The comment on the output_dir prefix states the rule exactly -- a
+    leading `./` matches nothing at all in a gitignore pattern, which is a
+    silent way to ignore nothing -- and the next statement interpolated
+    `dir` raw. Measured with `git check-ignore`: `dir: "./demo"` produced
+    the line `out/./demo/Makefile`, `dir: "demo/"` produced
+    `out/demo//Makefile`, and git matched NEITHER, so `install` printed
+    every line and ignored none of them. That is stn-jl3's own failure mode
+    at the segment nobody normalized, reached by an ordinary typing habit."""
+    _git_init(tmp_path)
+    write_config(
+        tmp_path,
+        {
+            "output_dir": "out",
+            "templates": [{"src": "Makefile.j2"}],
+            "packages": {
+                "demo": {
+                    "name": "Demo",
+                    "package_type": "none",
+                    "dir": declared_dir,
+                }
+            },
+        },
+    )
+
+    assert run_cli("gen", "demo", cwd=tmp_path).returncode == 0
+    assert run_cli("install", cwd=tmp_path).returncode == 0
+
+    expected = "out/" + "/".join(Path(declared_dir).parts) + "/Makefile"
+    _ignored(tmp_path, expected)
+
+
+def test_install_does_not_traceback_on_a_gitignore_that_is_not_utf8(tmp_path):
+    """The stale-section note runs AFTER the write, and its guard was
+    `except OSError` -- but `UnicodeDecodeError` is a `ValueError`. So a
+    `.gitignore` holding a latin-1 comment in the working directory ended a
+    run that had already done its real work with a traceback and rc=1.
+
+    The content here is only ever substring-matched and re-emitted around
+    the managed section, so it is read with `errors="replace"` rather than
+    refused: a byte stencil does not understand in a file it does not own is
+    not a reason to fail."""
+    project = tmp_path / "project"
+    project.mkdir()
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    (elsewhere / ".gitignore").write_bytes(b"# caf\xe9 build\n")
+
+    config_path = write_config(
+        project,
+        {
+            "templates": [{"src": "Makefile.j2"}],
+            "packages": {"demo": {"name": "Demo", "package_type": "none"}},
+        },
+    )
+
+    result = run_cli("--config", str(config_path), "install", cwd=elsewhere)
+
+    assert "Traceback" not in result.stderr, result.stderr
+    assert result.returncode == 0, (
+        f"a successful install reported failure: {result.stderr!r}"
+    )
+    assert (project / ".gitignore").is_file()
+
+
+def test_install_cannot_un_ignore_a_file_the_author_already_ignores(tmp_path):
+    """The managed section's lines are PATTERNS, and a leading `!` NEGATES
+    one. `dir` and the top-level `output_dir` are the two config values that
+    lead every line, and neither was checked for it.
+
+    Measured, on a course-handout repository whose own .gitignore says
+    `*.pdf`, with `dir: "!solutions"`:
+
+        $ stencil install
+        $ git check-ignore -v -- solutions/answers.pdf
+        .gitignore:7:!solutions/answers*.pdf    solutions/answers.pdf
+        $ git status --porcelain
+        ?? solutions/
+
+    `stencil install` -- whose entire purpose is to stop generated files
+    being committed -- un-ignored the answer key and made it committable,
+    silently. In this tool's problem domain that is the worst available
+    outcome, and stn-jl3 moves the managed section INTO the file holding the
+    author's own rules, which is where a negation gets something to negate.
+
+    Asserted as a refusal, because a backslash-escaped ``!`` (the documented
+    gitignore escape) would also work and a `dir` beginning with `!` is not a
+    directory name anyone means."""
+    _git_init(tmp_path)
+    (tmp_path / ".gitignore").write_text("*.pdf\n")
+    write_config(
+        tmp_path,
+        {
+            "templates": [{"src": "Makefile.j2"}],
+            "packages": {
+                "hs1": {
+                    "name": "HS1",
+                    "package_type": "none",
+                    "dir": "!solutions",
+                    "docs": ["answers.md"],
+                }
+            },
+        },
+    )
+
+    result = run_cli("install", cwd=tmp_path)
+
+    assert result.returncode != 0, (
+        f"install exited 0 with a negating dir: {result.stdout!r}"
+    )
+    assert "Traceback" not in result.stderr, result.stderr
+    assert "!" in result.stderr and "dir" in result.stderr, result.stderr
+
+    (tmp_path / "solutions").mkdir()
+    (tmp_path / "solutions" / "answers.pdf").write_text("key\n")
+    check = subprocess.run(
+        ["git", "check-ignore", "-q", "solutions/answers.pdf"], cwd=tmp_path
+    )
+    assert check.returncode == 0, (
+        "the author's own `*.pdf` rule stopped applying after `stencil "
+        "install` -- the managed section un-ignored it"
+    )
+
+
+@pytest.mark.parametrize("value", ["!out", "#out", "o*t"])
+def test_a_top_level_output_dir_that_is_a_pattern_is_refused(value):
+    """The same hole from the other side, and the one stn-jl3 opens wider:
+    prefixing every managed line with the top-level `output_dir` moves the
+    leading position onto a key that was equally unchecked for these. One
+    `output_dir: "!out"` flips the ENTIRE managed section to negations."""
+    config = {
+        "output_dir": value,
+        "templates": [{"src": "Makefile.j2"}],
+        "packages": {"demo": {"name": "Demo", "package_type": "none"}},
+    }
+    with pytest.raises(ValueError, match="output_dir"):
+        get_generated_files(config)
 
 
 # --- build-artifact glob patterns, recorded rather than rewalked ------------
