@@ -41,6 +41,14 @@ How the version gets bumped is written down in
   and `test_tmp_footprint.py` legitimately make against a throwaway rootdir.
   AGENTS.md records what a contributor in a worktree should expect.
 
+  Two costs are accepted rather than left to be discovered. The guard has a
+  loud door — `STENCIL_ALLOW_FOREIGN_STENCIL=1` proceeds and warns on every
+  run, including under `-q`, since a guard with no way past it gets deleted
+  whole and one that can be silenced is not a guard. And the repository root
+  now precedes site-packages on `sys.path`, so a top-level `yaml.py` would
+  become the one the suite imports; a new test fails if any git-tracked name
+  at the root starts shadowing an installed module.
+
 - **The container tier now runs in parallel** (`stn-vda`). CI's integration job
   ran a single `pytest -v`; it now runs `pytest -v -n auto --dist loadfile`.
   `loadfile`, not xdist's default `load`: nine test files carry module- or

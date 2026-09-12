@@ -71,6 +71,17 @@ testpaths = ["tests"]
 # sufficient given that conftest imports stencil at module scope. It reaches
 # xdist workers. tests/conftest.py carries the guard that says so when any of
 # that stops being true.
+#
+# THE COST, accepted rather than discovered later. The root now precedes
+# site-packages for every pytest run, where before only `tests/` did. A file
+# named `yaml.py` or `filelock.py` at the TOP of this tree would become the
+# one the suite imports, and tests/conftest.py imports both at module scope.
+# That is not a new capability -- CI builds fork pull requests, so anyone who
+# can land a test file can already run code there, which is why the workflow
+# grants `contents: read` and no secrets -- but it does let such a file look
+# more innocuous than one inside `tests/`. Monitored rather than argued
+# about: tests/test_worktree_imports.py fails if any git-tracked name at the
+# root starts shadowing an installed module.
 pythonpath = ["."]
 markers = [
     "integration: needs a container runtime; deselect with -m 'not integration'",

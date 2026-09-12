@@ -53,6 +53,14 @@ FIXTURES = Path(__file__).parent / "fixtures"
 
 CHECKOUT = Path(__file__).resolve().parent.parent
 
+# The door. A guard with no way past it is a guard somebody deletes outright
+# the first time it blocks something legitimate -- testing an installed wheel
+# to verify packaging, say, which nothing here does today but which is a
+# reasonable thing to want. Going through it is LOUD: the note is printed in
+# the header of every run rather than swallowed, because a guard that can be
+# silenced invisibly is the failure this file already records twice.
+FOREIGN_OK_ENV = "STENCIL_ALLOW_FOREIGN_STENCIL"
+
 
 def foreign_stencil_note(checkout: Path, stencil_file: Path, rootdir: Path) -> str | None:
     """The refusal, or None when the import belongs to `checkout`.
@@ -82,6 +90,10 @@ def foreign_stencil_note(checkout: Path, stencil_file: Path, rootdir: Path) -> s
         "    python3 -m venv .venv && ./.venv/bin/pip install -e '.[dev]'\n"
         "        -- in THIS checkout, then use that venv; or\n"
         "    run the tests from the checkout that owns the venv you are using.\n"
+        "\n"
+        f"Deliberately testing an installed build rather than this tree? Set\n"
+        f"{FOREIGN_OK_ENV}=1. The run then proceeds and says so in its header\n"
+        "on every run -- a door, not a silencer.\n"
     )
 
 DEMO_CONFIG = {
@@ -350,7 +362,16 @@ def pytest_configure(config):
     # source tree nobody is editing.
     note = foreign_stencil_note(CHECKOUT, Path(stencil.__file__), config.rootpath)
     if note:
-        raise pytest.UsageError(note)
+        if not os.environ.get(FOREIGN_OK_ENV):
+            raise pytest.UsageError(note)
+        # Not `pytest_report_header`, which was the obvious channel and is
+        # the wrong one: `-q` suppresses the header, and `-q` is exactly how
+        # somebody who has set the override day to day would be running.
+        # Measured. A config-time warning survives it and gets counted in the
+        # summary line.
+        config.issue_config_time_warning(
+            UserWarning(f"{FOREIGN_OK_ENV} is set; {note}"), stacklevel=2
+        )
 
     if not os.environ.get(pipeline.BROWSER_IMAGE_TAG_ENV):
         # An explicit tag wins: a CI job that builds the image once and reuses

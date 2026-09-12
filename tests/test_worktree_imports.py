@@ -259,3 +259,137 @@ def test_the_probe_would_have_caught_the_bug(tmp_path):
         "with no `pythonpath` the inner run should have imported the OTHER "
         "checkout; if it did not, the scaffolding above proves nothing"
     )
+
+
+def test_the_guard_survives_a_symlinked_checkout(tmp_path):
+    """macOS hands this suite a symlink every time it runs.
+
+    `/tmp` is a symlink to `/private/tmp` on macOS, and this repository's own
+    convention puts worktrees under `.claude/worktrees/`, which a contributor
+    may well reach through one. The guard resolves BOTH sides for that reason
+    and for no other; a later simplification -- "the checkout path is already
+    absolute, it needs no resolve()" -- would start refusing perfectly good
+    runs on one developer's machine and nobody else's.
+
+    That correctness currently rests entirely on one expression. This is the
+    test that makes it rest on something.
+    """
+    real = tmp_path / "real-checkout"
+    (real / "stencil").mkdir(parents=True)
+    stencil_file = real / "stencil" / "__init__.py"
+    stencil_file.write_text("")
+
+    link = tmp_path / "reached-by-symlink"
+    link.symlink_to(real, target_is_directory=True)
+    assert link.resolve() == real.resolve(), "the fixture must really symlink"
+
+    assert foreign_stencil_note(link, stencil_file, link) is None, (
+        "a checkout reached through a symlink is the same checkout"
+    )
+    assert foreign_stencil_note(real, link / "stencil" / "__init__.py", real) is None, (
+        "and so is a stencil reached through one"
+    )
+
+
+def test_the_door_is_loud(tmp_path):
+    """The override lets a run proceed, and makes it say so.
+
+    A guard with no way past it gets deleted whole the first time it blocks
+    something legitimate. A guard that can be waved through in silence is not
+    a guard. So the override exists and costs a line at the top of every run's
+    log -- the same place `basetemp` already reports itself.
+    """
+    fake = tmp_path / "some-other-checkout"
+    (fake / "tests").mkdir(parents=True)
+    shutil.copyfile(CONFTEST, fake / "tests" / "conftest.py")
+    (fake / "tests" / "test_trivial.py").write_text("def test_trivial(): pass\n")
+
+    result = _run_inner(
+        [str(fake / "tests")],
+        cwd=tmp_path,
+        PYTHONPATH=str(CHECKOUT),
+        STENCIL_ALLOW_FOREIGN_STENCIL="1",
+    )
+    combined = f"{result.stdout}\n{result.stderr}"
+
+    assert result.returncode == 0, f"the door should open:\n{combined}"
+    assert "STENCIL_ALLOW_FOREIGN_STENCIL is set" in combined, (
+        f"and it should be impossible to miss that it was used:\n{combined}"
+    )
+    assert str(CHECKOUT) in combined, (
+        f"including which tree is actually under test:\n{combined}"
+    )
+
+
+def test_no_tracked_file_at_the_root_shadows_a_dependency():
+    """The cost of putting the repository root on sys.path, made visible.
+
+    `pythonpath = ["."]` is what fixes stn-2et, and it widens what a file at
+    the TOP of this tree can do: the root now precedes site-packages for every
+    pytest run, where before only `tests/` did. A file called `yaml.py` or
+    `filelock.py` added at the root would quietly become the one this suite
+    imports -- and `tests/conftest.py` imports both at module scope.
+
+    That is not a new capability. Anyone who can land a test file in a PR can
+    already run code in CI, which builds fork pull requests. What it changes
+    is how innocuous the file gets to look, and this repository's answer to an
+    accepted risk is to monitor it rather than to argue about it.
+
+    Only git-TRACKED entries are checked, because untracked ones are what a
+    contributor's own machine generates -- `build/`, `.venv/` -- and a test
+    that fails on a local build directory is a test people learn to ignore.
+    """
+    tracked = subprocess.run(
+        ["git", "ls-files"],
+        cwd=CHECKOUT,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.split()
+
+    candidates = sorted(
+        {
+            top.removesuffix(".py")
+            for top in {entry.split("/")[0] for entry in tracked}
+            # What Python could actually import from the root: a module file
+            # or a package/namespace directory. `LICENSE` is neither.
+            if (top.endswith(".py") or (CHECKOUT / top).is_dir())
+            and top.removesuffix(".py").isidentifier()
+            # `stencil` IS this repository's package; it is the one name that
+            # is supposed to resolve here rather than in site-packages.
+            and top != "stencil"
+        }
+    )
+    assert candidates, "the scan found nothing; it has stopped testing anything"
+
+    # An isolated interpreter, from a neutral cwd: `-I` drops PYTHONPATH and
+    # the user site directory, and the cwd is not this tree, so anything found
+    # is genuinely installed rather than this checkout answering about itself.
+    probe = (
+        "import importlib.util, sys\n"
+        "for name in sys.argv[1:]:\n"
+        "    try:\n"
+        "        spec = importlib.util.find_spec(name)\n"
+        "    except Exception:\n"
+        "        spec = None\n"
+        "    if spec is not None:\n"
+        "        print(f'{name} {spec.origin}')\n"
+    )
+    found = subprocess.run(
+        [sys.executable, "-I", "-c", probe, *candidates],
+        cwd=Path(sys.prefix),
+        capture_output=True,
+        text=True,
+        timeout=INNER_TIMEOUT,
+    )
+
+    assert found.returncode == 0, f"{found.stdout}\n{found.stderr}"
+    shadowed = [
+        line
+        for line in found.stdout.splitlines()
+        if str(CHECKOUT) not in line  # this tree answering about itself
+    ]
+    assert not shadowed, (
+        "these top-level names now shadow an installed module for every "
+        f"pytest run, because the repository root is on sys.path: {shadowed}"
+    )

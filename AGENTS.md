@@ -352,6 +352,22 @@ holds the guard's tests, including a control that the scaffolding still lands
 on the wrong tree when the setting is removed — without which the whole file
 could pass while measuring nothing.
 
+There is a door, and it is loud: `STENCIL_ALLOW_FOREIGN_STENCIL=1` lets a run
+proceed against a `stencil` from somewhere else — testing an installed wheel
+to check packaging, say — and warns on every run, including under `-q`, which
+is where the header would have been swallowed. A guard with no way past it is
+one somebody deletes outright the first time it blocks something legitimate;
+a guard that can be waved through in silence is not a guard.
+
+The cost of `pythonpath = ["."]`, accepted deliberately: the repository root
+now precedes site-packages on `sys.path` for every pytest run, where before
+only `tests/` did, so a top-level `yaml.py` or `filelock.py` would become the
+one this suite imports. That is not new power — CI builds fork pull requests,
+so landing a test file already runs code there, which is what `permissions: contents: read` and the absence of secrets are for — but it lets such a file
+look more ordinary than one inside `tests/`. `tests/test_worktree_imports.py`
+fails if any git-tracked name at the root starts shadowing an installed
+module, so the risk is watched rather than merely accepted.
+
 Roll forward from a mistake: `git revert`, or a follow-up commit that fixes it. Never
 `git reset --hard`, and never rewrite a branch that has already been pushed.
 
