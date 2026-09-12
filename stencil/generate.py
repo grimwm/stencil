@@ -326,11 +326,7 @@ def check_output_dir(config: dict) -> str | None:
         # base is the config directory. Preserved rather than refused.
         return None
     try:
-        return check_gitignore_literal(
-            "config",
-            "output_dir",
-            check_config_path("config", "output_dir", value),
-        )
+        text = check_config_path("config", "output_dir", value)
     except ValueError as error:
         # check_config_path's messages all end "escapes the package
         # directory. Paths are relative to it and must stay inside." --
@@ -352,6 +348,12 @@ def check_output_dir(config: dict) -> str | None:
             "under it. A package-level output_dir is the supported way to "
             "send a package's build products somewhere else.)"
         ) from error
+    # OUTSIDE the wrapper above, deliberately. That sentence corrects
+    # check_config_path's borrowed "escapes the package directory" ending
+    # and has nothing to say about a leading `!` or a glob -- appended to
+    # one of those it would answer a question the reader did not ask, and
+    # push the part they need closer to `_safe`'s truncation limit.
+    return check_gitignore_literal("config", "output_dir", text)
 
 
 def check_package_dir(package_id: str, value) -> str:
@@ -417,6 +419,11 @@ def check_gitignore_literal(package_id: str, where: str, value: str) -> str:
     literal to git, so `docs` and the rest need nothing here; the glob
     refusal below is the exception, because `*` matches anywhere in the
     pattern and would widen what the section ignores rather than narrow it.
+
+    The glob message is spelled here rather than borrowed from
+    `check_no_glob`: that one explains itself in terms of `clean` expanding
+    a manifest entry back out, which is true for `docs` and `slides` and is
+    not what is wrong with a `*` in a directory name.
     """
     for character, effect in _GITIGNORE_LEADING.items():
         if value.startswith(character):
@@ -425,7 +432,15 @@ def check_gitignore_literal(package_id: str, where: str, value: str) -> str:
                 f"{character!r}, which {effect} in the .gitignore section "
                 "stencil manages. This names a directory, not a pattern."
             )
-    return check_no_glob(package_id, where, value)
+    if _GLOB_IN_PATH.search(value):
+        raise ValueError(
+            f"Package {package_id}: {where} {value!r} contains a glob "
+            "metacharacter (one of * ? [ ]). This names a directory, not a "
+            "pattern -- as the first segment of every line in the "
+            ".gitignore section stencil manages, it would match "
+            "directories stencil never wrote to."
+        )
+    return value
 
 
 def check_package_output_dir(package_id: str, value) -> str | None:
