@@ -79,7 +79,9 @@
   # `>/dev/null` WITHOUT `2>&1`, and the difference is a consumer's morning.
   # Measured in the pinned image (busybox 1.37.0, /usr/bin/sha256sum ->
   # /bin/busybox): a match prints `OK` on stdout, a mismatch prints sha256sum's
-  # WARNING on stderr, an absent file prints `can't open` AND that same WARNING,
+  # WARNING on stderr, an absent COPY prints `can't open` AND that same WARNING
+  # (an absent lockfile in the package never reaches here -- the presence guard
+  # above catches that one before the cp, and says so in its own words),
   # and an absent sha256sum gives `sh: sha256sum: not found`. The third overlaps
   # the second on purpose in busybox, so `can't open` is the discriminator
   # between them and the WARNING alone is not. All four are fail-closed -- the

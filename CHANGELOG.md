@@ -12,10 +12,13 @@ How the version gets bumped is written down in
 ## 0.39.0
 
 - **`make format-md` now says why it refused a lockfile** (`stn-jjw`). The digest
-  guard below piped `sha256sum -c` to `>/dev/null 2>&1`, so all four ways the
-  check can end — a match, a mismatch, an absent lockfile, and an absent
+  guard below piped `sha256sum -c` to `>/dev/null 2>&1`, so all four ways *that
+  check* can end — a match, a mismatch, an absent file to check, and an absent
   `sha256sum` — reached the consumer as the same message: "`format-package-lock.json`
-  is not the file stencil generated … Run `stencil gen`". The exit code cannot
+  is not the file stencil generated … Run `stencil gen`". (A missing lockfile in
+  the package is a different thing and was never affected: the presence guard
+  above catches it before the `cp` and says "is not here". The file this one can
+  find absent is the copy at `/tmp/fmt/package-lock.json`.) The exit code cannot
   tell them apart either, because `if ! …; then … exit 1; fi` swallows whatever
   `sha256sum` returned and substitutes its own `1`, and `>/dev/null` silences
   stdout by design. stderr was the only channel left that could say which, and it
