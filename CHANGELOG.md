@@ -11,6 +11,33 @@ How the version gets bumped is written down in
 
 ## 0.39.0
 
+- **`make format-md` now says why it refused a lockfile** (`stn-jjw`). The digest
+  guard below piped `sha256sum -c` to `>/dev/null 2>&1`, so all four ways the
+  check can end — a match, a mismatch, an absent lockfile, and an absent
+  `sha256sum` — reached the consumer as the same message: "`format-package-lock.json`
+  is not the file stencil generated … Run `stencil gen`". The exit code cannot
+  tell them apart either, because `if ! …; then … exit 1; fi` swallows whatever
+  `sha256sum` returned and substitutes its own `1`, and `>/dev/null` silences
+  stdout by design. stderr was the only channel left that could say which, and it
+  was the one being discarded — so a base image that dropped `sha256sum` told the
+  consumer their lockfile was wrong and sent them to re-run `stencil gen` forever
+  over a file that was correct all along.
+
+  Dropping `2>&1` and keeping `>/dev/null` puts `sha256sum`'s own account of the
+  failure immediately above stencil's explanation. Success stays silent, and the
+  line leaks nothing: it names no digest. This is the shape `Dockerfile.browser`'s
+  guard already shipped with in this release; the two no longer differ. All four
+  cases are measured in the pinned image by `tests/test_compose_format_md.py`,
+  which asserts the missing-`sha256sum` case is distinguishable from a mismatch —
+  the thing `2>&1` destroyed.
+
+  The entrypoint's "what this does not close" note also gains the bypass it
+  omitted: compose-file *selection*. `make` pins its compose file with `-f` since
+  `stn-qli`, so a `docker-compose.override.yml` or a `COMPOSE_FILE` in `.env` no
+  longer redirects `make format-md`. A hand-run `docker compose` with no `-f`
+  still merges an override, as compose has always done. The note enumerated only
+  edits to the two files in the package, which read as exhaustive and was not.
+
 - **The browser image no longer installs from a lockfile it has not checked**
   (`stn-egv`). `Dockerfile.browser` copied `browser-package-lock.json` out of the
   build context — `context: .`, the generated package directory you own and edit

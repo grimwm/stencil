@@ -273,6 +273,46 @@ def outcome(label: str, result: subprocess.CompletedProcess) -> str:
     )
 
 
+def format_md_script(package: Path) -> str:
+    """The format-md entrypoint's script, parsed out of the compose file.
+
+    ``yaml.safe_load`` rather than a text search, for the reason
+    ``test_the_entrypoint_refuses_a_consumers_prettier_config`` gives below: the
+    change that adds a guard also adds a long comment explaining it, and a
+    comment satisfies ``in compose.read_text()`` forever -- including after
+    someone deletes the guard the comment describes.
+
+    tests/test_pins.py has a parser of its own shaped like this one, and the two
+    are deliberately not shared: ``from tests.test_pins import ...`` resolves
+    locally and fails on CI with ModuleNotFoundError, which is the trap
+    conftest.py documents for its own fixtures. Three lines of yaml is the
+    cheaper half of that trade.
+    """
+    compose = yaml.safe_load((package / "docker-compose.yml").read_text())
+    return compose["services"]["format-md"]["entrypoint"][-1]
+
+
+def digest_guard(script: str) -> str:
+    """The `if ! ... fi` the digest check lives in, lifted out of its chain.
+
+    From the ``if`` to its ``fi``, dropping the ``&&`` that chains it into the
+    install -- so what comes back is a complete shell command that can be run on
+    its own, which is what ``test_the_guard_says_which_of_the_four_things_went_wrong``
+    below needs.
+
+    It slices to ``fi &&`` rather than to ``fi``, and that is not fussiness.
+    The refusal says "file" or "lockfile" three times, so ``script.index("fi",
+    start)`` lands inside the first of them: measured, the naive slice ends at
+    ``is not the fi``, which is an unterminated ``if`` and a dangling double
+    quote. The executed test would then fail on a syntax error rather than on
+    the behaviour it exists to measure, which reads in a log like a broken guard
+    rather than a broken test. tests/test_pins.py's ``_guard_block`` learned the
+    same lesson in stn-egv and takes its terminator as a parameter for it.
+    """
+    start = script.index("if ! echo")
+    return script[start : script.index("fi &&", start) + len("fi")]
+
+
 @pytest.fixture(scope="session")
 def compose_impl():
     """The compose implementation to drive, or a skip.
@@ -663,6 +703,152 @@ def test_a_tampered_lockfile_is_refused_before_npm_fetches_anything(
     )
 
 
+@pytest.mark.integration
+def test_the_guard_says_which_of_the_four_things_went_wrong(doc_package, tmp_path):
+    """stn-jjw. `>/dev/null` WITHOUT `2>&1`, measured where the guard runs.
+
+    THE EXIT CODE CANNOT DISCRIMINATE, and that is the whole of the argument.
+    ``if ! <pipeline>; then ... exit 1; fi`` consumes whatever sha256sum
+    returned -- the 1 of a mismatch and the 127 of a missing binary alike -- and
+    replaces it with its own ``exit 1``. So all three failures leave the same
+    status behind, stdout is silenced by design, and stderr is the ONLY channel
+    left that can say which of them happened. ``2>&1`` closed it.
+
+    Four cases, in the pinned image (``node:24.20.0-alpine3.24``, busybox
+    1.37.0, ``/usr/bin/sha256sum -> /bin/busybox``) rather than against the
+    host's sha256sum, because busybox's wording is what a consumer actually
+    reads and Darwin's sha256sum has no ``-c`` at all:
+
+        match           nothing on either stream                  guard exit 0
+        mismatch        'WARNING: ... did NOT match' on stderr     guard exit 1
+        file absent     "can't open '<path>'" on stderr           guard exit 1
+        sha256sum gone  'sh: sha256sum: not found' on stderr      guard exit 1
+
+    All four are fail-closed -- the fourth is forced with ``PATH=/nonexistent``
+    and still refuses -- so the guard never passes for the wrong reason. What
+    the fix buys is the fourth line being distinguishable from the second: a
+    base image that dropped sha256sum used to tell the consumer their lockfile
+    was not the file stencil generated, which sends them to re-run
+    ``stencil gen`` forever over a file that was correct all along.
+
+    THE `>/dev/null` HALF IS ASSERTED TOO, in the match case, because the
+    cheapest way to "fix" this ticket is to delete the whole redirection and
+    make every successful ``make pkg`` print a checksum line nobody asked for.
+
+    The block is the template's own text, lifted by ``digest_guard``; only the
+    path literal is substituted, because /tmp/fmt is the service's directory
+    and not this test's to populate. The ``if !``, the pipeline, the
+    redirection and the ``exit 1`` are all stencil's.
+    """
+    runtime = pipeline.container_runtime()
+    if runtime is None:
+        pytest.skip("no container runtime found (docker, podman)")
+
+    block = digest_guard(format_md_script(doc_package))
+    checked = tmp_path / "package-lock.json"
+    runnable = block.replace(
+        f"{pipeline.FORMAT_TOOLS_DIR}/package-lock.json", "/guard/package-lock.json"
+    )
+    assert "/guard/package-lock.json" in runnable, (
+        f"the guard no longer names the copy it checks:\n{block}"
+    )
+
+    # Pulled first, and separately, so the runs below report only the guard's
+    # own output. `run` writes its pull progress to stderr, and the match case
+    # asserts on stderr being clean.
+    pulled = subprocess.run(
+        [runtime, "pull", pipeline.NODE_IMAGE],
+        capture_output=True, text=True, timeout=1800,
+    )
+    if pulled.returncode != 0:
+        pytest.skip(
+            f"could not pull {pipeline.NODE_IMAGE}: "
+            f"{(pulled.stderr or pulled.stdout).strip()[-300:]}"
+        )
+
+    def run(*, path: str | None = None) -> subprocess.CompletedProcess:
+        # `--entrypoint /bin/sh`, ABSOLUTE, and both halves are load-bearing.
+        # The service overrides this image's entrypoint too, so replacing it is
+        # faithful rather than a shortcut -- and the path has to be absolute
+        # because the sha256sum-gone case works by emptying PATH. The runtime
+        # resolves the entrypoint binary itself through PATH before the
+        # container starts: measured, `PATH=/nonexistent` with the image's own
+        # `docker-entrypoint.sh` fails with "executable file not found in
+        # $PATH" and exit 127 without ever reaching the guard, which would read
+        # in a log exactly like the guard failing to speak.
+        env = ["--env", f"PATH={path}"] if path is not None else []
+        return subprocess.run(
+            [runtime, "run", "--rm", *env, "--entrypoint", "/bin/sh",
+             "--volume", f"{tmp_path}:/guard:z", "--workdir", "/guard",
+             pipeline.NODE_IMAGE, "-c", runnable],
+            capture_output=True, text=True, timeout=1800,
+        )
+
+    vendored = (doc_package / pipeline.FORMAT_LOCKFILE).read_bytes()
+    checked.write_bytes(vendored)
+
+    matched = run()
+    assert matched.returncode == 0, (
+        "the guard refuses the lockfile whose digest it carries, so a package "
+        f"stencil generated would not build:\n{outcome('guard, match', matched)}"
+    )
+    assert "OK" not in matched.stdout, (
+        "the guard no longer silences sha256sum's success line, so every "
+        f"`make pkg` prints a checksum result nobody asked for:\n"
+        f"{outcome('guard, match', matched)}"
+    )
+    assert matched.stderr == "", (
+        "keeping stderr is supposed to cost nothing on the happy path, and "
+        f"here it cost something:\n{outcome('guard, match', matched)}"
+    )
+
+    checked.write_bytes(vendored.replace(b"registry.npmjs.org", b"evil.invalid.host"))
+    mismatched = run()
+
+    checked.unlink()
+    absent = run()
+
+    checked.write_bytes(vendored)
+    without = run(path="/nonexistent")
+
+    for label, refused in (
+        ("mismatch", mismatched), ("file absent", absent), ("sha256sum gone", without)
+    ):
+        assert refused.returncode != 0, (
+            f"the guard accepted the {label} case, so it is not fail-closed:\n"
+            f"{outcome(f'guard, {label}', refused)}"
+        )
+        assert "is not the file stencil generated" in refused.stderr, (
+            f"the {label} case refused without stencil's explanation:\n"
+            f"{outcome(f'guard, {label}', refused)}"
+        )
+
+    # THE DISCRIMINATION, which is what stn-jjw is about. Before the fix these
+    # three stderrs were byte-for-byte identical.
+    assert "did NOT match" in mismatched.stderr, (
+        "sha256sum's own account of the mismatch never reached the consumer, "
+        "so a tampered lockfile and a broken base image read the same:\n"
+        f"{outcome('guard, mismatch', mismatched)}"
+    )
+    assert "can't open" not in mismatched.stderr, (
+        "the mismatch case reports a missing file, so the two cannot be told "
+        f"apart:\n{outcome('guard, mismatch', mismatched)}"
+    )
+    assert "can't open" in absent.stderr, (
+        "a lockfile that is not there is reported as one that does not match, "
+        f"which is a different repair:\n{outcome('guard, file absent', absent)}"
+    )
+    assert "not found" in without.stderr, (
+        "a base image without sha256sum tells the consumer their lockfile is "
+        "wrong and sends them to re-run `stencil gen` forever over a correct "
+        f"file. That is stn-jjw:\n{outcome('guard, sha256sum gone', without)}"
+    )
+    assert "did NOT match" not in without.stderr, (
+        "the missing-sha256sum case is indistinguishable from a mismatch:\n"
+        f"{outcome('guard, sha256sum gone', without)}"
+    )
+
+
 def test_the_entrypoint_refuses_a_consumers_prettier_config(doc_package):
     """--no-config reaches the prettier ARGV, asserted where a comment cannot.
 
@@ -696,4 +882,31 @@ def test_the_entrypoint_refuses_a_consumers_prettier_config(doc_package):
     )
     assert argv.index("--no-config") < argv.index("--write"), (
         f"--no-config must precede --write to apply to the run:\n{argv}"
+    )
+
+
+def test_the_guard_lets_sha256sum_say_why_it_failed(doc_package):
+    """The same fix, asserted where the test above skips (stn-jjw).
+
+    The four-case test needs a container runtime and an image pull. A
+    maintainer's laptop frequently has neither, and that is exactly the machine
+    on which someone edits this template -- so a one-token regression would go
+    green locally and only surface in CI's container job, or not at all if that
+    job is the one that skipped.
+
+    This is the textual half: `>/dev/null` still there, `2>&1` gone. It says
+    nothing about behaviour, and is not trying to; it pins the shape whose
+    behaviour the test above measured. tests/test_pins.py carries the identical
+    pair for Dockerfile.browser's guard, which is the one this now matches.
+    """
+    block = digest_guard(format_md_script(doc_package))
+
+    assert ">/dev/null" in block, (
+        "the guard no longer silences sha256sum's success line, so every "
+        f"`make pkg` prints a checksum result nobody asked for:\n{block}"
+    )
+    assert "2>&1" not in block, (
+        "the guard sends sha256sum's stderr to /dev/null, so a missing or "
+        "broken sha256sum is reported to the consumer as a tampered lockfile "
+        f"and 'stencil gen' will never fix it (stn-jjw):\n{block}"
     )

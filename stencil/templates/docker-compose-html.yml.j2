@@ -76,6 +76,23 @@
   # after the cp and before the install is the one arrangement where what was
   # hashed is what npm reads.
   #
+  # `>/dev/null` WITHOUT `2>&1`, and the difference is a consumer's morning.
+  # Measured in the pinned image (busybox 1.37.0, /usr/bin/sha256sum ->
+  # /bin/busybox): a match prints `OK` on stdout, a mismatch prints sha256sum's
+  # WARNING on stderr, an absent file prints `can't open`, and an absent
+  # sha256sum gives `sh: sha256sum: not found`. All four are fail-closed -- the
+  # last verified with PATH=/nonexistent, where the `if !` branch still fires --
+  # so this never passes for the wrong reason. But the `if !` swallows all four
+  # of those exit codes and substitutes its own `exit 1`, and `>/dev/null`
+  # silences stdout by design, so stderr is the ONLY channel left that can say
+  # WHICH. Discarding it made a base image that broke sha256sum tell the
+  # consumer their lockfile is not the file stencil generated, and send them to
+  # re-run `stencil gen` forever over a file that was correct all along
+  # (stn-jjw). Keeping stderr costs nothing on the happy path -- sha256sum
+  # writes nothing there on a match -- and leaks nothing: that line names no
+  # digest. Dockerfile.browser's guard carries the same reasoning; the two are
+  # deliberately the same shape.
+  #
   # The refusal says the file is stencil's, that editing it has no supported
   # effect, and that `stencil gen` restores it -- because the reader who hits
   # this has either edited it for a reason of their own or received a package
@@ -95,6 +112,21 @@
   # digest on this line moves, in a file nobody hand-edits, without stencil
   # having been re-run. A reviewer who sees that has the tell; a reviewer
   # reading a changed `resolved` host in a 60-line JSON diff has to spot it.
+  #
+  # AND IT IS ONLY REACHED WHEN THE RUN ACTUALLY USES THIS FILE, which is a
+  # weaker statement than it sounds and is worth keeping straight, because the
+  # enumeration above reads as exhaustive and is not. It lists edits to the two
+  # files in this directory and omits compose-file SELECTION entirely. The
+  # generated Makefile pins that explicitly since stn-qli -- `COMPOSE_FILES ?=
+  # docker-compose.yml`, reaching compose as `$(addprefix -f ,...)` -- and an
+  # explicit `-f` makes compose ignore `COMPOSE_FILE` outright, so a
+  # `docker-compose.override.yml` or a `.env` dropped beside this file no longer
+  # redirects `make format-md` or `make pkg`. What is closed is the documented
+  # path. A hand-run `docker compose run format-md` with no `-f` still merges an
+  # override, as compose has always done, and runs whatever entrypoint that
+  # names -- without touching either file this guard is about. So this guard is
+  # what makes stencil's own lockfile authoritative for the run that actually
+  # uses it; it is not a claim that nothing else can format this package.
   format-md:
     image: {{ node_image }}
     volumes:
@@ -125,7 +157,7 @@
         printf '%s\n' '{{ format_manifest }}' > {{ format_tools_dir }}/package.json && \
         cp {{ format_lockfile_name }} {{ format_tools_dir }}/package-lock.json && \
         if ! echo "{{ format_lockfile_digest }}  {{ format_tools_dir }}/package-lock.json" \
-          | sha256sum -c >/dev/null 2>&1; then \
+          | sha256sum -c >/dev/null; then \
           echo "format-md: {{ format_lockfile_name }} is not the file stencil generated." >&2; \
           echo "That file is stencil's. It is the lockfile this service installs from," >&2; \
           echo "and editing it has no supported effect: a changed 'resolved' URL would" >&2; \
