@@ -457,6 +457,23 @@ Two consequences worth knowing before you override either file:
 - If you also override `Dockerfile.browser.j2`, keep its `COPY html-to-pdf.js` line. Without it the
   pdf service starts with `Cannot find module`, and the script's own diagnostic — the one that
   explains a missing tools directory — cannot run, because the script is not there to run it.
+- Keep its lockfile guard too — the `RUN … sha256sum -c …` between the `COPY` of
+  `browser-package-lock.json` and the `npm ci` that installs from it. It refuses to build when that
+  lockfile is not the one `stencil gen` wrote, which is what stops a changed `resolved` URL deciding
+  which bytes become the puppeteer, pa11y and pdf-lib your build then runs as root. An override that drops it
+  builds perfectly well and is simply no longer checked — nothing fails, which is the problem.
+  `StrictUndefined` cannot warn you here: it catches a template that reads a key stencil stopped
+  providing, not one that stopped reading a key stencil still provides. If you keep the guard, keep
+  `{{ browser_lockfile_digest }}` with it; that value is derived from the vendored lockfile on every
+  `stencil gen`, so it follows a re-vendor on its own.
+- **Overriding `browser-package-lock.json.j2` is the one combination that does not work on its
+  own.** That template resolves through the same search path, so you can replace it — but the digest
+  in `Dockerfile.browser` comes from stencil's *vendored* lockfile, not from your rendered one, so
+  the build refuses a package that is exactly what you asked for. Worse, the refusal tells you to run
+  `stencil gen`, which regenerates your override and refuses again. If you override the lockfile,
+  override `Dockerfile.browser.j2` in the same breath and put your own digest in its guard — or drop
+  the lockfile override and pin what you need through `pipeline.py` instead. The refusal message says
+  so too, so nobody has to find this page first.
 - `docker compose run --rm pdf …` on its own now runs whichever script was baked the last time the
   image was built. `make pdf` runs `docker compose build pdf` first and is unaffected; if you
   invoke the service by hand while editing the script, build first. The `check-access` service does

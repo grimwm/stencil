@@ -56,6 +56,35 @@ How the version gets bumped is written down in
   (`stn-mbq`), and `BUILD_DATE`/`WITH` interpolate into a recipe unquoted, so an exported value
   injects shell (`stn-cb8`). Both carry their reproductions.
 
+- **The browser image no longer installs from a lockfile it has not checked**
+  (`stn-egv`). `Dockerfile.browser` copied `browser-package-lock.json` out of the
+  build context — `context: .`, the generated package directory you own and edit
+  — and ran `npm ci` from it. `npm ci` fetches whatever host each `resolved`
+  names and checks `integrity` against a value in that same file, so that file
+  decided which bytes became the puppeteer, pa11y and pdf-lib that `make pdf` and
+  `make check-access` run as root over the read-write mount. `--ignore-scripts`
+  does not help: nothing has to run at install time, because the payload runs
+  when puppeteer or pa11y does. Measured before the fix, with one `resolved` host
+  changed and nothing else — npm requested that host.
+
+  The image now carries the sha256 of the lockfile `stencil gen` wrote and checks
+  the copy after the `COPY` and before the install, the same guard `stn-qge` gave
+  the `format-md` service in this release. The digest is derived from the
+  vendored bytes rather than written down, so re-vendoring stays the two steps
+  AGENTS.md documents and the file and its digest cannot drift apart.
+
+  Two things to know. A digest is a checksum, not a signature — it refuses an
+  edit that touches only the lockfile, which is what a `resolved` URL in a
+  generated file actually attracts, and it does not stop someone who edits the
+  Dockerfile beside it. And if you override `Dockerfile.browser.j2` from your own
+  `templates_dir`, keep the guard; see STENCIL.md.
+
+  **If you generate on Windows, this will refuse your own untampered lockfile**
+  until `stn-at4` is fixed: `stencil gen` writes in text mode, so the file lands
+  CRLF and hashes differently. That already broke `make format-md` in this
+  release; it now also stops `make pdf` and `make check-access`. The refusal
+  message names the ticket.
+
 - **Every compose invocation the generated Makefile issues now names its compose file
   explicitly, so a `docker-compose.override.yml` or `.env` `COMPOSE_FILE` sitting in the
   package directory is no longer auto-discovered and merged by compose's own resolution**

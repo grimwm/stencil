@@ -621,8 +621,33 @@ what `read_lockfile()` returns plus the newline the template restores, which is 
 the package receives. Re-vendoring therefore stays the two steps above — the lockfile and
 its digest move together, and there is nothing extra to keep in sync by hand. A checksum
 is not a signature, and the comment above the service in `docker-compose-html.yml.j2` says
-what it does and does not prove. The browser image installs its lockfile the same way, out
-of the same directory, and does not check it yet — `stn-egv`.
+what it does and does not prove. `Dockerfile.browser` now does the same for its own
+lockfile (`stn-egv`), checking it after the `COPY` and before `npm ci`.
+
+**Both guards are checks, not gates, and the difference matters when you reason about
+them.** Three limits are worth holding in mind together, because each one is invisible
+from inside the file that carries the guard:
+
+- A digest proves two files in the package directory agree. Whoever edits the lockfile can
+  edit the file carrying its digest, so it refuses accident — a script, a bad merge, a
+  half-finished hand edit — rather than a determined author.
+- It is only reached when the build actually uses the file it lives in. `stn-qli` closed
+  the documented route — the generated Makefile now pins `-f`, and an explicit `-f` makes
+  compose ignore `COMPOSE_FILE` entirely — so a `docker-compose.override.yml` dropped
+  beside a package no longer redirects `make`. A hand-run `docker compose` with no `-f`
+  still merges one, as it always has. The guard makes stencil's lockfile authoritative for
+  the build that uses these files; it does not make these files the only way to build.
+- How much a reviewer can see of a tampered digest depends on whether these files are in
+  git at all, and right now that is config-dependent rather than known: the managed
+  `.gitignore` section omits the top-level `output_dir`, so for a config that sets one it
+  ignores nothing (`stn-jl3`). Do not assert either way in a comment until that is fixed.
+
+The browser guard departs from format-md's in one respect, deliberately: it ends
+`>/dev/null` where format-md ends `>/dev/null 2>&1`. Keeping stderr is what separates
+"this lockfile is not stencil's" from "this image has no working `sha256sum`" — both are
+fail-closed, but silencing stderr reports the second as the first and sends the reader to
+re-run `stencil gen` over a file that was already correct. `stn-jjw` carries that back to
+format-md.
 
 The one thing not pinned is Chromium, and that is a decision rather than an oversight —
 `stn-s5b`, with the measurements, in `Dockerfile.browser.j2`'s comment. Alpine keeps one
