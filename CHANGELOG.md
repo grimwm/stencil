@@ -11,6 +11,48 @@ How the version gets bumped is written down in
 
 ## 0.39.0
 
+- **The browser-backed services no longer take their configuration, or their
+  driver script, from the consumer's package directory** (`stn-jeq`, `stn-7ki`,
+  `stn-ao5`). Three defects, one cause: `make pdf` and `make check-access` both
+  ran with the mounted package directory as `process.cwd()`, and
+  `html-to-pdf.js` was rendered into that directory and run from there.
+
+  `stn-jeq` (P1) is what that cost. puppeteer's `getConfiguration()` searches
+  upward from `process.cwd()` for `.puppeteerrc.cjs` and twelve siblings and
+  `require`s the JavaScript ones, so a one-line file dropped into a package ran
+  as uid 0, over the read-write mount, with the network up — on **both**
+  services, and the build printed its usual success output afterwards. It is
+  reachable in a course repository because markdown and assets arrive in pull
+  requests. There is no switch for it: measured against the pinned puppeteer,
+  `getConfiguration()` is unconditional and calls `lilconfig(...).search()` with
+  no argument, so `searchFrom` is the working directory and no environment
+  variable or launch option turns discovery off. `check-access` could not be
+  fixed by resolving a different module either — pa11y requires the puppeteer
+  wrapper itself and calls `launch()` inside it.
+
+  So both services now run from the tools directory inside the image, and
+  `html-to-pdf.js` is baked into that image by `Dockerfile.browser` rather than
+  read out of the mount. The search then walks only image-owned directories.
+  Baking it also fixes `stn-7ki` (P3): Node decides CommonJS-vs-ESM from the
+  nearest `package.json` **to the file**, so a package declaring
+  `"type": "module"` — which a course package legitimately may — turned the
+  script into a parse error before any of its guards could speak, and `make pdf`
+  could not run at all.
+
+  `stn-ao5` (P2) was found while measuring the other two, and is the same defect
+  `check-access` had in 0.30.0, still live in its sibling: the page URL was built
+  by joining the argument onto a hard-coded `/workspace`, so a package with a
+  package-level `output_dir` — whose products are on a **separate** mount — got
+  `net::ERR_FILE_NOT_FOUND at file:///workspace//out/document.html` and could not
+  build a PDF at all. Both arguments are resolved against the mount before the
+  service moves out of it, and the URL is built from the result.
+
+  `working_dir` stays `/workspace` for both services, so a relative path from the
+  generated Makefile still resolves. Overriding `html-to-pdf.js.j2` from a
+  `templates_dir` still works and is now covered end to end; if you also override
+  `Dockerfile.browser.j2`, keep its `COPY` line — see STENCIL.md. No pin moved
+  and no lockfile was re-vendored.
+
 - **pytest in a git worktree now tests that worktree** (`stn-2et`). A run
   started inside a worktree, using a venv whose `pip install -e .` points at
   another checkout, imported THAT checkout's `stencil` while running the

@@ -21,8 +21,12 @@ Two things the ticket said to settle deliberately, settled here:
 
 from __future__ import annotations
 
+import shutil
+
 import pytest
 import yaml
+
+from stencil import pipeline
 
 
 
@@ -228,3 +232,67 @@ def test_the_path_climbs_out_of_the_top_level_output_dir_too():
 
     without_top = get_template_context("demo", {"packages": {"demo": package}})
     assert without_top["package_output_dir"] == "../build/demo"
+
+
+# --- and now the same thing, RUN rather than read (stn-ao5) ----------------
+#
+# test_the_pdf_reads_and_writes_the_output_directory above reads the generated
+# Makefile's TEXT and asserts the rule hands /out paths to the pdf service. That
+# is worth asserting and it is not enough, because it says nothing about what
+# html-to-pdf.js then DOES with them -- and what it did was join the argument
+# onto a hard-coded /workspace, so `make pdf` asked Chromium for
+# file:///workspace//out/document.html and could not build at all for a package
+# with an output_dir:
+#
+#     Failed to convert /out/document.html:
+#       net::ERR_FILE_NOT_FOUND at file:///workspace//out/document.html
+#
+# That is the SAME defect check_access_directory's docstring records for the
+# sibling service, in the sibling service, found the same way and fixed the same
+# way: one path, built from the argument, rather than two that have to agree.
+# It shipped because every test in this file reads text. This one runs.
+
+
+@pytest.mark.integration
+def test_make_pdf_reads_a_page_from_the_output_directory_mount(
+    pdf_workspace, tmp_path
+):
+    """The two-mount layout a package with an output_dir actually gets.
+
+    /workspace is the package directory and /out is a SEPARATE mount, because
+    the products are a sibling of the sources and a sibling is `..` away, which
+    escapes a bind mount. The page therefore is not reachable from /workspace at
+    all, by any path -- which is what makes the hard-coded prefix fatal here and
+    invisible everywhere else.
+    """
+    built = pipeline.render(
+        "doc", "document.md", "document.html", workdir=pdf_workspace
+    )
+    assert built.returncode == 0, f"pandoc failed\n{built.stderr}"
+
+    workspace = tmp_path / "package"
+    workspace.mkdir()
+    out = tmp_path / "build"
+    out.mkdir()
+    shutil.copy2(pdf_workspace / "document.html", out / "document.html")
+    shutil.copy2(pdf_workspace / "html-to-pdf.js", workspace / "html-to-pdf.js")
+
+    result = pipeline.html_to_pdf(
+        "/out/document.html",
+        "/out/document.pdf",
+        workdir=workspace,
+        out_dir=out,
+        timeout=180,
+    )
+
+    assert result.returncode == 0, (
+        f"the pdf service exited {result.returncode} for a page on the /out "
+        f"mount\nstdout: {result.stdout[-2000:]}\nstderr: {result.stderr[-3000:]}"
+    )
+    assert "ERR_FILE_NOT_FOUND" not in result.stdout + result.stderr, (
+        "the page URL was still built by joining the argument onto a "
+        f"hard-coded prefix\nstdout: {result.stdout[-2000:]}"
+    )
+    assert (out / "document.pdf").is_file(), (
+        "the pdf service exited 0 but wrote no document.pdf to the /out mount"
+    )
