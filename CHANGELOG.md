@@ -9,40 +9,6 @@ and the closed epics in `.beads/issues.jsonl` are the readable index.
 How the version gets bumped is written down in
 [AGENTS.md](AGENTS.md#cutting-a-release), not here.
 
-## 0.40.0
-
-- **`clean` no longer needs the config to parse** (`stn-p9a`). It used to
-  refuse outright — a deliberate, honest trade recorded after stn-445, but
-  still not a capability, and it hit hardest exactly when a broken config was
-  the reason someone reached for `clean` in the first place. `stencil gen` now
-  writes a per-package manifest — `.stencil-manifest.json`, generated output
-  like everything else `gen` writes — naming everything that package
-  produced, and `clean` reads it in preference to re-deriving the removal
-  list from `.config.yaml`. A package with its own manifest is cleaned even
-  when the config cannot be parsed at all; only a package with neither a
-  manifest nor a place in a readable config is left alone, named, with the
-  command exiting non-zero. A package generated before this shipped has no
-  manifest and takes the old config-derived path exactly as before — nothing
-  to migrate. See [STENCIL.md](STENCIL.md#the-manifest) for what the manifest
-  protects and, just as deliberately, what it does not.
-
-- **`clean` no longer follows a symlink out of the output tree** (`stn-7t9`,
-  P1). Nothing re-checked a path after `.resolve()` followed a link, so a
-  symlinked package directory let `clean --all` delete files anywhere the
-  link pointed, and a symlink placed *inside* an otherwise ordinary package
-  directory was worse: `clean` deleted the link's target, left the dangling
-  link behind, and exited 0 reporting success. Every path `clean` unlinks —
-  whether it came from a manifest or was derived from the config — is now
-  re-checked after resolution and refused by name if it lands outside the
-  package's own directory, closing both shapes.
-
-  This is a **`clean`-specific** guarantee, not containment solved generally:
-  stn-vhr (`stencil gen` writes outside the tree through the same kind of
-  symlink) and stn-pe3 (`output_dir` is never containment-checked at all, so
-  `output_dir: ../victim` deletes outside the config directory) are filed,
-  reproduced, and still open, shipping together with stn-40a in one run after
-  this lands — "`clean` refuses" is not "`gen` is safe."
-
 ## 0.39.0
 
 - **`format-md` installs only the lockfile stencil generated** (`stn-qge`). The
