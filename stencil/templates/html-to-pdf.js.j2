@@ -52,12 +52,19 @@ if (!input || !output) {
 // test_html_to_pdf_ignores_a_decoy_in_the_workspace (stn-cnm.1) is for.
 const fromTools = createRequire("{{ browser_tools_dir }}/package.json");
 
-// GUARD: check IDENTITY, not existence. fs.existsSync on the tools
-// node_modules would pass against an EMPTY directory, or against anything
-// mounted over {{ browser_tools_dir }}; fromTools.resolve() actually runs
-// package resolution, which is the assertion this needs, at the same line
-// cost -- and it survives a future "exports" change, which is the whole
-// reason createRequire was chosen above instead of a literal path.
+// GUARD: check RESOLUTION, not existence. fs.existsSync on the tools
+// node_modules would pass against an EMPTY or half-installed directory;
+// fromTools.resolve() actually runs package resolution, which is the
+// assertion this needs, at the same line cost -- and it honours "exports",
+// which is the whole reason createRequire was chosen above instead of a
+// literal path.
+//
+// WHAT IT DOES NOT BEAT, stated so nobody reads more into it than is here:
+// resolve() proves LOCATION, not identity or provenance. A tree mounted over
+// {{ browser_tools_dir }} carrying a hostile puppeteer resolves inside the
+// prefix and passes -- measured. That is out of the threat model for the same
+// reason a hostile /workspace is, and no check on this side of the mount
+// closes it.
 //
 // This closes an INCIDENTAL node_modules outranking the pinned tree (the
 // real, common, traceless case), and a malicious package that arrived via an
@@ -79,24 +86,40 @@ const fromTools = createRequire("{{ browser_tools_dir }}/package.json");
 // otherwise resolves is left to surface its raw MODULE_NOT_FOUND at the
 // requires below: that is a broken image, and the raw error already names
 // the package.
-let resolvedPuppeteer;
-try {
-  resolvedPuppeteer = fromTools.resolve("puppeteer");
-} catch {
-  resolvedPuppeteer = null;
-}
-// The trailing separator matters: without it a sibling directory whose name
-// merely STARTS with the tools path would satisfy the check.
-if (
-  !resolvedPuppeteer ||
-  !resolvedPuppeteer.startsWith("{{ browser_node_modules }}/")
-) {
-  console.error(
-    `Failed to convert ${input}: either this is not running inside the ` +
-      "generated browser image, or Dockerfile.browser installed the tools " +
-      "somewhere other than {{ browser_node_modules }}."
-  );
-  process.exit(2);
+// BOTH packages, rather than checking puppeteer and taking pdf-lib on
+// symmetry. One require base does imply one search path, so in practice they
+// cannot diverge -- but pdf-lib is the package that writes the PDF/UA role
+// map `make check-pdf` exists to require, and an unchecked require is how it
+// would come to fail with a raw stack while puppeteer failed with the message
+// below. The test beside this refuses the same symmetry, for the same reason.
+for (const name of ["puppeteer", "pdf-lib"]) {
+  let resolved;
+  try {
+    resolved = fromTools.resolve(name);
+  } catch (error) {
+    // ONLY a genuinely missing module means "this is not the image".
+    // ERR_PACKAGE_PATH_NOT_EXPORTED (an exports map that no longer offers a
+    // CJS entry -- the exact bump predicted above) and
+    // ERR_INVALID_PACKAGE_CONFIG (a corrupt manifest) are a broken PIN, not a
+    // broken mount, and Node's own message already names the offending file.
+    // Folding those into the message below would send whoever bumped
+    // stencil/pipeline.py off to inspect Docker mounts instead.
+    if (error.code !== "MODULE_NOT_FOUND") {
+      throw error;
+    }
+    resolved = null;
+  }
+  // The trailing separator matters: without it a sibling directory whose name
+  // merely STARTS with the tools path would satisfy the check.
+  if (!resolved || !resolved.startsWith("{{ browser_node_modules }}/")) {
+    console.error(
+      `Failed to convert ${input}: ${name} did not resolve inside the ` +
+        "image's pinned tools tree. Either this is not running inside the " +
+        "generated browser image, or Dockerfile.browser installed the tools " +
+        "somewhere other than {{ browser_node_modules }}."
+    );
+    process.exit(2);
+  }
 }
 
 const puppeteer = fromTools("puppeteer");

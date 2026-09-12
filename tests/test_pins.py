@@ -336,6 +336,19 @@ def test_html_to_pdf_js_roots_its_resolution_at_the_pinned_tools_dir(doc_package
         "require lands starting at /workspace"
     )
 
+    # The guard's prefix must be ANCHORED with a trailing separator. Dropping
+    # it leaves a check that a sibling directory whose name merely starts with
+    # the tools path would satisfy -- and that mutation survives every other
+    # tier here, including the container one, because nothing can produce such
+    # a directory through createRequire. The code says the separator is
+    # load-bearing; this is what makes that true rather than aspirational.
+    anchored = f'startsWith("{pipeline.BROWSER_NODE_MODULES}/")'
+    assert any(anchored in line for _, line in code_lines(doc_package)), (
+        f"the tools-tree prefix check is not anchored at {anchored!r} -- "
+        "without the trailing separator it accepts any path merely beginning "
+        f"with {pipeline.BROWSER_NODE_MODULES!r}"
+    )
+
 
 # Every pinned browser package, as a require-CALL pattern rather than a
 # mention of the name -- stn-cnm.2's guard legitimately contains
@@ -366,7 +379,9 @@ def test_no_generated_js_bare_requires_a_pinned_browser_package(doc_package):
     violations = [
         (path.name, name, line)
         for path, line in code_lines(doc_package)
-        if path.suffix == ".js"
+        # .mjs/.cjs as well as .js: a future template emitting either would
+        # otherwise be scanned by nothing at all.
+        if path.suffix in {".js", ".mjs", ".cjs"}
         for name, pattern in BARE_PINNED_REQUIRE.items()
         if pattern.search(line)
     ]
@@ -1003,6 +1018,12 @@ DECOY_MARKERS = {
     "pdf-lib": "STN_CNM_DECOY_PDF_LIB_9c3b",
 }
 
+# A phrase only the guard's own message carries. Node's raw MODULE_NOT_FOUND
+# names the tools directory too -- via its "Require stack:" -- so the
+# directory alone cannot tell the guard firing apart from the guard being
+# absent. See test_the_missing_tools_guard_names_the_pinned_dir.
+GUARD_PHRASE = "installed the tools somewhere other than"
+
 
 def _copy_rendered_page(pdf_workspace, dest):
     """document.html and html-to-pdf.js, copied out of pdf_workspace.
@@ -1186,8 +1207,23 @@ def test_the_missing_tools_guard_names_the_pinned_dir(bare_tools_workdir):
     """THE GUARD MUST BE PROVEN TO FIRE. AGENTS.md is explicit that a guard
     which silently does not run is worse than no guard at all
     (tests/test_export_drift.py exists for exactly that reason), and nothing
-    else in this file would notice if stn-cnm.2's existsSync guard were ever
-    deleted.
+    else in this file would notice if the resolution guard were ever deleted.
+
+    THE TWO ASSERTIONS BELOW ARE BOTH DISCRIMINATORS, AND NEITHER IS
+    NEGOTIABLE. The obvious pair -- "exited non-zero" and "stderr names the
+    tools directory" -- does NOT test the guard, measured: with the guard
+    block deleted from the rendered script, the UNGUARDED require throws
+    Node's own
+
+        Error: Cannot find module 'puppeteer'
+        Require stack:
+        - /opt/tools/package.json
+
+    which exits 1 and names /opt/tools twice, satisfying both. What separates
+    the guard from the raw MODULE_NOT_FOUND is the exit code it chooses (2,
+    matching the usage path, where an uncaught throw gives 1) and a phrase
+    only the guard's own message contains. Assert those, or this test is
+    measuring the createRequire root that the fast tier already covers.
 
     pipeline.NODE_IMAGE is the plain node base image the generated
     Dockerfile.browser starts FROM, before anything under
@@ -1205,10 +1241,20 @@ def test_the_missing_tools_guard_names_the_pinned_dir(bare_tools_workdir):
         tag=pipeline.NODE_IMAGE,
         timeout=60,
     )
-    assert result.returncode != 0, (
-        "html-to-pdf.js exited 0 under a plain node image with no "
-        f"{pipeline.BROWSER_TOOLS_DIR} at all -- it must refuse rather than "
-        "silently succeed against tools that are not there"
+    assert result.returncode == 2, (
+        "html-to-pdf.js did not refuse through its own guard under a plain "
+        f"node image with no {pipeline.BROWSER_TOOLS_DIR} at all. Exit 2 is "
+        "the guard (and the usage path); exit 1 is an uncaught throw, which "
+        "is what an UNGUARDED require produces here -- so exit 1 means the "
+        f"guard is gone, not that it fired.\nexit: {result.returncode}\n"
+        f"stderr: {result.stderr[-2000:]}"
+    )
+    assert GUARD_PHRASE in result.stderr, (
+        f"the failure did not carry the guard's own message ({GUARD_PHRASE!r}). "
+        "Node's raw MODULE_NOT_FOUND also names "
+        f"{pipeline.BROWSER_TOOLS_DIR}, via its 'Require stack', so naming "
+        "the directory proves nothing on its own.\n"
+        f"stderr: {result.stderr[-2000:]}\nstdout: {result.stdout[-2000:]}"
     )
     assert pipeline.BROWSER_TOOLS_DIR in result.stderr, (
         f"the failure did not name {pipeline.BROWSER_TOOLS_DIR}:\n"
