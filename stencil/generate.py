@@ -1374,15 +1374,182 @@ def write_manifest(
     print(f"Generated: {manifest_path}")
 
 
+class ManifestError(RuntimeError):
+    """A per-package manifest is present but unreadable, damaged, or from an
+    unrecognized version -- not a config mistake.
+
+    stn-2x4.4, same reasoning as `pipeline.VendoredAssetError` (see its
+    docstring): `ValueError` is the channel `package_contexts` collects
+    CONFIG problems on, and a damaged manifest is not a config problem. No
+    amount of editing `.config.yaml` fixes a manifest that will not parse;
+    deleting the manifest and letting a manifest-aware `clean` fall back to
+    deriving from the config does. Raising `ValueError` here would put a
+    manifest problem under "the config has these problems", which is a
+    false diagnosis pointing the reader at the wrong file.
+
+    Deliberately NOT a subclass of `ValueError`, for the same reason
+    `VendoredAssetError` is not one: making it a `ValueError` would let it
+    travel silently on the config-problem channel instead of being caught
+    and reported on its own terms.
+    """
+
+
+# 1 MiB is generous for a file that is a sorted list of relative paths --
+# real manifests run to a few KiB. The cap exists so a manifest cannot make
+# this command hang or exhaust memory before anything is even parsed; see
+# read_manifest's docstring for the measurements behind it (review finding
+# A7).
+_MANIFEST_MAX_BYTES = 1024 * 1024
+_MANIFEST_MAX_ENTRIES = 100_000
+
+
+def _reject_duplicate_manifest_keys(pairs: list[tuple[str, object]]) -> dict:
+    """``object_pairs_hook`` for ``json.loads``: refuse a repeated top-level key.
+
+    ``json.loads('{"entries": ["safe"], "entries": ["EVIL"]}')`` returns
+    ``{"entries": ["EVIL"]}`` -- the JSON spec permits duplicate keys and the
+    stdlib parser silently keeps the last one. A manifest committed to a
+    repo can therefore show a human one list in the diff and hand Python
+    another. There is no legitimate reason for a generated manifest to
+    repeat a key, so any repeat is refused outright rather than resolved by
+    picking a value the human reviewing the diff might never have seen.
+    """
+    seen: set[str] = set()
+    for key, _ in pairs:
+        if key in seen:
+            raise ValueError(f"duplicate key {key!r}")
+        seen.add(key)
+    return dict(pairs)
+
+
 def read_manifest(path: Path) -> dict:
     """Parse a per-package manifest file and return the parsed document.
 
-    A minimal reader for this ticket only -- json.loads and nothing more.
-    The hardened parser stencil/clean needs (ManifestError, a size cap,
-    duplicate-key rejection, manifest_version checking) is stn-2x4.4's job,
-    not this one's.
+    Takes the path to a manifest FILE and returns the parsed document (a
+    ``dict``) -- ``manifest_version``, ``stencil_version``, ``package``,
+    ``dir`` and ``entries``. Returning ``None`` for "no manifest" is NOT
+    this function's job: the caller checks ``path.is_file()`` (never
+    ``path.exists()``) before calling this at all, so a directory or a FIFO
+    at the manifest's name is never opened here.
+
+    Every rejection below raises ``ManifestError``, never ``ValueError`` --
+    see ``ManifestError``'s docstring for why a damaged manifest must not
+    travel on the channel ``package_contexts`` collects config problems on.
+    A damaged manifest does NOT fall back to deriving from the config; that
+    is not the same statement as no manifest being present, and quietly
+    re-deriving would be exactly the guessing this manifest exists to
+    remove. Every message here says so: delete the manifest to restore the
+    config-derived fallback.
+
+    FORWARD COMPATIBILITY (review finding D7): within a KNOWN
+    ``manifest_version``, unknown keys in the document are IGNORED, not
+    refused. Strict key validation would make a v1 manifest written by a
+    later stencil unreadable by this one the moment that later version adds
+    a diagnostic field -- exactly backwards from what a version field is
+    for. Only ``manifest_version`` itself and the required shape of
+    ``entries`` are enforced; everything else is read permissively.
+
+    HARDENING (review finding A7), all measured on this interpreter:
+
+    - a manifest over ``_MANIFEST_MAX_BYTES`` is refused by a ``stat()``
+      BEFORE it is read at all, and ``len(entries)`` is capped after
+      parsing. A manifest is a file on disk that nothing has validated, so
+      an arbitrarily large one must not be allowed to make this command
+      hang or exhaust memory -- the same reasoning ``_MAX_PROBLEM_CHARS``
+      applies to config text, for a file that is strictly less trustworthy.
+    - ``json.loads("[" * 200000 + "]" * 200000)`` raises ``RecursionError``,
+      which is NEITHER a ``ValueError`` NOR a ``json.JSONDecodeError`` and
+      would otherwise escape any handler that only catches those, reaching
+      the terminal as a bare traceback -- from the one command whose entire
+      premise is working when everything else is broken. Caught here
+      alongside ``OSError`` (file unreadable) and ``ValueError`` (bad JSON,
+      including a duplicate key) and re-raised as ``ManifestError``.
+    - duplicate top-level keys are refused via ``object_pairs_hook`` (see
+      ``_reject_duplicate_manifest_keys``): without it,
+      ``json.loads('{"entries": ["safe"], "entries": ["EVIL"]}')`` silently
+      returns ``EVIL``, so a manifest committed to a repo could show a
+      human one list in the diff and hand Python another.
+
+    EVERY manifest-derived value that reaches a message here goes through
+    `_safe` (review finding A8) -- the filename, `manifest_version`, and
+    the document's `package` / `dir` fields when available for context.
+    `_safe` exists because config text can repaint the terminal and
+    `_MAX_PROBLEM_CHARS` because it can bury the report; manifest text is
+    strictly LESS trustworthy than config text, since it is a JSON file
+    that nothing has validated yet, read at the exact moment a human is
+    staring at the terminal because something is already wrong.
     """
-    return json.loads(Path(path).read_text())
+    path = Path(path)
+    safe_name = _safe(str(path))
+
+    try:
+        size = path.stat().st_size
+    except OSError as error:
+        raise ManifestError(f"cannot read manifest {safe_name}: {error}") from error
+    if size > _MANIFEST_MAX_BYTES:
+        raise ManifestError(
+            f"manifest {safe_name} is {size} bytes, over the "
+            f"{_MANIFEST_MAX_BYTES}-byte limit -- refusing to read it. "
+            "Delete the manifest to fall back to deriving from the config."
+        )
+
+    try:
+        document = json.loads(
+            path.read_text(), object_pairs_hook=_reject_duplicate_manifest_keys
+        )
+    except (OSError, ValueError, RecursionError) as error:
+        raise ManifestError(
+            f"manifest {safe_name} could not be parsed: {_safe(str(error))}. "
+            "Delete the manifest to fall back to deriving from the config."
+        ) from error
+
+    if not isinstance(document, dict):
+        raise ManifestError(
+            f"manifest {safe_name} is not a JSON object (found "
+            f"{_safe(type(document).__name__)}). Delete the manifest to "
+            "fall back to deriving from the config."
+        )
+
+    def _context() -> str:
+        """A best-effort ``(package "x", dir "y")`` suffix for a message.
+
+        Both fields are diagnostic only (see write_manifest's docstring),
+        so a missing or malformed one is not itself a rejection -- it just
+        drops out of the suffix. Every value is `_safe`-guarded: it came
+        from the same unvalidated document as everything else here.
+        """
+        parts = []
+        for key in ("package", "dir"):
+            value = document.get(key)
+            if isinstance(value, str):
+                parts.append(f'{key} "{_safe(value)}"')
+        return f" ({', '.join(parts)})" if parts else ""
+
+    version = document.get("manifest_version")
+    if version != MANIFEST_VERSION:
+        raise ManifestError(
+            f"manifest {safe_name}{_context()} has an unrecognized "
+            f"manifest_version {_safe(repr(version))} (this stencil knows "
+            f"version {MANIFEST_VERSION!r}). Delete the manifest to fall "
+            "back to deriving from the config."
+        )
+
+    entries = document.get("entries")
+    if not isinstance(entries, list) or not all(isinstance(e, str) for e in entries):
+        raise ManifestError(
+            f"manifest {safe_name}{_context()} has no valid \"entries\" "
+            "list of strings. Delete the manifest to fall back to deriving "
+            "from the config."
+        )
+    if len(entries) > _MANIFEST_MAX_ENTRIES:
+        raise ManifestError(
+            f"manifest {safe_name}{_context()} has {len(entries)} entries, "
+            f"over the {_MANIFEST_MAX_ENTRIES}-entry limit -- refusing to "
+            "read it. Delete the manifest to fall back to deriving from "
+            "the config."
+        )
+
+    return document
 
 
 def generate_package(
