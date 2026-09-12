@@ -199,12 +199,21 @@ Two more cases fall out of the same design and are not bugs:
   manifest under the *current* `dir`; finding none, it derives from the config
   as it reads today, which no longer mentions the old location, so nothing
   under it is removed.
+
 - **A package-level `output_dir`** can put build artifacts outside the package
   directory. `clean` only unlinks a path that resolves under the package's own
   directory — the same containment rule that keeps a symlinked package
   directory from reaching outside the output tree — so those artifacts are
   never in scope. That is a deliberate limit of what `clean` will touch, not a
   gap in the manifest.
+
+  This is the supported way to build somewhere else, and the escape is
+  deliberate — unlike the *top-level* `output_dir`, which must stay under the
+  config file's directory (see [Configuration](#configuration) below). Note
+  that the package-level key is not itself path-validated yet: `stn-1a4`
+  tracks putting it through the same checks every other configured path
+  already gets.
+
 - **Packages sharing one `dir` share one manifest, and one blast radius.**
   There is a single `.stencil-manifest.json` in that directory and `gen`
   rewrites it, so it names whichever package generated last. `clean` unions it
@@ -226,7 +235,7 @@ Projects configure stencil via `.config.yaml`:
 
 ```yaml
 templates_dir: ../_generator/templates # Optional: custom templates (searched first)
-output_dir: . # Where to generate packages
+output_dir: . # Where to generate packages (must stay under this file's directory)
 
 templates: # Which templates to render
   - src: Makefile.j2
@@ -249,6 +258,21 @@ packages:
 
 Templates are searched in order: `templates_dir` (if specified), then bundled stencil templates.
 This allows projects to override or extend the default templates.
+
+`output_dir` is resolved **relative to this file**, not to the working directory, and it must stay
+under this file's directory. A value that escapes — `../build`, an absolute path, or a directory
+that is itself a symlink pointing out — is refused with an error naming the key, on every command.
+That is a change in behaviour: such a config generated at exit 0 before 0.39.0. The key that sends
+build products elsewhere is the **package-level** `output_dir`, whose escape is deliberate and
+documented — see [The Manifest](#the-manifest) — so a config that was reaching outside the tree
+wants that key instead. Nothing about a package-level `output_dir` changes here.
+
+The same rule now covers the two other paths that name the output side. A package's `dir` is
+refused if it resolves outside the output tree, so a symlinked package directory can no longer
+take `gen`'s writes out of it — that check covers **the package directory itself**, and not a
+symlinked subdirectory below it or a brand image's destination, which `stn-h5q` tracks with
+reproductions. And `package_name` is now checked as what it is, a filename in the package
+directory: no separator, no whitespace, no `..`, no shell or glob metacharacter.
 
 A handful of keys can also be set at this top level — `lang`, `brand`, `brand-alt`, and
 `show_download` — to give every package in the config the same default without repeating it. Each
