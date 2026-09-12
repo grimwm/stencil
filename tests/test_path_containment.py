@@ -957,3 +957,184 @@ def test_a_gen_refusal_carries_no_python_class_name(tmp_path):
         "a config refusal must not carry a Python class name: "
         f"{result.stderr!r}"
     )
+
+
+# --- stn-17h: a package directory must be STRICTLY beneath the output base --
+#
+# Every containment check in this file asks whether a resolved path stays
+# UNDER a root, and `Path.relative_to` answers yes for a path EQUAL to that
+# root. So `dir: "."` passed all of them: `check_config_path` finds no `..`
+# in `Path(".").parts` (it is empty), and `_validated_package_dirs` then
+# places the package directory exactly ON the output base. With no top-level
+# `output_dir`, that base is the config directory -- the repository root.
+#
+# Nothing escapes anywhere, which is why this is a separate ticket from
+# stn-pe3 and stn-vhr rather than a case they missed.
+
+
+@pytest.mark.parametrize("value", [".", "", "./"])
+def test_a_package_dir_that_is_the_output_base_is_refused(value):
+    """A package needs its own directory, and these three spellings all name
+    the output base itself.
+
+    `dir` is a delete list's anchor: `clean` unions the manifest found in the
+    package directory with the config-derived entries and unlinks each one
+    under it. Anchored at the repository root, a planted
+    `.stencil-manifest.json` is a free-form list of files to remove -- see
+    the end-to-end test below, which is the ticket's own reproduction.
+    """
+    with pytest.raises(ValueError, match="dir"):
+        package_contexts(config(dir=value))
+
+
+def test_clean_refuses_a_package_dir_that_is_the_config_directory(tmp_path):
+    """stn-17h's reproduction, verbatim, and the reason this is a P1 rather
+    than a tidy-up.
+
+    BEFORE: `stencil clean demo` printed four `Removed` lines and exited 0,
+    having deleted a hand-written markdown file, a dotfile holding a secret,
+    and a whole source directory -- none of which stencil ever generated. The
+    manifest that named them is a gitignored JSON file, so planting one is
+    invisible in a diff.
+
+    Asserted on the FILES, not on the exit code. A refusal that still deletes
+    is the failure worth catching, and an exit code cannot see it.
+    """
+    import json
+
+    write_config(
+        tmp_path,
+        {
+            "templates": [{"src": "Makefile.j2"}],
+            "packages": {"demo": {"name": "Demo", "package_type": "none", "dir": "."}},
+        },
+    )
+    (tmp_path / "IMPORTANT.md").write_text("hand written\n")
+    (tmp_path / ".env").write_text("SECRET=1\n")
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "app.py").write_text("print(1)\n")
+    (tmp_path / MANIFEST_NAME).write_text(
+        json.dumps(
+            {
+                "manifest_version": MANIFEST_VERSION,
+                "package": "demo",
+                "dir": ".",
+                "entries": ["IMPORTANT.md", ".env", "src/app.py"],
+            }
+        )
+    )
+
+    result = run_cli("clean", "demo", cwd=tmp_path)
+
+    assert result.returncode != 0, (
+        f"rc={result.returncode}, stdout={result.stdout!r}, "
+        f"stderr={result.stderr!r}"
+    )
+    assert "Traceback" not in result.stderr, result.stderr
+    for survivor in ("IMPORTANT.md", ".env", "src/app.py"):
+        assert (tmp_path / survivor).exists(), (
+            f"{survivor} was deleted by a package that generated nothing: "
+            f"stdout={result.stdout!r}"
+        )
+
+
+def test_a_package_dir_symlinked_to_the_output_base_is_refused(tmp_path):
+    """The spelling no string check can see, and the reason the refusal
+    belongs in `contained_path` rather than only in the pre-flight.
+
+    `dir: demo` is an ordinary value that passes every character rule; the
+    equality that matters appears only after `resolve()`, when `out/demo` is
+    a link pointing back at `out`. The string check and the resolved check
+    are two halves of one rule here exactly as they are for `output_dir`
+    (stn-pe3) and for a symlinked package directory (stn-vhr).
+    """
+    import os
+
+    config_dir = tmp_path / "cfg"
+    config_dir.mkdir()
+    (config_dir / "out").mkdir()
+    os.symlink(config_dir / "out", config_dir / "out" / "demo")
+
+    write_config(
+        config_dir,
+        {
+            "output_dir": "out",
+            "templates": [{"src": "Makefile.j2"}],
+            "packages": {"demo": {"name": "Demo", "package_type": "none"}},
+        },
+    )
+
+    result = run_cli("gen", "demo", cwd=config_dir)
+
+    assert result.returncode != 0, (
+        f"rc={result.returncode}, stdout={result.stdout!r}, "
+        f"stderr={result.stderr!r}"
+    )
+    assert "Traceback" not in result.stderr, result.stderr
+    assert not (config_dir / "out" / "Makefile").exists(), (
+        "gen wrote through the link into the output base itself: "
+        f"stdout={result.stdout!r}"
+    )
+
+
+def test_gen_refuses_a_package_dir_that_is_the_output_base(tmp_path):
+    """gen and clean must agree. `clean` refusing alone would leave a package
+    that generates at exit 0 into the repository root and then cannot be
+    cleaned -- the permanently un-cleanable package of stn-9rn, arrived at
+    from the other side."""
+    write_config(
+        tmp_path,
+        {
+            "templates": [{"src": "Makefile.j2"}],
+            "packages": {"demo": {"name": "Demo", "package_type": "none", "dir": "."}},
+        },
+    )
+
+    result = run_cli("gen", "demo", cwd=tmp_path)
+
+    assert result.returncode != 0, (
+        f"rc={result.returncode}, stdout={result.stdout!r}, "
+        f"stderr={result.stderr!r}"
+    )
+    assert not (tmp_path / "Makefile").exists(), (
+        f"gen wrote into the config directory itself: stdout={result.stdout!r}"
+    )
+
+
+def test_gen_dry_run_refuses_a_package_dir_that_is_the_output_base(tmp_path):
+    """`--dry-run` is the cheapest thing a reviewer runs over an untrusted
+    branch, so it has to report the same refusal rather than previewing a
+    write it would not perform -- the argument stn-vhr already made for the
+    package directory it contains."""
+    write_config(
+        tmp_path,
+        {
+            "templates": [{"src": "Makefile.j2"}],
+            "packages": {"demo": {"name": "Demo", "package_type": "none", "dir": "."}},
+        },
+    )
+
+    result = run_cli("gen", "demo", "--dry-run", cwd=tmp_path)
+
+    assert result.returncode != 0, (
+        f"rc={result.returncode}, stdout={result.stdout!r}, "
+        f"stderr={result.stderr!r}"
+    )
+
+
+def test_a_package_dir_one_level_down_still_generates(tmp_path):
+    """The regression guard. Refusing the base must not start refusing the
+    ordinary arrangement every consumer config uses."""
+    write_config(
+        tmp_path,
+        {
+            "output_dir": "out",
+            "templates": [{"src": "Makefile.j2"}],
+            "packages": {"demo": {"name": "Demo", "package_type": "none"}},
+        },
+    )
+
+    result = run_cli("gen", "demo", cwd=tmp_path)
+
+    assert result.returncode == 0, result.stderr
+    assert (tmp_path / "out" / "demo" / "Makefile").exists()

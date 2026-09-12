@@ -341,6 +341,31 @@ def check_output_dir(config: dict) -> str | None:
         ) from error
 
 
+def check_package_dir(package_id: str, value) -> str:
+    """`dir`'s string check: `check_config_path`, plus a refusal of a value
+    that names no directory at all (stn-17h).
+
+    `contained_path` is what actually holds this rule, because it sees the
+    RESOLVED path and therefore catches a symlinked `dir` as well as a
+    literal `"."`. This is the readable half: `Path(".").parts`,
+    `Path("").parts` and `Path("./").parts` are all empty, so all three
+    reach `output_base / value` as the output base itself, and reporting
+    that as "resolves to /some/abs/path, which IS the output directory"
+    asks the author to map an absolute path back to the two characters they
+    typed. Refused here by name instead, in the pre-flight that lists every
+    config problem at once.
+    """
+    text = check_config_path(package_id, "dir", value)
+    if not Path(text).parts:
+        raise ValueError(
+            f"Package {package_id}: dir {text!r} names no directory, so the "
+            "package directory would be the output directory itself. A "
+            "package needs its own directory -- `clean` resolves every path "
+            "it removes under this one."
+        )
+    return text
+
+
 def check_no_glob(package_id: str, where: str, value: str) -> str:
     """Refuse a glob metacharacter in a config value that names ONE file.
 
@@ -727,8 +752,8 @@ def get_template_context(package_id: str, config: dict) -> dict:
         # other configured path rather than a containment check at the
         # deletion site, so the mistake is reported by the pre-flight that
         # names all of them at once.
-        "package_dir": check_config_path(
-            package_id, "dir", package.get("dir", f"{package_id}")
+        "package_dir": check_package_dir(
+            package_id, package.get("dir", f"{package_id}")
         ),
         "package_type": package_type,
         "package_sources": package_sources,
@@ -2215,6 +2240,31 @@ def contained_path(
             f"{candidate_resolved}, outside the output directory "
             f"{root_resolved} -- refusing to touch it"
         ) from None
+    # stn-17h. STRICTLY beneath, not merely "not outside". `relative_to`
+    # answers yes for a path EQUAL to the root, so every containment check
+    # in this file endorsed `dir: "."` -- which anchors the package
+    # directory ON the output base, and with no top-level `output_dir` that
+    # base is the config directory. Nothing escapes anywhere, which is why
+    # no check saw it: a planted `.stencil-manifest.json` is then a
+    # free-form list of files under the repository root for `clean` to
+    # unlink, and it removed a hand-written source file, a dotfile and a
+    # whole directory at exit 0.
+    #
+    # Checked HERE rather than only in the pre-flight because this is the
+    # one helper `gen` (generate_package) and `clean`
+    # (_validated_package_dirs) both go through, so one rule reaches both
+    # sides -- and because the equality that matters is the RESOLVED one:
+    # `dir: demo` is a perfectly ordinary string when `out/demo` is a
+    # symlink pointing back at `out`, which no string check can see.
+    if candidate_resolved == root_resolved:
+        raise ValueError(
+            f"Package {package_id}: {where} {declared!r} resolves to "
+            f"{candidate_resolved}, which IS the output directory rather "
+            "than a directory inside it. A package needs its own "
+            "directory: every path `clean` removes is resolved under this "
+            "one, so naming the output directory itself makes the whole "
+            "tree above the package a delete list."
+        )
     return candidate_resolved
 
 
@@ -2302,7 +2352,7 @@ def _validated_package_dirs(
     for pid, package in scope.items():
         raw_dir = package.get("dir", pid)
         try:
-            check_config_path(pid, "dir", raw_dir)
+            check_package_dir(pid, raw_dir)
         except ValueError as error:
             problems.append(str(error))
             continue
