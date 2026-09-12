@@ -11,6 +11,66 @@ How the version gets bumped is written down in
 
 ## 0.38.0
 
+- **Every configured path now goes through the same check, and four of them
+  did not before.** `check_config_path` already encoded what a configured
+  path may look like — no shell metacharacter, no whitespace, no `~`, not
+  absolute, no `..` — and `stn-k73` put it in front of `docs`, `slides`,
+  `package_sources` and `pre_build`. These four were left:
+
+  - **`dir`** (`stn-vhm`) prefixes every entry `get_generated_files` returns,
+    which is every line of the managed `.gitignore` section *and* every path
+    `clean` resolves and deletes. `dir: ../..` deleted outside the output
+    base.
+  - **A template's `dest`** (`stn-c25`) was joined onto the output directory
+    verbatim, so `dest: ../../shared/Makefile` wrote outside the package on
+    `gen` and `clean` **removed** that file. The escape was symmetric across
+    `gen`, `clean` and the `.gitignore` section, which is what makes refusing
+    it better than containing it on one side. A nested `dest` is still fine —
+    `.vscode/settings.json` is in the config's own documentation.
+  - **`brand`** (`stn-ttg`) was the only configured path that gets *opened*.
+    `copy_brand_image` resolved it and handed it to `shutil.copyfile`, which
+    follows a symlink — so a `logo.png` pointing at any readable file copied
+    that file's **content** into a generated folder that AGENTS.md describes
+    as routinely handed to someone as a project of their own. `file://` was
+    stripped before any of it, so the scheme was not a defence, and an
+    absolute value made `(config_dir / relative).resolve()` the absolute path.
+  - **C0 control characters** (`stn-isr`) were in neither the metacharacter
+    class nor the whitespace check. The rest of the C0 range and DEL are
+    refused now; `\n` keeps its metacharacter message, and tab and carriage
+    return keep the whitespace one, because "Make would split it into two
+    arguments" says more than "that is a control character" does.
+
+  None of these is a privilege boundary, and it is worth repeating why:
+  `pre_build.run` is arbitrary execution by design, so whoever writes
+  `.config.yaml` can already run anything. What they close is a filename
+  quietly doing something other than naming a file. The `brand` one earns a
+  little more than its severity suggests because `stencil gen --dry-run` over
+  a pull request's config executes nothing today — so it was the one read
+  available to a config nobody had run.
+
+- **A symlinked `brand` is copied under the name the config gives it**
+  (`stn-8wt`), not the name of the file the symlink resolves to.
+  `copy_brand_image` named the destination from the resolved path while
+  `get_generated_files` named it from the config string — one rule with two
+  spellings, diverging on exactly the arrangement a course repository uses, a
+  stable `logo.svg` pointing at a dated asset:
+
+  ```
+  ln -s img/siu-logo-2024.svg logo.svg
+  stencil gen --all   ->  out/demo/siu-logo-2024.svg
+  get_generated_files ->  ['demo/logo.svg']
+  stencil clean --all ->  siu-logo-2024.svg SURVIVES
+  ```
+
+  So the copied logo sat outside the managed `.gitignore` section and outside
+  what `clean` removes — git tracking a generated file, which is the failure
+  `stn-k73` exists to prevent, arriving by a different route. The symlink is
+  still followed for content; only the name changed.
+
+- **`stn-2l6` is closed as already fixed** rather than reopened: brand
+  validation reached the aggregating pre-flight with `stn-k73`, and
+  `brand_problem` is called there before anything is written.
+
 - **A link in front matter is legible on a deck's title slide, and still
   looks like a link** (`stn-c0b`). Two halves, because one alone would not
   have done it.
