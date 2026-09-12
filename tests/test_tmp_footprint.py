@@ -533,10 +533,22 @@ def test_only_one_of_several_simultaneous_runs_claims_the_basetemp(tmp_path):
                 process.kill()
                 process.communicate()
 
-    refused = [out for code, out in outcomes if code == 4]
+    transcript = "\n---\n".join(out for _, out in outcomes)
+
+    # On the MESSAGE, not on a count of exit-4s. A loser that dies inside
+    # `pytest_sessionstart` exits 3 with an INTERNALERROR, not 4, so counting
+    # exit codes would call that a pass in some runs and a mystery in others.
+    # Asserting no run crashed is the point rather than a nicety: an
+    # unattributable INTERNALERROR is worse than the corruption being guarded
+    # against, because nothing in it names a basetemp.
+    assert "INTERNALERROR" not in transcript, (
+        f"a run crashed instead of being refused:\n{transcript}"
+    )
+    refused = [out for _, out in outcomes if "in use by a running pytest" in out]
     assert len(refused) == 3, (
         f"expected three of four simultaneous runs to be refused, got "
-        f"{len(refused)}:\n"
-        + "\n---\n".join(out for _, out in outcomes)
+        f"{len(refused)}:\n{transcript}"
     )
-    assert all("in use by a running pytest" in out for out in refused)
+    assert all(code == 4 for code, out in outcomes if out in refused), (
+        f"a refusal should be pytest's exit 4:\n{transcript}"
+    )

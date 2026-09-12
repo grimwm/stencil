@@ -29,6 +29,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 PYPROJECT = Path(__file__).parent.parent / "pyproject.toml"
 TESTS = Path(__file__).parent
 
@@ -119,6 +121,19 @@ def test_every_worker_observes_the_same_browser_image_tag(tmp_path):
         f"the controller did not mint a per-run tag: {tag!r}"
     )
 
+    # The half that makes the rest of this test mean anything. `inner_pytest_env`
+    # strips $STENCIL_BROWSER_IMAGE_TAG, so the inner controller has to MINT its
+    # own; without that strip it inherited ours, took `pytest_configure`'s
+    # "an explicit tag wins" branch, and the workers dutifully agreed about a tag
+    # nobody in the inner run had minted -- this test passed with the variable
+    # pre-set to `run-BOGUS-NOT-THIS-RUN`. Per-run uniqueness is the other half
+    # of stn-zim: a second run must not rebuild the image out from under a first.
+    from stencil import pipeline
+
+    assert tag != os.environ.get(pipeline.BROWSER_IMAGE_TAG_ENV), (
+        "the inner run reported this run's tag rather than minting its own"
+    )
+
 
 def test_a_worker_does_not_claim_its_own_basetemp(tmp_path):
     """xdist workers are exempt from the `--basetemp` ownership guard.
@@ -145,6 +160,14 @@ def test_a_worker_does_not_claim_its_own_basetemp(tmp_path):
     assert result.returncode == 0, f"{result.stdout}\n{result.stderr}"
 
     from conftest import RUN_OWNER
+
+    # Assert the workers were there before asserting what they did not do.
+    # `assert not strays` over an empty glob passes just as happily when the
+    # layout moved and there are no popen-gwN directories to look in at all --
+    # a guard that silently stops guarding, which is the thing this repository
+    # says it will not ship.
+    workers = sorted(path.name for path in basetemp.glob("popen-gw*"))
+    assert len(workers) == 2, f"expected two worker directories, found {workers}"
 
     strays = sorted(
         str(path.relative_to(basetemp))
@@ -286,3 +309,104 @@ def test_a_failed_build_fails_every_worker(tmp_path):
     assert all("the image did not build" in output for _, output in results), (
         f"a caller was not told why the build failed: {results}"
     )
+
+
+# --- the paths that only open when something else goes wrong ----------------
+#
+# Each of these guards a failure mode found by review rather than by a test
+# failing, which is exactly the kind that gets written once and then quietly
+# stops working. Driven directly, with injected objects, so none of them needs
+# a second process to reach.
+
+
+def test_a_basetemp_that_cannot_be_rotated_is_refused_not_crashed():
+    """`getbasetemp()` mkdir()s without `exist_ok`, so a directory recreated
+    under it raises FileExistsError -- out of a session hook, which pytest
+    reports as an INTERNALERROR with a traceback and no mention of a basetemp.
+
+    That is strictly worse than the corruption the guard exists to prevent,
+    because at least the corruption was attributable once you knew to look.
+    """
+    import conftest
+
+    class _AlwaysCollides:
+        def getbasetemp(self):
+            raise FileExistsError(17, "File exists")
+
+    with pytest.raises(pytest.UsageError, match="in use by a running pytest"):
+        conftest._rotate(_AlwaysCollides(), Path("/tmp/whatever"))
+
+
+def test_a_transient_collision_is_retried_rather_than_refused():
+    """The other half. A racer that has finished by the second attempt must
+    not cost the run a refusal it did not earn."""
+    import conftest
+
+    class _CollidesOnce:
+        def __init__(self):
+            self.calls = 0
+
+        def getbasetemp(self):
+            self.calls += 1
+            if self.calls == 1:
+                raise FileExistsError(17, "File exists")
+
+    factory = _CollidesOnce()
+    conftest._rotate(factory, Path("/tmp/whatever"))
+    assert factory.calls == 2
+
+
+def test_a_torn_sentinel_rebuilds_instead_of_failing_forever(tmp_path):
+    """A process killed mid-write leaves a zero-byte sentinel.
+
+    Read as a recorded failure it would have an empty reason, skip the build,
+    and fail every container test in the run with a blank message that nothing
+    clears. An outcome nobody can explain has to mean "no outcome".
+    """
+    import conftest
+
+    sentinel = tmp_path / ".browser-image.outcome"
+    sentinel.write_text("")
+    assert conftest._read_outcome(sentinel) is None
+
+    calls = []
+    assert conftest.build_once(tmp_path, "browser-image", lambda: calls.append(1)) == "ok"
+    assert calls == [1], "a torn sentinel should have been rebuilt over"
+
+
+def test_an_outcome_is_never_visible_half_written(tmp_path):
+    """`write_text` truncates and then writes; `os.replace` does not."""
+    import conftest
+
+    sentinel = tmp_path / ".browser-image.outcome"
+    conftest._write_outcome(sentinel, "ok")
+    assert sentinel.read_text() == "ok"
+    assert not list(tmp_path.glob("*.tmp")), "the staging file was left behind"
+
+
+def test_the_shared_directory_refuses_to_guess(monkeypatch, tmp_path):
+    """`_shared_run_dir` encodes xdist's private `popen-gwN` layout.
+
+    If that moves, or if a pytest subprocess inherits PYTEST_XDIST_WORKER
+    without going through `inner_pytest_env`, the parent is the system temp
+    root -- and a sentinel there outlives every run on the machine. Failing
+    loudly is the only version of this that stays true.
+    """
+    import conftest
+
+    class _Factory:
+        def __init__(self, path):
+            self.path = path
+
+        def getbasetemp(self):
+            return self.path
+
+    monkeypatch.delenv("PYTEST_XDIST_WORKER", raising=False)
+    assert conftest._shared_run_dir(_Factory(tmp_path)) == tmp_path
+
+    monkeypatch.setenv("PYTEST_XDIST_WORKER", "gw0")
+    worker = tmp_path / "popen-gw0"
+    assert conftest._shared_run_dir(_Factory(worker)) == tmp_path
+
+    with pytest.raises(RuntimeError, match="popen-gwN"):
+        conftest._shared_run_dir(_Factory(tmp_path / "somewhere-else"))
