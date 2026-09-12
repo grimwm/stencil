@@ -501,3 +501,254 @@ def test_output_base_containment_runs_even_when_the_config_is_degraded(
         "clean printed a removal despite the degraded warning: "
         f"{result.stdout!r}"
     )
+
+
+# --- stn-vhr: gen writes through a symlinked package directory -------------
+#
+# stn-7t9 (via _validated_package_dirs) and stn-pe3/checked_output_base above
+# both contain paths CLEAN unlinks or the top-level output_dir. Neither
+# touches `generate_package`, which computes `output_dir = output_base /
+# context["package_dir"]` and writes straight into it with NO containment
+# check at all. If `package_dir` is a symlink pointing out of the tree,
+# every rendered template lands at the target -- gen's own twin of stn-7t9,
+# and NOT closed by fixing clean.
+#
+# Reproduced verbatim per the ticket:
+#
+#     mkdir -p out outside; ln -s $PWD/outside out/demo
+#     .config.yaml: output_dir: out / templates: [{src: Makefile.j2}] /
+#     packages: {demo: {name: Demo, package_type: none}}
+#     $ stencil gen demo  ->  rc=0
+#     Makefile and format-package-lock.json land in ./outside
+#     and the success message names ./out/demo -- the path INSIDE the tree
+
+
+def test_cli_gen_through_a_symlinked_package_dir_refuses_and_writes_nothing(
+    tmp_path,
+):
+    """'Nothing was written' is the assertion that matters -- the exit code
+    alone would pass a version that writes every template and THEN fails."""
+    import os
+
+    config_dir = tmp_path / "cfg"
+    config_dir.mkdir()
+    (config_dir / "out").mkdir()
+    outside = config_dir / "outside"
+    outside.mkdir()
+    os.symlink(outside, config_dir / "out" / "demo")
+
+    write_config(
+        config_dir,
+        {
+            "output_dir": "out",
+            "templates": [{"src": "Makefile.j2"}],
+            "packages": {"demo": {"name": "Demo", "package_type": "none"}},
+        },
+    )
+
+    result = run_cli("gen", "demo", cwd=config_dir)
+
+    assert result.returncode != 0, (
+        "gen through a symlinked package directory must refuse: "
+        f"rc={result.returncode}, stdout={result.stdout!r}"
+    )
+    assert list(outside.iterdir()) == [], (
+        "the outside directory must still be EMPTY afterwards -- found "
+        f"{[p.name for p in outside.iterdir()]}"
+    )
+    assert "Traceback" not in result.stderr, result.stderr
+
+
+def test_cli_gen_refusal_names_both_the_declared_and_resolved_paths(tmp_path):
+    """Today's success message names only the path INSIDE the tree
+    (``out/demo``), which is the specific harm the ticket records. The
+    refusal must name the RESOLVED target too, so the report says where the
+    bytes would actually have gone.
+
+    Asserted with ``str(outside.resolve())``, not ``str(outside)``: the
+    message carries resolved paths, and on macOS ``tmp_path`` is
+    ``/var/...`` while its resolution is ``/private/var/...`` -- an
+    assertion built from the unresolved spelling is a flake.
+
+    The package declares ``dir: pkgdir`` rather than defaulting to its id,
+    so "the declared directory was named" is a claim this test can actually
+    make. With the default, the declared string IS ``demo`` -- and so is
+    the package id, which every one of these messages already carries, so
+    an assertion on it would pass without the declared path being named at
+    all.
+    """
+    import os
+
+    config_dir = tmp_path / "cfg"
+    config_dir.mkdir()
+    (config_dir / "out").mkdir()
+    outside = config_dir / "outside"
+    outside.mkdir()
+    os.symlink(outside, config_dir / "out" / "pkgdir")
+
+    write_config(
+        config_dir,
+        {
+            "output_dir": "out",
+            "templates": [{"src": "Makefile.j2"}],
+            "packages": {
+                "demo": {
+                    "name": "Demo",
+                    "package_type": "none",
+                    "dir": "pkgdir",
+                }
+            },
+        },
+    )
+
+    result = run_cli("gen", "demo", cwd=config_dir)
+
+    assert "pkgdir" in result.stderr, (
+        "the declared package directory must be named in the refusal: "
+        f"stderr={result.stderr!r}"
+    )
+    assert str(outside.resolve()) in result.stderr, (
+        "the RESOLVED target the symlink actually points at must be named "
+        f"too -- today's SUCCESS message names only the path inside the "
+        f"tree, which is the harm the ticket records: stderr={result.stderr!r}"
+    )
+
+
+def test_cli_gen_dry_run_through_a_symlinked_package_dir_also_refuses(tmp_path):
+    """Today ``--dry-run`` prints ``Would write: out/demo/Makefile`` -- the
+    path INSIDE the tree, for bytes that would actually land outside via the
+    symlink. That is precisely the lie stn-vhr was filed about: a preview
+    must not report a write it would not perform, nor the wrong path for one
+    it would.
+    """
+    import os
+
+    config_dir = tmp_path / "cfg"
+    config_dir.mkdir()
+    (config_dir / "out").mkdir()
+    outside = config_dir / "outside"
+    outside.mkdir()
+    os.symlink(outside, config_dir / "out" / "demo")
+
+    write_config(
+        config_dir,
+        {
+            "output_dir": "out",
+            "templates": [{"src": "Makefile.j2"}],
+            "packages": {"demo": {"name": "Demo", "package_type": "none"}},
+        },
+    )
+
+    result = run_cli("gen", "demo", "--dry-run", cwd=config_dir)
+
+    assert result.returncode != 0, (
+        "a dry-run preview through a symlinked package directory must "
+        f"refuse exactly like a real gen: rc={result.returncode}, "
+        f"stdout={result.stdout!r}, stderr={result.stderr!r}"
+    )
+    assert "out/demo/Makefile" not in result.stdout, (
+        "TODAY: dry-run prints 'Would write: .../out/demo/Makefile' -- the "
+        "inside path, naming bytes that would actually land outside. A "
+        "preview must not report a write it would not perform, nor the "
+        f"wrong path for one it would: stdout={result.stdout!r}"
+    )
+    assert "Traceback" not in result.stderr, result.stderr
+    assert list(outside.iterdir()) == [], (
+        "a dry-run must not write anything regardless -- found "
+        f"{[p.name for p in outside.iterdir()]}"
+    )
+
+
+def test_generate_package_raises_valueerror_for_a_symlinked_package_dir(
+    tmp_path,
+):
+    """Direct-call twin of the CLI test above, driven through
+    ``generate_package`` itself rather than through the subprocess -- so a
+    caller embedding stencil as a library, not only the CLI, is covered."""
+    import os
+
+    from stencil.generate import build_environment, generate_package, load_config
+
+    config_dir = tmp_path / "cfg"
+    config_dir.mkdir()
+    (config_dir / "out").mkdir()
+    outside = config_dir / "outside"
+    outside.mkdir()
+    os.symlink(outside, config_dir / "out" / "demo")
+
+    config_path = write_config(
+        config_dir,
+        {
+            "output_dir": "out",
+            "templates": [{"src": "Makefile.j2"}],
+            "packages": {"demo": {"name": "Demo", "package_type": "none"}},
+        },
+    )
+
+    loaded = load_config(config_path)
+    env = build_environment(loaded, config_dir)
+    output_base = config_dir / "out"
+
+    with pytest.raises(ValueError, match="demo"):
+        generate_package(env, loaded, output_base, "demo", False, config_dir)
+
+    assert list(outside.iterdir()) == [], (
+        "nothing may be written outside on refusal -- found "
+        f"{[p.name for p in outside.iterdir()]}"
+    )
+
+
+# --- stn-vhr, the regression guard -----------------------------------------
+
+
+def test_an_ordinary_package_directory_still_generates(tmp_path):
+    """The regression guard on refusing too much: an ORDINARY package
+    directory -- not a symlink at all -- must keep working."""
+    write_config(
+        tmp_path,
+        {
+            "output_dir": "out",
+            "templates": [{"src": "Makefile.j2"}],
+            "packages": {"demo": {"name": "Demo", "package_type": "none"}},
+        },
+    )
+
+    result = run_cli("gen", "demo", cwd=tmp_path)
+
+    assert result.returncode == 0, (
+        f"rc={result.returncode}, stdout={result.stdout!r}, "
+        f"stderr={result.stderr!r}"
+    )
+    assert (tmp_path / "out" / "demo" / "Makefile").exists()
+
+
+def test_a_package_dir_symlinked_inside_the_output_tree_still_generates(
+    tmp_path,
+):
+    """The other half of the regression guard: a package `dir` that IS a
+    symlink, so long as it resolves to somewhere still under `output_base`
+    -- e.g. a stable alias for a package that moved -- must not be refused
+    by a containment check aimed at paths that escape the tree."""
+    import os
+
+    (tmp_path / "out").mkdir()
+    real = tmp_path / "out" / "real-demo"
+    real.mkdir()
+    os.symlink(real, tmp_path / "out" / "demo")
+
+    write_config(
+        tmp_path,
+        {
+            "output_dir": "out",
+            "templates": [{"src": "Makefile.j2"}],
+            "packages": {"demo": {"name": "Demo", "package_type": "none"}},
+        },
+    )
+
+    result = run_cli("gen", "demo", cwd=tmp_path)
+
+    assert result.returncode == 0, (
+        "a package dir symlinked to somewhere INSIDE the output tree must "
+        f"still generate: rc={result.returncode}, stderr={result.stderr!r}"
+    )
+    assert (real / "Makefile").exists()
