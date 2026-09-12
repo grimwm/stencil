@@ -241,6 +241,17 @@ records for the pre-push hook — is answered by `tests/test_parallel_harness.py
 which pins the two harness behaviours this depends on in the fast tier, not by
 trusting the job to notice.
 
+What it buys, measured on CI rather than predicted: the `pytest -v` step went
+from 565s to 352.95s and the job from 9m42s to 6m10s — 1.60x, not the 3.2-3.5x
+the plan expected. The plan assumed these tests are IO-bound on container
+startup; they are not. 65% of every container test is pandoc parsing the 5.3MB
+generated `html-template.html`, which is CPU and memory bandwidth, so four
+workers on four vCPUs contend: the four were saturated (busy 348s/327s/317s/343s
+of a 351s run, so the bin-packing is not the problem) and spent 1,335
+worker-seconds on work that costs 565s on one worker. Do not expect `-n auto`
+to scale further here without making the template smaller, which is the one
+cut this repository has decided not to take.
+
 Two of `stn-vda`'s three proposed fixes were measured and not taken, recorded
 here so the question does not get re-litigated from scratch. Widening fixture
 scope targets `stencil gen` at 31ms of an 870ms test — about 3.5% of the tier

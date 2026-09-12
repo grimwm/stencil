@@ -46,12 +46,33 @@ How the version gets bumped is written down in
 
   Locally, the container tier went from 689.63s to 191.00s — 989 tests passed
   either way, the same assertions against the same real containers — and the
-  fast tier from 18.18s to 5.24s. Local wall clock is not the number that
-  matters, though, since a developer machine has more cores than a runner: on
-  CI, run 34678996838 on `8e17d65` measured the `pytest -v` step at 565s
-  inside a 9m42s job, and under `-n auto --dist loadfile` the same step
-  measured TKTK. Four vCPUs put the floor at `565/4 ≈ 141s`, so 3.2-3.5x is
-  the honest expectation rather than the 3.6x seen locally.
+  fast tier from 18.18s to 5.24s.
+
+  On CI, which is the number that decides this: run 34678996838 on `8e17d65`
+  measured the `pytest -v` step at 565s inside a 9m42s job; run 34683551394
+  on this branch measured the same step at **352.95s** inside a **6m10s**
+  job, 995 passed. That is **1.60x**, and it is worth saying plainly that the
+  plan predicted 3.2-3.5x and was wrong.
+
+  It was wrong about why the tier is slow, not about the arithmetic. The
+  reasoning was that these tests are IO-bound on container startup, so four
+  workers would overlap four waits. They are not: 65% of every container test
+  is pandoc *parsing* the 5.3MB `html-template.html`, which is CPU and memory
+  bandwidth. Measured on the CI run, the four workers were busy 348s, 327s,
+  317s and 343s of a 351s wall clock — saturated, with idle tails of 0-31s,
+  so the bin-packing `--dist loadfile` produced was close to ideal and is not
+  where the missing speedup went. What the four workers spent was 1,335
+  worker-seconds on work that takes 565s on one worker: the same unit of work
+  costs **2.36x more** when four of them run at once on four vCPUs. Against a
+  perfect-split floor of `565/4 ≈ 141s`, 353s is 2.50x over.
+
+  So the honest statement is that parallelism recovers what contention
+  leaves, and on this workload that is a little over half. 1.60x for a CI
+  flag and two harness fixes is still worth having. It also sharpens the
+  fourth cost this entry declines to take: the 5.3MB template is both the
+  per-test cost *and* the reason four workers contend, so slimming it would
+  pay twice. It is still not taken, for the reason above — `test_assets.py`,
+  `test_fonts.py` and `test_pins.py` assert on exactly that payload.
 
   No assertion was deleted, weakened, skipped or merged, and the compose gate
   from #86 is untouched.
