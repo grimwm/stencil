@@ -778,16 +778,28 @@ def test_format_md_verifies_the_lockfile_it_installs_from(doc_package):
     )
 
 
-def _guard_block(script: str) -> str:
-    """The `if ! ... fi` the digest check lives in, lifted out of the script.
+def _guard_block(text: str, *, terminator: str = "fi &&") -> str:
+    """The `if ! ... fi` a digest check lives in, lifted out of its surroundings.
 
-    From the `if` to its `fi`, dropping the `&& \\` that chains it to the
-    install -- so what comes back is a complete shell command that can be run
-    on its own.
+    From the `if` to its `fi`, dropping whatever chains it to what follows --
+    so what comes back is a complete shell command that can be run on its own.
+
+    TWO CALLERS, TWO TERMINATORS, ONE HELPER (stn-egv). format-md's guard
+    chains into its install, so it ends `fi &&`; the browser image's guard is
+    the whole of its `RUN`, so it ends at a newline. A second copy of this
+    function differing only in that string is not worth having.
+
+    ``terminator`` MUST BE SPECIFIC ENOUGH NOT TO MATCH INSIDE A WORD, which
+    is why it is not simply ``"fi"``. Both refusals say the word "file" -- more
+    than once -- and ``text.index("fi", start)`` lands in the middle of the
+    first one, returning a truncated block that is not valid shell. The
+    executed polarity tests below would then fail on a syntax error rather
+    than on the polarity they exist to check, which reads in a log like a
+    broken guard rather than a broken test.
     """
-    start = script.index("if ! echo")
-    end = script.index("fi &&", start) + len("fi")
-    return script[start:end]
+    start = text.index("if ! echo")
+    end = text.index(terminator, start) + len("fi")
+    return text[start:end]
 
 
 def test_the_guard_refuses_on_mismatch_rather_than_on_match(doc_package, tmp_path):
@@ -961,6 +973,345 @@ def test_the_rendered_digest_is_the_digest_of_the_lockfile_in_the_package(doc_pa
         "stencil itself generated"
     )
     assert digests == {pipeline.lockfile_digest(pipeline.FORMAT_LOCKFILE)}
+
+
+# ---------------------------------------------------------------------------
+# the same guard, one service over and one phase earlier (stn-egv)
+
+
+def _browser_guard(package) -> str:
+    """The digest guard's `RUN`, lifted out of the generated Dockerfile.browser.
+
+    Read from the GENERATED file, never from the template, for the reason every
+    other assertion in this module is: a template's `{{ browser_lockfile_digest }}`
+    satisfies a substring check while saying nothing about what the
+    interpolation produced, and the digest is the entire point.
+    """
+    dockerfile = (package / pipeline.BROWSER_DOCKERFILE).read_text()
+    return _guard_block(dockerfile, terminator="fi\n")
+
+
+def test_the_browser_image_checks_the_lockfile_before_installing_from_it(doc_package):
+    """stn-egv: stn-qge's defect, at image BUILD time instead of run time.
+
+    `npm ci` fetches whatever host each `resolved` names and checks `integrity`
+    against a value in that same file, so whoever can edit the lockfile decides
+    which bytes become the puppeteer, pa11y and pdf-lib this image runs as uid 0
+    over the mounted package. The ticket reproduced it: one `resolved` host
+    changed, and npm requested that host.
+
+    THE ORDER IS THE PROPERTY, and it is reached differently here than in
+    format-md. There the guard had to verify the COPY rather than the original
+    because the source sits in a bind mount the host can rewrite between the
+    check and the `cp`. Here there is no such window to close: a `RUN` cannot
+    read the build context at all, and `COPY` has already snapshotted the bytes
+    into a layer nothing outside the build can reach. The check still goes after
+    the COPY and before the install, for the same reason arrived at from the
+    other side -- what is hashed is exactly what npm reads.
+    """
+    dockerfile = (doc_package / pipeline.BROWSER_DOCKERFILE).read_text()
+    copied = f"{pipeline.BROWSER_TOOLS_DIR}/package-lock.json"
+
+    assert "sha256sum -c" in dockerfile, (
+        "the browser image installs from the lockfile in the package directory "
+        f"without checking it is the one stencil shipped (stn-egv):\n{dockerfile}"
+    )
+
+    # EACH ANCHOR IS THE WHOLE INSTRUCTION, NOT A PHRASE INSIDE IT. The comment
+    # block above the guard necessarily discusses `npm ci` -- it explains why
+    # the guard is not folded into that line -- and a bare `index("npm ci")`
+    # finds the COMMENT, which sits before the guard, and reports the ordering
+    # backwards. That is the same trap code_lines() exists for at the top of
+    # this file, and it fired here for real on the first green run.
+    install = f"RUN cd {pipeline.BROWSER_TOOLS_DIR} && npm ci"
+    copy = f"COPY {pipeline.BROWSER_LOCKFILE} {copied}"
+    for anchor in (install, copy):
+        assert anchor in dockerfile, (
+            f"Dockerfile.browser no longer contains {anchor!r}, so the ordering "
+            f"below is comparing against something else:\n{dockerfile}"
+        )
+
+    check = dockerfile.index("sha256sum -c")
+    assert dockerfile.index(copy) < check, (
+        "the checksum is verified before the COPY, which is not a thing a RUN "
+        "can do -- it would be hashing a path that does not exist in the image "
+        f"yet:\n{dockerfile}"
+    )
+    assert check < dockerfile.index(install), (
+        f"npm ci runs before the lockfile is checked:\n{dockerfile}"
+    )
+
+    # TWO SPACES between the hash and the path. Measured on the pinned image,
+    # busybox 1.37.0 accepts one space as well -- but GNU coreutils requires two
+    # in text mode, and writing the stricter of the two is free. Pinned here
+    # rather than left to whoever next edits the format string.
+    digest = pipeline.lockfile_digest(pipeline.BROWSER_LOCKFILE)
+    assert f'"{digest}  {copied}"' in dockerfile, (
+        "the checksum line does not name the copy in the two-space form "
+        f"`<sha256>  <path>` that both sha256sum implementations read:\n{dockerfile}"
+    )
+
+
+def test_the_browser_guard_refuses_on_mismatch_rather_than_on_match(
+    doc_package, tmp_path
+):
+    """The polarity, RUN rather than read -- and no container needed.
+
+    Dropping one `!` inverts this guard: stencil's own lockfile is refused and a
+    tampered one is installed from. Every other assertion in this file survives
+    that edit, because `sha256sum -c` is still present, still between the COPY
+    and the npm ci, and still carrying the right digest and path. The same
+    mutation went undetected in the format-md tier until an adversarial review
+    made it by hand.
+
+    THE CONTAINER TIER IS NOT A SUBSTITUTE, and neither is this for it. That
+    tier builds the real image and skips where there is no compose; this runs
+    the real shell condition anywhere sha256sum works, which includes CI's unit
+    job. Both, because the failure this is about is a one-character regression
+    in a file nobody runs locally.
+    """
+    block = _browser_guard(doc_package)
+
+    target = tmp_path / "package-lock.json"
+    shutil.copyfile(doc_package / pipeline.BROWSER_LOCKFILE, target)
+    runnable = block.replace(
+        f"{pipeline.BROWSER_TOOLS_DIR}/package-lock.json", str(target)
+    )
+    assert str(target) in runnable, (
+        f"the guard no longer names the copy it checks:\n{block}"
+    )
+
+    # PROBED SEPARATELY. Darwin's sha256sum takes no -c and prints its usage, so
+    # on that host "this machine cannot run the check" and "the check says no"
+    # are both a non-zero exit. Asking the tool directly, outside the guard, is
+    # the only way to tell them apart.
+    probe = subprocess.run(
+        [
+            "sh",
+            "-c",
+            f'echo "{hashlib.sha256(target.read_bytes()).hexdigest()}  '
+            f'{target}" | sha256sum -c',
+        ],
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    if probe.returncode != 0:
+        pytest.skip(
+            "sha256sum -c does not work here, so the guard cannot be executed "
+            f"on this host: {(probe.stderr or probe.stdout).strip()[:200]}"
+        )
+
+    def run() -> subprocess.CompletedProcess:
+        return subprocess.run(
+            ["sh", "-c", runnable], capture_output=True, text=True, timeout=60
+        )
+
+    accepted = run()
+    assert accepted.returncode == 0, (
+        "the guard refuses the lockfile whose digest it carries, so a package "
+        f"stencil generated would not build:\n{accepted.stderr}"
+    )
+
+    target.write_bytes(
+        target.read_bytes().replace(b"registry.npmjs.org", b"evil.invalid.host")
+    )
+    refused = run()
+    assert refused.returncode != 0, (
+        "the guard accepted a lockfile that is not the one it carries the "
+        "digest of -- a dropped `!` reads exactly like this, and every other "
+        f"assertion here survives it:\n{refused.stdout}{refused.stderr}"
+    )
+    assert "is not the file stencil generated" in refused.stderr, (
+        f"it refused, but said nothing the reader can act on:\n{refused.stderr}"
+    )
+
+
+def test_the_browser_guard_lets_sha256sum_say_why_it_failed(doc_package):
+    """`>/dev/null` WITHOUT `2>&1`, and the difference is the consumer's morning.
+
+    Measured in the pinned image (busybox 1.37.0, /usr/bin/sha256sum ->
+    /bin/busybox), the four ways this line can end:
+
+        match           'path: OK' on stdout                          exit 0
+        mismatch        'WARNING: 1 of 1 ... did NOT match' on stderr exit 1
+        file absent     "can't open 'path'" on stderr                 exit 1
+        sha256sum gone  'sh: sha256sum: not found' on stderr          exit 127
+
+    All four are fail-closed -- verified with PATH=/nonexistent, the `if !`
+    branch fires -- so the guard never passes for the wrong reason. But `2>&1`
+    would discard the one line that says WHICH, and then a base-image regression
+    that broke sha256sum would tell the consumer their lockfile is not the file
+    stencil generated and send them to re-run `stencil gen` forever over a file
+    that was correct all along.
+
+    `>/dev/null` alone keeps success silent -- the `OK` goes to stdout -- and
+    puts the real cause on stderr immediately above stencil's own explanation.
+    It leaks nothing: that stderr line names no digest.
+
+    stn-jjw is the same fix for format-md, whose guard still carries `2>&1`.
+    """
+    block = _browser_guard(doc_package)
+
+    assert ">/dev/null" in block, (
+        "the guard no longer silences sha256sum's success line, so every build "
+        f"prints a checksum result nobody asked for:\n{block}"
+    )
+    assert "2>&1" not in block, (
+        "the guard sends sha256sum's stderr to /dev/null, so a missing or "
+        "broken sha256sum is reported to the consumer as a tampered lockfile "
+        f"and 'stencil gen' will never fix it (stn-jjw):\n{block}"
+    )
+
+
+def test_the_browser_guard_is_written_as_a_refusal(doc_package):
+    """The same polarity, asserted textually, for where the test above skips.
+
+    One character, and the executed test cannot run on a host whose sha256sum
+    has no -c. This one runs everywhere and says the same thing about the shape:
+    the condition is negated, so the branch that fires is the failure.
+    """
+    block = _browser_guard(doc_package)
+    assert block.startswith("if ! echo"), (
+        "the digest guard is not written as `if ! echo ... | sha256sum -c`. If "
+        "it was rewritten, make sure the new shape still refuses on MISMATCH "
+        f"and update the executed test above with it:\n{block}"
+    )
+
+
+def test_the_browser_refusal_tells_the_consumer_what_to_do(doc_package):
+    """A checksum mismatch answers nobody's question.
+
+    Whoever hits this guard either edited the lockfile for a reason of their own
+    or was handed a package by someone who did, and "sha256sum: FAILED" speaks
+    to neither. The message has to say three things: the file is stencil's,
+    editing it has no supported effect, and `stencil gen` puts it back.
+
+    Asserted against the lifted block rather than the file, so the long comment
+    above the RUN -- which necessarily contains these same phrases while
+    explaining them -- cannot satisfy it.
+    """
+    block = _browser_guard(doc_package)
+
+    assert "is not the file stencil generated" in block, (
+        f"the refusal does not say what is wrong:\n{block}"
+    )
+    assert "no supported effect" in block, (
+        "the refusal does not tell the reader that editing the lockfile is not "
+        f"a supported thing to do, so they will try again:\n{block}"
+    )
+    assert "Run 'stencil gen'" in block, (
+        f"the refusal does not say how to get back to a working package:\n{block}"
+    )
+
+
+def test_the_rendered_browser_digest_is_the_digest_of_the_lockfile_in_the_package(
+    doc_package,
+):
+    """The guard cannot go stale, because both come from the same bytes.
+
+    A digest written down once and a lockfile re-vendored later is a guard that
+    refuses every honest build -- the failure mode of every checksum kept by
+    hand. ``pipeline.lockfile_digest`` hashes what ``read_lockfile`` returns plus
+    the newline the template restores, which is exactly the file ``stencil gen``
+    writes; this asserts that against the file in a real generated package.
+
+    SCANNED OVER THE GUARD BLOCK, NOT THE FILE, and that is not tidiness. Since
+    stn-8vi the `FROM` line carries pipeline.NODE_IMAGE's own `@sha256:<64 hex>`
+    digest, so a whole-file scan finds two and the "exactly one" assertion that
+    works for format-md's entrypoint fails here for a reason that has nothing to
+    do with this guard. The second half of this test pins that, so nobody
+    "simplifies" the scope back out.
+    """
+    block = _browser_guard(doc_package)
+    digests = set(_SHA256_HEX.findall(block))
+    assert len(digests) == 1, (
+        f"expected exactly one sha256 in the guard, found {sorted(digests)}"
+    )
+
+    emitted = (doc_package / pipeline.BROWSER_LOCKFILE).read_bytes()
+    assert digests == {hashlib.sha256(emitted).hexdigest()}, (
+        "the digest rendered into the guard is not the digest of the lockfile "
+        "rendered beside it, so `make pdf` refuses a package stencil itself "
+        "generated"
+    )
+    assert digests == {pipeline.lockfile_digest(pipeline.BROWSER_LOCKFILE)}
+
+    # Why the scan above is scoped: the file as a whole carries the base image's
+    # digest too. If this ever stops being true, the scoping is free to relax --
+    # but it must be a deliberate edit, not a silent one.
+    whole = set(_SHA256_HEX.findall((doc_package / pipeline.BROWSER_DOCKERFILE).read_text()))
+    assert len(whole) > 1, (
+        "Dockerfile.browser now carries exactly one sha256, so this test no "
+        "longer demonstrates why the scan is scoped to the guard block. Check "
+        "whether pipeline.NODE_IMAGE still pins a digest (stn-8vi) before "
+        f"loosening anything: {sorted(whole)}"
+    )
+
+
+def test_the_browser_guard_stays_out_of_reach_of_the_dockerfile_parser_and_the_shell(
+    doc_package,
+):
+    """Three characters this block must not contain, for three different reasons.
+
+    ``$``: a Dockerfile `RUN` expands `$VAR` from ENV and ARG before /bin/sh ever
+    sees the line, and this image sets NODE_PATH, PATH, PUPPETEER_* and
+    NPM_CONFIG_UPDATE_NOTIFIER above it. An unintended expansion to the empty
+    string is how a guard stops guarding with nothing failing. Scoped to the
+    block, because the file legitimately carries `$PATH` in its ENV lines.
+
+    `` ` ``: backticks inside a double-quoted `echo` are command substitution,
+    not quotation marks -- and the prose here wants to name commands, which is
+    exactly where someone reaches for them. The file's convention is single
+    quotes; this is what keeps it.
+
+    ``#``: THE ONE THAT IS SPECIFIC TO A DOCKERFILE. The parser strips a comment
+    line inside a `\\`-continued instruction; /bin/sh does not. Measured:
+
+        RUN echo "one" && \\
+        # a comment
+            echo "two"
+
+    builds as `RUN echo "one" &&     echo "two"` with no warning at all. So a
+    comment placed inside this block -- or an `echo` line that happens to begin
+    with `#` -- vanishes from the built command silently, and the polarity test
+    above would then be lifting a truncated guard out of the file and reporting
+    whatever it did as the guard's behaviour. Keep the commentary ABOVE the RUN.
+
+    The stderr assertion is the other half: every line of the refusal must reach
+    stderr, so a message half-redirected to stdout cannot pass while a consumer
+    sees nothing on a failed build.
+    """
+    block = _browser_guard(doc_package)
+
+    assert "$" not in block, (
+        "a `$` reached the browser guard. A Dockerfile RUN expands it from ENV "
+        "or ARG before the shell sees it, so it must be escaped and then this "
+        f"test updated deliberately:\n{block}"
+    )
+    assert "`" not in block, (
+        "a backtick reached the browser guard. Inside the double-quoted echos "
+        "here that is command substitution, so the message would run what it "
+        f"meant to name. Use single quotes, as the rest do:\n{block}"
+    )
+
+    inside = [line.strip() for line in block.splitlines()]
+    assert not [line for line in inside if line.startswith("#")], (
+        "a comment line sits inside the guard's RUN. The Dockerfile parser "
+        "deletes it and /bin/sh never sees it, so the built command is not the "
+        f"one written here. Put the commentary above the RUN:\n{block}"
+    )
+
+    echoes = [line for line in inside if line.startswith("echo ")]
+    assert len(echoes) >= 4, (
+        "the refusal is down to fewer than four lines, which is not enough to "
+        "say the file is stencil's, that editing it has no supported effect, "
+        f"and how to restore it:\n{block}"
+    )
+    assert all(">&2" in line for line in echoes), (
+        "a line of the refusal does not redirect to stderr, so it lands on "
+        f"stdout where a failed build's reader is not looking:\n{block}"
+    )
 
 
 def test_lockfile_digest_hashes_the_file_the_package_gets(tmp_path, monkeypatch):
