@@ -2001,6 +2001,54 @@ def _clean_scope(
     return scope
 
 
+def contained_path(
+    package_id: str, where: str, declared: str, candidate: Path, root: Path
+) -> Path:
+    """The stn-7t9 containment guarantee, in one place (stn-sl2.1): resolve
+    `candidate` and refuse it unless it stays under resolved `root`.
+
+    Lifted out of `_validated_package_dirs`, which used to be the only
+    caller and inlined this as two lines -- fine when there was one call
+    site, a duplicate spelling waiting to drift once `generate_package` and
+    `checked_output_base` need the same rule. `declared` is why this takes
+    five arguments rather than four: the message below names the STRING the
+    config declared (e.g. a relative `dir`), not `candidate` itself, because
+    `candidate` is usually built by joining that string onto a base the
+    caller already resolved once -- and resolving BOTH `candidate` and
+    `root` here, rather than trusting a pre-resolved `root`, is what lets a
+    direct library caller pass either one unresolved.
+
+    `resolve()` itself is guarded, though NOT for the symlink cases this
+    exists to catch -- measured on this interpreter, none of them raises. A
+    loop comes back unresolved, so it reports contained here and fails later
+    at the write with ELOOP; a broken link resolves to its DANGLING TARGET,
+    which is outside and is refused below; a path that does not exist yet
+    resolves lexically, which is what lets this run before `mkdir`. The
+    guard is for a genuine OSError -- a path component that is not a
+    directory, an unreadable ancestor -- which must fail closed rather than
+    propagate past every caller's own error handling, the way
+    `_remove_entries` already guards its own `resolve()` and this code did
+    not before it was lifted.
+    """
+    try:
+        candidate_resolved = candidate.resolve()
+        root_resolved = root.resolve()
+    except OSError as error:
+        raise ValueError(
+            f"Package {package_id}: {where} {declared!r} could not be "
+            f"resolved: {error} -- refusing to touch it"
+        ) from error
+    try:
+        candidate_resolved.relative_to(root_resolved)
+    except ValueError:
+        raise ValueError(
+            f"Package {package_id}: {where} {declared!r} resolves to "
+            f"{candidate_resolved}, outside the output directory "
+            f"{root_resolved} -- refusing to touch it"
+        ) from None
+    return candidate_resolved
+
+
 def _validated_package_dirs(
     scope: dict[str, dict], output_base: Path, problems: list[str]
 ) -> dict[str, Path]:
@@ -2015,14 +2063,14 @@ def _validated_package_dirs(
     the manifest lookup, and the containment root, outside the output tree.
 
     The string check alone does not catch a symlinked package directory, so
-    `(output_base / pkg_dir).resolve()` is also required to stay under
-    `output_base.resolve()` -- this is the stn-7t9 containment guarantee,
-    applied at the one place every source (manifest or config-derived) goes
-    through before anything is touched.
+    `contained_path` (stn-sl2.1) is also required to place
+    `output_base / pkg_dir` under `output_base` once resolved -- this is
+    the stn-7t9 containment guarantee, applied at the one place every
+    source (manifest or config-derived) goes through before anything is
+    touched.
 
     A package failing either check is a named problem, not a silent drop.
     """
-    resolved_base = output_base.resolve()
     result: dict[str, Path] = {}
     for pid, package in scope.items():
         raw_dir = package.get("dir", pid)
@@ -2031,15 +2079,12 @@ def _validated_package_dirs(
         except ValueError as error:
             problems.append(str(error))
             continue
-        pkg_path = (output_base / raw_dir).resolve()
         try:
-            pkg_path.relative_to(resolved_base)
-        except ValueError:
-            problems.append(
-                f"Package {pid}: dir {raw_dir!r} resolves to {pkg_path}, "
-                f"outside the output directory {resolved_base} -- refusing "
-                "to touch it"
+            pkg_path = contained_path(
+                pid, "dir", raw_dir, output_base / raw_dir, output_base
             )
+        except ValueError as error:
+            problems.append(str(error))
             continue
         result[pid] = pkg_path
     return result
