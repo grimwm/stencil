@@ -45,6 +45,7 @@ because it is also a belief that you are covered.
 
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 import sys
@@ -94,6 +95,12 @@ def _pytest_ini_block() -> str:
         if line.startswith("["):  # the next table; a list's closing ] is `]`
             break
         body.append(line)
+    # Comment lines immediately before that next table introduce IT, not this
+    # one -- pyproject.toml has three such lines about setuptools' flat-layout
+    # discovery. Inert as TOML, but copying them means this fixture quietly
+    # stops being a copy of the block it claims to reproduce.
+    while body and (not body[-1].strip() or body[-1].lstrip().startswith("#")):
+        body.pop()
     return f"{header}\n" + "\n".join(body).rstrip() + "\n"
 
 
@@ -392,4 +399,113 @@ def test_no_tracked_file_at_the_root_shadows_a_dependency():
     assert not shadowed, (
         "these top-level names now shadow an installed module for every "
         f"pytest run, because the repository root is on sys.path: {shadowed}"
+    )
+
+
+def test_an_inner_harness_run_also_tests_this_checkout(tmp_path):
+    """stn-2et one level down, and it was live rather than theoretical.
+
+    Several tests here answer questions that can only be answered from outside
+    the process, by running an inner pytest that loads THIS conftest as a
+    plugin -- tests/test_parallel_harness.py and tests/test_tmp_footprint.py
+    both do. Such a run gets no ini file of its own, so `pythonpath = ["."]`
+    never reaches it, and its `import stencil` fell through to whatever the
+    interpreter's install pointed at. Under the borrowed-venv arrangement
+    AGENTS.md now describes, that is another checkout: the inner runs were
+    testing the wrong tree in exactly the way the outer ones were.
+
+    The guard made it visible rather than silent -- `UsageError`, exit 4, on
+    two harness tests that had nothing to do with this change. The refusal was
+    right and the harness was what needed fixing, so `inner_pytest_env` now
+    puts this checkout on the inner run's path.
+
+    THE COMPETITOR IS MODELLED AS A META-PATH FINDER, not as a PYTHONPATH
+    entry, because that is what an editable install actually is: setuptools
+    APPENDS its finder to `sys.meta_path`, so it answers only when the sys.path
+    search has already failed. Modelling it as a path entry would make it
+    stronger than the real thing and demand a fix stricter than the real one
+    needs -- which is how the first draft of this test failed against a
+    correct implementation.
+    """
+    elsewhere = tmp_path / "borrowed-venv-checkout"
+    (elsewhere / "stencil").mkdir(parents=True)
+    shutil.copyfile(
+        CHECKOUT / "stencil" / "__init__.py", elsewhere / "stencil" / "__init__.py"
+    )
+
+    plugins = tmp_path / "plugins"
+    plugins.mkdir()
+    (plugins / "borrowed_install.py").write_text(
+        "import os\n"
+        "import sys\n"
+        "from importlib.machinery import PathFinder\n"
+        "\n"
+        "\n"
+        "class _EditableInstallElsewhere:\n"
+        "    search = [os.environ['BORROWED_CHECKOUT']]\n"
+        "\n"
+        "    @classmethod\n"
+        "    def find_spec(cls, fullname, path=None, target=None):\n"
+        "        if fullname.split('.')[0] != 'stencil':\n"
+        "            return None\n"
+        "        return PathFinder.find_spec(\n"
+        "            fullname, cls.search if path is None else path\n"
+        "        )\n"
+        "\n"
+        "\n"
+        "# The venv's OWN editable finder has to go first, or it answers for\n"
+        "# stencil and this process is not a borrowed venv at all -- which is\n"
+        "# precisely how the first draft of this test passed against a build\n"
+        "# with the fix removed.\n"
+        "sys.meta_path[:] = [\n"
+        "    f for f in sys.meta_path\n"
+        "    if '__editable__' not in getattr(f, '__module__', '')\n"
+        "    and '__editable__' not in getattr(f, '__name__', '')\n"
+        "]\n"
+        "\n"
+        "# Appended, exactly as setuptools does it: consulted only after the\n"
+        "# sys.path search comes up empty.\n"
+        "sys.meta_path.append(_EditableInstallElsewhere)\n"
+    )
+
+    project = tmp_path / "inner"
+    project.mkdir()
+    (project / "test_report.py").write_text(
+        "import stencil\n"
+        "import pathlib\n"
+        "import os\n"
+        "\n"
+        "\n"
+        "def test_report(tmp_path):\n"
+        "    (tmp_path / 'touched').write_text('x')\n"
+        "    pathlib.Path(os.environ['STENCIL_PROBE_OUT']).write_text(stencil.__file__)\n"
+    )
+
+    out = tmp_path / "imported.txt"
+    result = subprocess.run(
+        [
+            sys.executable, "-m", "pytest", "test_report.py",
+            "-p", "borrowed_install", "-p", "conftest", "-p", "no:cacheprovider",
+            f"--basetemp={tmp_path / 'bt'}", "-q",
+        ],
+        cwd=project,
+        env=inner_pytest_env(
+            PYTHONPATH=os.pathsep.join([str(CHECKOUT / "tests"), str(plugins)]),
+            BORROWED_CHECKOUT=str(elsewhere),
+            STENCIL_PROBE_OUT=str(out),
+        ),
+        capture_output=True,
+        text=True,
+        timeout=INNER_TIMEOUT,
+    )
+    combined = f"{result.stdout}\n{result.stderr}"
+
+    assert result.returncode == 0, (
+        f"an inner harness run must test this checkout, not refuse:\n{combined}"
+    )
+    assert Path(out.read_text()).resolve() == (
+        CHECKOUT / "stencil" / "__init__.py"
+    ).resolve(), (
+        "the inner run imported the borrowed checkout's stencil; every harness "
+        "test that loads this conftest was measuring the wrong tree"
     )

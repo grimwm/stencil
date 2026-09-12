@@ -41,6 +41,21 @@ How the version gets bumped is written down in
   and `test_tmp_footprint.py` legitimately make against a throwaway rootdir.
   AGENTS.md records what a contributor in a worktree should expect.
 
+  The same bug existed one level down, and the guard is what found it: the
+  inner pytest runs `test_parallel_harness.py` and `test_tmp_footprint.py`
+  spawn get no ini file, so `pythonpath` never reached them and they resolved
+  `stencil` through the interpreter's install — another checkout, under the
+  borrowed venv the docs had just called safe. That surfaced as `UsageError`
+  and exit 4 on two harness tests with nothing to do with this change, which
+  was the refusal being right and the harness being wrong.
+  `conftest.inner_pytest_env()` now appends this checkout to their
+  `PYTHONPATH`. The regression test models the competing install as an
+  appended `sys.meta_path` finder rather than a path entry, because that is
+  what an editable install is — a first draft using `PYTHONPATH` made the
+  competitor stronger than the real one and failed a correct fix, and a second
+  draft forgot to remove the venv's own finder and passed against a build with
+  the fix taken out.
+
   Two costs are accepted rather than left to be discovered. The guard has a
   loud door — `STENCIL_ALLOW_FOREIGN_STENCIL=1` proceeds and warns on every
   run, including under `-q`, since a guard with no way past it gets deleted

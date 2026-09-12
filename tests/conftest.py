@@ -23,7 +23,6 @@ from bs4 import BeautifulSoup
 from filelock import FileLock
 
 import stencil
-from stencil import generate, pipeline
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -56,8 +55,8 @@ CHECKOUT = Path(__file__).resolve().parent.parent
 # The door. A guard with no way past it is a guard somebody deletes outright
 # the first time it blocks something legitimate -- testing an installed wheel
 # to verify packaging, say, which nothing here does today but which is a
-# reasonable thing to want. Going through it is LOUD: the note is printed in
-# the header of every run rather than swallowed, because a guard that can be
+# reasonable thing to want. Going through it is LOUD: the note is warned in
+# every run's summary rather than swallowed, because a guard that can be
 # silenced invisibly is the failure this file already records twice.
 FOREIGN_OK_ENV = "STENCIL_ALLOW_FOREIGN_STENCIL"
 
@@ -92,9 +91,38 @@ def foreign_stencil_note(checkout: Path, stencil_file: Path, rootdir: Path) -> s
         "    run the tests from the checkout that owns the venv you are using.\n"
         "\n"
         f"Deliberately testing an installed build rather than this tree? Set\n"
-        f"{FOREIGN_OK_ENV}=1. The run then proceeds and says so in its header\n"
-        "on every run -- a door, not a silencer.\n"
+        f"{FOREIGN_OK_ENV}=1. The run proceeds and warns, on every run and\n"
+        "even under -q -- a door, not a silencer.\n"
     )
+
+# The submodule import, deliberately BELOW the guard rather than at the top.
+#
+# `import stencil` succeeds for any package of that name. `from stencil import
+# generate, pipeline` is what needs it to be THIS project, and when those two
+# lines sat at the top of the file a `stencil` belonging to somebody else --
+# an unrelated distribution of the same name, not another checkout -- failed
+# here with a bare ImportError before pytest_configure could say anything.
+#
+# Narrow, because an editable install answers for `stencil.generate` even when
+# the PACKAGE resolved elsewhere: setuptools appends its finder to
+# sys.meta_path, so sys.path wins for the package while the finder still
+# supplies the submodules. Measured. What remains is a foreign `stencil` with
+# no editable install behind it.
+#
+# The guard is NOT simply moved above the import instead. Raising at conftest
+# IMPORT time renders as `ImportError while loading conftest` with a traceback
+# rather than pytest's clean `ERROR:` line -- measured -- so the common case
+# would pay a worse message to improve a rare one. This way the good message
+# appears exactly when the guard has something to say, and an unrelated
+# ImportError is still reported as itself.
+try:
+    from stencil import generate, pipeline
+except ImportError as exc:
+    _note = foreign_stencil_note(CHECKOUT, Path(stencil.__file__), CHECKOUT)
+    if _note is None:
+        raise
+    raise pytest.UsageError(_note) from exc
+
 
 DEMO_CONFIG = {
     "output_dir": "out",
@@ -354,6 +382,23 @@ def inner_pytest_env(**overrides) -> dict[str, str]:
     """
     env = {k: v for k, v in os.environ.items() if k not in INNER_RUN_STRIPPED_ENV}
     env.update(overrides)
+
+    # This checkout, on the inner run's path -- APPENDED, never prepended.
+    #
+    # stn-2et one level down, and it was live: an inner pytest gets no ini file
+    # of its own, so `pythonpath = ["."]` never reaches it, and `import stencil`
+    # there fell through to whatever the interpreter's install pointed at. Under
+    # the borrowed-venv arrangement AGENTS.md now blesses, that is ANOTHER
+    # checkout -- so these runs were testing the wrong tree exactly as the outer
+    # ones were. The guard turned that from silent into `UsageError`, exit 4,
+    # reproduced against `_inner_xdist`'s own command shape before this was
+    # written: the refusal was correct, and the harness was what needed fixing.
+    #
+    # Appended, because two tests here deliberately hand an inner run a
+    # competing `stencil` and need it to win: prepending would make this
+    # checkout answer instead and quietly unfalsify them.
+    path = [p for p in (env.get("PYTHONPATH"), str(CHECKOUT)) if p]
+    env["PYTHONPATH"] = os.pathsep.join(path)
     return env
 
 

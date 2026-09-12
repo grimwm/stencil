@@ -342,6 +342,16 @@ check did not catch it:
 `sys.path`, before `tests/conftest.py` is imported. **So a worktree needs no
 venv of its own**, and borrowing the main checkout's is fine.
 
+That claim cost a second fix to make true. An inner pytest — the ones
+`test_parallel_harness.py` and `test_tmp_footprint.py` spawn to answer
+questions that cannot be answered from inside the process — gets no ini file
+of its own, so `pythonpath` never reaches it, and it resolved `stencil`
+through the interpreter's install: another checkout, under exactly the
+borrowing this paragraph blesses. Those runs had the same bug, one level
+down. `conftest.inner_pytest_env()` now appends this checkout to their
+`PYTHONPATH` — appended rather than prepended, because two tests hand an
+inner run a competing `stencil` on purpose and need it to win.
+
 What to expect if it ever stops working: `tests/conftest.py` refuses the run
 rather than reporting on it, naming the checkout whose tests are running, the
 `stencil` that got imported, and the two ways out. It compares against the
