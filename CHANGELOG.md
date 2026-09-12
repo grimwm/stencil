@@ -88,6 +88,18 @@ How the version gets bumped is written down in
   shape but a different objective — what the image probe *executes* rather than which files
   compose *reads* — and is filed separately as `stn-3y8` with its reproduction.
 
+  **The pin is checked where it is used, not only where it is defined.** A second adversarial
+  pass found that all three guards — empty `COMPOSE_FILES`, environment-origin `COMPOSE_FILES`,
+  and flag-carrying `DC` — were parse-time snapshots reading only what had been assigned above
+  them. A consuming composition that `include`s the partial and *then* sets the variable walked
+  past all three, and the comment beside them advertised exactly that arrangement as supported.
+  Measured: `include base.mk` followed by `COMPOSE_FILES =` produced `docker compose  run --rm format-md` — unpinned, and silent. A `DC` built from a second variable given a target-specific
+  value defeated the flag check the same way, reading as flag-free at parse time and growing the
+  flag when the recipe expanded. `STENCIL_COMPOSE` now expands a check at the point of use,
+  where the values are the ones the recipe actually runs with; all three cases above now stop
+  the build by name, and a correct setup expands to exactly what it did before. The parse-time
+  guards stay, because they fail earlier and more legibly for the ordinary case.
+
 - **pytest in a git worktree now tests that worktree** (`stn-2et`). A run
   started inside a worktree, using a venv whose `pip install -e .` points at
   another checkout, imported THAT checkout's `stencil` while running the

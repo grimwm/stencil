@@ -473,9 +473,37 @@ def test_a_line_written_after_the_include_is_its_own_line(generate_package, tmp_
 #   subtract make's builtin functions and its specials
 #   subtract $(foreach NAME,...) loop variables
 #
+# BOTH BRACKET SPELLINGS, `$(NAME)` AND `${NAME}`. make treats the two
+# identically, so a pattern that recognizes only `$(` leaves a `${NAME}` call
+# site invisible to this guard -- the same blindness the compose scan in
+# tests/test_compose_makefile.py had, found by the adversarial review of
+# stn-qli and fixed there. Fixing it there and not here would leave the
+# CROSS-PARTIAL guard, which is the one that catches a partial quietly
+# growing a new requirement on its includer, reading only half the syntax.
+# MEASURED: no bundled partial uses a brace spelling today, so widening
+# changes no recorded residual -- it closes the hole before something walks
+# into it, rather than after.
+#
+# ESCAPED REFERENCES ARE EXCLUDED, and this is what makes the widening safe.
+# `$$` is make's escape: in a recipe `$${VAR}` is a SHELL variable and
+# `$$(cmd)` a shell substitution, neither of which is a make variable this
+# contract should record. The old pattern got away with having no guard
+# because the escaped forms in the real templates -- `$$LASTEXITCODE`,
+# `$$matches` -- carry no bracket at all; the moment braces are recognized
+# that stops being true, so `(?<!\$)` is load-bearing from here on.
+#
 # Verified against the real text: $(1)/$(2) never match (NAME must start
-# [A-Za-z_]); $$LASTEXITCODE and $$matches have no parens to match at all;
-# `comma := ,` satisfies the definition pattern and so does `PKG ?= ...`.
+# [A-Za-z_]); `comma := ,` satisfies the definition pattern and so does
+# `PKG ?= ...`.
+#
+# COMMENTS COUNT. Extraction reads the rendered text as a whole and does not
+# strip `#` lines, so a variable NAMED IN A COMMENT is recorded as a
+# requirement exactly like a real reference. That is deliberate to the extent
+# that a make comment is a poor place to hide a reference -- but it does mean
+# writing `$(FOO)` in prose inside a partial makes this test fail with a
+# residual nobody can find in a recipe. It fails loudly rather than silently,
+# which is the right direction; if it fails on a name you only wrote in a
+# comment, reword the comment rather than recording the name here.
 MAKE_BUILTIN_FUNCTIONS = {
     "call", "foreach", "if", "shell", "error", "warning", "strip", "subst",
     "patsubst", "filter", "filter-out", "findstring", "sort", "word", "words",
@@ -492,12 +520,14 @@ MAKE_SPECIALS = {"OS", "MAKEFILE_LIST", "MAKE", "CURDIR", "SHELL", "MAKEFLAGS"}
 # _make_variables_defined_by_bundled_partials below.
 USER_SUPPLIED_MAKE_VARIABLES = {"with"}
 
-_MAKE_PLAIN_REF_RE = re.compile(r"\$\(([A-Za-z_][A-Za-z0-9_-]*)")
-_MAKE_CALL_TARGET_RE = re.compile(r"\$\(call\s+([A-Za-z_][A-Za-z0-9_-]*)")
+_MAKE_PLAIN_REF_RE = re.compile(r"(?<!\$)\$[({]([A-Za-z_][A-Za-z0-9_-]*)")
+_MAKE_CALL_TARGET_RE = re.compile(r"(?<!\$)\$[({]call\s+([A-Za-z_][A-Za-z0-9_-]*)")
 _MAKE_DEFINITION_RE = re.compile(
     r"^[ \t]*([A-Za-z_][A-Za-z0-9_-]*)[ \t]*(?::=|\?=|\+=|=)", re.MULTILINE
 )
-_MAKE_FOREACH_LOOP_VAR_RE = re.compile(r"\$\(foreach\s+([A-Za-z_][A-Za-z0-9_-]*)\s*,")
+_MAKE_FOREACH_LOOP_VAR_RE = re.compile(
+    r"(?<!\$)\$[({]foreach\s+([A-Za-z_][A-Za-z0-9_-]*)\s*,"
+)
 
 
 def make_variables_required(text: str) -> set[str]:

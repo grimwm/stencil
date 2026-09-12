@@ -35,6 +35,14 @@ DC ?= docker compose
 # compose file too, and would otherwise get a silent merge rather than an
 # error.
 #
+# THIS CHECK IS A PARSE-TIME SNAPSHOT OF DC, which is not the whole story --
+# it reads DC as it stands HERE. A composition that includes this partial and
+# then sets DC, and a DC defined in terms of another variable whose value
+# arrives later -- a target-specific assignment, say -- both read as
+# flag-free at this point and grow the flag when the recipe expands. `_stencil_pin_check` below asks the same question again at the point
+# of use, where the value is the one the recipe will actually run with; this
+# one stays because it fails earlier and more legibly for the ordinary case.
+#
 # ORIGIN IS DELIBERATELY NOT CHECKED HERE, unlike COMPOSE_FILES below.
 # `export DC="podman compose"` is a legitimate thing to have in a shell profile
 # on a podman-only machine, and the line above advertises the override without
@@ -102,7 +110,34 @@ endif
 # environment -- would have that later value silently ignored, while every
 # other way of setting a make variable keeps working. That is the kind of
 # mistake that hides because it looks like it works.
-STENCIL_COMPOSE = $(DC) $(addprefix -f ,$(COMPOSE_FILES))
+#
+# THE THREE GUARDS ABOVE ARE PARSE-TIME SNAPSHOTS, AND THAT IS NOT ENOUGH ON
+# ITS OWN. Each one sees only what was assigned ABOVE it, so a composition
+# that includes this partial and then sets the variable -- which the
+# paragraph directly above advertises as supported, and AGENTS.md documents
+# as the way consumers compose these partials -- walks straight past all
+# three. MEASURED, against a real generated package:
+#
+#   $ printf 'include base.mk\nCOMPOSE_FILES =\n' > Makefile && make -n format-md
+#   docker compose  run --rm format-md          # unpinned, and SILENT
+#
+# which is exactly the mode the empty-value guard exists to kill. The same
+# holds for DC, and DEFERRED EXPANSION defeats the flag check even without a
+# late assignment -- a DC written in terms of a second variable, with that
+# variable given a target-specific value of -f evil.yml, reads as flag-free
+# at parse time and grows the flag when the recipe expands:
+#
+#   docker compose -f evil.yml -f docker-compose.yml run --rm format-md
+#
+# So the same two questions are asked again HERE, at the point of use, where
+# the values are the ones the recipe will actually run with. This expands to
+# nothing when both hold, so it costs a generated package nothing but the
+# check. The parse-time guards stay: they fail earlier and more legibly for
+# the ordinary case of a consumer typing `make COMPOSE_FILES=`, and a guard
+# that fires at `make` startup beats one that fires midway through a build.
+_stencil_pin_check = $(if $(strip $(COMPOSE_FILES)),,$(error COMPOSE_FILES must name at least one compose file -- e.g. COMPOSE_FILES=docker-compose.yml))$(if $(filter -%,$(DC)),$(error DC names a compose implementation only -- e.g. DC="podman compose" -- and compose files belong in COMPOSE_FILES))
+
+STENCIL_COMPOSE = $(_stencil_pin_check)$(DC) $(addprefix -f ,$(COMPOSE_FILES))
 
 # The runtime CLI that DC actually drives, derived rather than hardcoded. The
 # four spellings pipeline.compose_command() falls through are "docker

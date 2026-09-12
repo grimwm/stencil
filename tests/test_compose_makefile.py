@@ -51,8 +51,9 @@ Every compose call site becomes ``$(STENCIL_COMPOSE)``. The prefix is
 ``COMPOSE`` would override this one and silently unpin it, with nothing here
 to catch a wrong value.
 
-None of the templates carry this spelling yet, so every test below fails
-against the current templates -- that is the point of this file for now.
+The templates carry this spelling now, so every test below passes against
+them. Each one names, in its own docstring, the mutation it goes red for --
+a test that cannot fail against the bug it describes is decoration.
 """
 
 from __future__ import annotations
@@ -238,6 +239,21 @@ def test_every_compose_invocation_names_its_file(
                 f"\n{result.stdout}"
             )
 
+        # THE SAME QUESTION ASKED OF THE EXPANSION, not of the template text.
+        # DC is the sentinel here, so every honest compose invocation reads
+        # as `sentinel-compose`; a REAL implementation name in this output
+        # can only have come from a line that spelled one out literally and
+        # bypassed $(DC) altogether. This catches what the text scan cannot
+        # see at all -- a continuation line, a canned recipe, anything make
+        # assembles -- and it asks it of both `ifeq ($(OS),Windows_NT)` arms
+        # because the sweep is parametrized over OS.
+        literal = _LITERAL_COMPOSE_IMPLEMENTATION_RE.search(result.stdout)
+        assert literal is None, (
+            f"target {target!r} (OS={os_name}) expanded to a literal "
+            f"{literal.group(0)!r} instead of going through $(DC)/"
+            f"$(STENCIL_COMPOSE):\n{result.stdout}"
+        )
+
     assert seen_any_invocation, (
         f"the sentinel never appeared in any target's expansion for OS={os_name} "
         "-- the sweep checked nothing, which proves nothing about the pin"
@@ -302,21 +318,44 @@ def test_compose_files_from_the_environment_is_a_hard_error(
 # --- the DC guard: DC may carry an implementation, never a flag -------------
 
 
-def test_dc_carrying_a_flag_is_a_hard_error(require_make, compose_driving_package):
+@pytest.mark.parametrize(
+    "flagged_dc",
+    [
+        "docker compose -f evil.yml",
+        "docker compose --file evil.yml",
+        "docker compose --file=evil.yml",
+        # NOT A COMPOSE FILE BY NAME, and the reason this guard refuses any
+        # dash rather than an -f/--file denylist: --project-directory moves
+        # the base every relative volume source resolves against, and
+        # --env-file re-points the variable file. A denylist of the two
+        # obvious spellings would let both of these through.
+        "docker compose --project-directory /tmp",
+        "docker compose --env-file evil.env",
+        # The flag need not be last, or even after the subcommand word.
+        "-f evil.yml docker compose",
+        "docker -f evil.yml compose",
+    ],
+)
+def test_dc_carrying_a_flag_is_a_hard_error(
+    require_make, compose_driving_package, flagged_dc
+):
     """DC names a compose implementation only; a flag inside it is prepended
     ahead of the pin by `STENCIL_COMPOSE = $(DC) $(addprefix -f ,...)`, so it
     MERGES with the pinned file rather than being overridden by it -- see
     Makefile-base.j2's own comment on this guard, and STENCIL.md's Compose
-    File Pinning section. MEASURED: `ifneq ($(filter -%,$(DC)),)` rejects
-    `-f`, `--file`, `--project-directory` and `--env-file` alike, because the
-    check is "any word starting with a dash", not a list of known flags.
+    File Pinning section.
+
+    PARAMETRIZED OVER THE SPELLINGS THE GUARD CLAIMS TO REFUSE, rather than
+    asserting them in prose. An earlier version of this test said "MEASURED:
+    rejects -f, --file, --project-directory and --env-file alike" while
+    exercising only `-f`. The claim was true, but a repository that treats a
+    test passing against its own bug as a defect should not take a comment's
+    word for the other three.
     """
-    result = make_n(
-        compose_driving_package, "format-md", dc="docker compose -f evil.yml"
-    )
+    result = make_n(compose_driving_package, "format-md", dc=flagged_dc)
     combined = result.stdout + result.stderr
     assert result.returncode != 0, outcome(
-        "make -n format-md DC='docker compose -f evil.yml'", result
+        f"make -n format-md DC={flagged_dc!r}", result
     )
     assert "DC" in combined, f"the failure does not name DC:\n{combined}"
 
@@ -352,10 +391,19 @@ _DC_REFERENCE_RE = re.compile(r"\$[({]DC[)}]")
 _ALLOWED_DC_WINDOWS = (
     re.compile(r"\$\(firstword \$\(subst -, ,\$[({]DC[)}]\)\)"),
     re.compile(
-        r"^STENCIL_COMPOSE\s*=\s*\$[({]DC[)}]\s*"
+        r"^STENCIL_COMPOSE\s*=\s*(?:\$\(_stencil_pin_check\))?\s*\$[({]DC[)}]\s*"
         r"\$\(addprefix -f ,\$\(COMPOSE_FILES\)\)\s*$",
         re.MULTILINE,
     ),
+    # The POINT-OF-USE half of the same two guards. `_stencil_pin_check` reads
+    # DC to VALIDATE it, exactly as the parse-time `ifneq` below does, and
+    # expands to nothing when the value is sound. It exists because the
+    # parse-time guards are snapshots: a composition that includes this
+    # partial and then sets DC or COMPOSE_FILES -- the arrangement
+    # Makefile-base.j2's own comment advertises -- walks past them, and so
+    # does a DC whose flag arrives by deferred expansion. Found by the
+    # adversarial review of the first round of review fixes.
+    re.compile(r"^_stencil_pin_check\s*=\s*.*$", re.MULTILINE),
     # The DC flag guard's own reference. `ifneq ($(filter -%,$(DC)),)` reads
     # DC to VALIDATE it -- before STENCIL_COMPOSE is even defined -- rather
     # than to invoke anything. MEASURED: without this entry, the guard's own
@@ -414,44 +462,64 @@ def test_bare_dc_only_appears_in_the_two_sanctioned_forms():
 # Every spelling of a compose implementation itself -- as opposed to $(DC),
 # which the scan above already covers -- that a recipe could name literally
 # and bypass $(DC)/$(STENCIL_COMPOSE) entirely.
-_LITERAL_COMPOSE_IMPLEMENTATIONS = (
-    "docker compose",
-    "podman compose",
-    "docker-compose",
-    "podman-compose",
+#
+# `(?![\w.-])` so a FILENAME containing the same letters is not an offender:
+# `docker-compose.yml` (the COMPOSE_FILES default, a compose file rather than
+# an implementation) and `docker-compose-html.yml.j2` (a Jinja include) both
+# continue past "compose" into a name, and neither is a command.
+_LITERAL_COMPOSE_IMPLEMENTATION_RE = re.compile(
+    r"(?:docker|podman)(?:[ \t]+|-)compose(?![\w.-])"
 )
 
+# The one line allowed to name an implementation: DC's own default. Anything
+# else that needs to SAY one -- an $(error) message explaining what DC is for
+# -- is allowed by the `$(error` test below rather than by name, because an
+# $(error) aborts the build and so can never be the invocation this guards
+# against.
+_DC_DEFAULT_DEFINITION_RE = re.compile(r"^DC\s*\?=\s*docker compose\s*$")
 
-def test_no_recipe_spells_out_a_compose_implementation_literally():
+
+def test_no_template_line_spells_out_a_compose_implementation_literally():
     """Neither scan above catches a call site that spells the implementation
     out by name instead of going through $(DC) at all -- there is no `$(DC)`
-    reference in `docker compose run --rm doc ...` for either of them to see.
+    reference in `docker compose run --rm doc` for either of them to see.
 
-    Scoped to RECIPE lines (tab-indented -- the only lines make ever hands to
-    a shell) rather than every line in every template: Makefile-base.j2's own
-    comments and its `$(error ...)` guard messages name all four spellings
-    (e.g. `DC="podman compose"` in the DC-guard's own error text) to explain
-    what DC is and is not for, and its `COMPOSE_FILES ?= docker-compose.yml`
-    default names a compose FILE, not an implementation -- none of those
-    lines make ever runs as a command, so none of them are the hole this
-    closes, and a scan over every line would flag them as false offenders.
-    MEASURED: no template's recipe lines contain any of the four spellings
-    today, so this starts green against the real templates.
+    SCOPED TO NON-COMMENT LINES, NOT TO RECIPE LINES. An earlier version of
+    this test looked only at tab-indented lines, on the reasoning that those
+    are the only lines make hands to a shell. That reasoning is wrong, and
+    wrong in the one place that matters: `ensure_image` is a COLUMN-0
+    variable assignment expanded into recipes by `$(call ensure_image,...)`,
+    and its two `ifeq ($(OS),Windows_NT)` arms are the only column-0
+    recipe-producing assignments in the whole template set. So the tab
+    scoping covered every harmless line and no dangerous one. MEASURED
+    against that version: mutating either arm to a literal
+    `|| docker compose pull $(2)` left the entire suite green while the
+    generated Makefile pulled through an unpinned, auto-discovering compose.
+    Found by the adversarial review of the first round of review fixes.
+
+    A tab-indented line is not the only thing that reaches a shell either --
+    a backslash continuation inside a recipe needs no tab of its own.
+
+    The widened scope costs an allowlist of exactly two shapes, measured
+    against the real templates: DC's own default definition, and the
+    `$(error ...)` messages that name the four spellings to explain what DC
+    is and is not for.
     """
     offenders: dict[str, list[str]] = {}
     for template in sorted(TEMPLATES_DIR.rglob("*.j2")):
         for lineno, line in enumerate(template.read_text().splitlines(), start=1):
-            if not line.startswith("\t"):
+            stripped = line.strip()
+            if stripped.startswith("#") or stripped.startswith("{%"):
                 continue
-            if line.lstrip().startswith("#"):
+            if _DC_DEFAULT_DEFINITION_RE.match(stripped) or "$(error" in line:
                 continue
-            if any(impl in line for impl in _LITERAL_COMPOSE_IMPLEMENTATIONS):
+            if _LITERAL_COMPOSE_IMPLEMENTATION_RE.search(line):
                 offenders.setdefault(template.name, []).append(
-                    f"line {lineno}: {line.strip()}"
+                    f"line {lineno}: {stripped}"
                 )
 
     assert not offenders, (
-        "a recipe line spells out a compose implementation literally, "
+        "a template line spells out a compose implementation literally, "
         f"bypassing $(DC)/$(STENCIL_COMPOSE) entirely: {offenders}"
     )
 
@@ -469,7 +537,11 @@ def test_stencil_compose_uses_recursive_assignment():
     kind of mistake that hides because it looks like it works.
     """
     text = (TEMPLATES_DIR / "Makefile-base.j2").read_text()
-    match = re.search(r"^STENCIL_COMPOSE\s*(:?=)\s*\$\(DC\)", text, re.MULTILINE)
+    match = re.search(
+        r"^STENCIL_COMPOSE\s*(:?=)\s*(?:\$\(_stencil_pin_check\))?\s*\$\(DC\)",
+        text,
+        re.MULTILINE,
+    )
     assert match, "Makefile-base.j2 defines no STENCIL_COMPOSE variable yet"
     assert match.group(1) == "=", (
         f"STENCIL_COMPOSE is defined with {match.group(1)!r} (simply expanded) "
