@@ -48,6 +48,7 @@ than the version.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 
@@ -330,6 +331,190 @@ def test_format_md_installs_from_the_pinned_manifest_and_lockfile(doc_package):
         "npm must run from the tools directory, not from /workspace -- a course "
         "package legitimately carries a package.json of its own"
     )
+
+
+# One 64-character lowercase hex run. The entrypoint contains exactly one, and
+# a test that reads it out of the rendered text rather than recomputing it is
+# what makes the digest assertion below about the FILE stencil emitted rather
+# than about a constant agreeing with itself.
+_SHA256_HEX = re.compile(r"\b[0-9a-f]{64}\b")
+
+
+def _format_md_script(package):
+    """The format-md entrypoint's script, parsed out of the compose file.
+
+    yaml.safe_load rather than a text search, for the reason
+    tests/test_compose_format_md.py's fast-tier test gives: the change that
+    adds this guard also adds a long comment explaining it, and a comment
+    satisfies ``in compose.read_text()`` forever -- including after someone
+    deletes the guard the comment describes.
+
+    That file has a parser of its own shaped like this one, and the two are
+    deliberately not shared: ``from tests.test_compose_format_md import ...``
+    resolves locally and fails on CI with ModuleNotFoundError, which is the
+    trap conftest.py documents for its own fixtures. Three lines of yaml is
+    the cheaper half of that trade. What lives HERE is what the scaffolding
+    installs -- the manifest, the lockfile, the digest that pins it; what
+    lives there is what the service DOES once it has installed.
+    """
+    compose = yaml.safe_load((package / "docker-compose.yml").read_text())
+    return compose["services"]["format-md"]["entrypoint"][-1]
+
+
+def test_format_md_verifies_the_lockfile_it_installs_from(doc_package):
+    """stn-qge. The install must refuse a lockfile that is not stencil's.
+
+    The service copies ``format-package-lock.json`` out of /workspace -- the
+    consumer's own directory, mounted read-write -- and ``npm ci`` fetches
+    whatever host each ``resolved`` names, checking ``integrity`` against a
+    value in that same file. So a consumer-editable file decided which bytes
+    became the prettier that then ran as uid 0 over that mount.
+    ``--ignore-scripts`` and stn-20h's ``--no-config`` do not touch it: nothing
+    has to run at install time, the payload runs when prettier runs.
+
+    THE ORDER IS THE PROPERTY, not the presence of a checksum somewhere. A
+    check after ``npm ci`` verifies a file npm has already fetched from, and a
+    check before the ``cp`` verifies a file in a directory the host can write
+    while the container runs. Verifying the COPY, before the install, is the
+    only arrangement where what was hashed is what npm reads.
+    """
+    script = _format_md_script(doc_package)
+    copied = f"{pipeline.FORMAT_TOOLS_DIR}/package-lock.json"
+
+    assert "sha256sum -c" in script, (
+        "the format-md entrypoint installs from the lockfile in the mount "
+        f"without checking it is the one stencil shipped (stn-qge):\n{script}"
+    )
+
+    check = script.index("sha256sum -c")
+    assert script.index(f"cp {pipeline.FORMAT_LOCKFILE}") < check, (
+        "the checksum is verified before the cp, so what it hashes is a file "
+        "in the mount rather than the copy npm ci reads -- a host that rewrites "
+        f"it between the two wins:\n{script}"
+    )
+    assert check < script.index("npm ci"), (
+        f"npm ci runs before the lockfile is checked:\n{script}"
+    )
+
+    # And it hashes the copy, not the original: the same reason again, stated
+    # where a reordering cannot quietly satisfy it. TWO SPACES between the hash
+    # and the path, which is what GNU coreutils requires in text mode; busybox,
+    # which is what the pinned Alpine image actually runs, accepts one space as
+    # well. Writing the stricter of the two is free and keeps the line valid if
+    # this ever runs anywhere but busybox -- so it is pinned here rather than
+    # left to whoever next edits the format string.
+    digest = pipeline.lockfile_digest(pipeline.FORMAT_LOCKFILE)
+    assert f'"{digest}  {copied}"' in script, (
+        "the checksum line does not name the copy in the two-space form "
+        f"`<sha256>  <path>` that both sha256sum implementations read:\n{script}"
+    )
+
+
+def test_the_format_md_entrypoint_stays_out_of_reach_of_compose_and_the_shell(
+    doc_package,
+):
+    """Two characters this script must not contain, for two different reasons.
+
+    ``$``: compose substitutes ``$VAR`` in a service definition before the
+    shell ever sees it, which is why check-pdf doubles every ``$`` on its way
+    into the same file. This entrypoint has never needed one, so the honest
+    assertion is that it still has none -- a ``$`` added here without doubling
+    reaches the shell as the empty string, and an empty string is how a guard
+    stops guarding without anything failing.
+
+    `` ` ``: backticks inside a double-quoted ``echo`` are command
+    substitution, not quotation marks. Every message in this entrypoint is a
+    double-quoted echo, and the prose in them wants to name commands --
+    `stencil gen` is exactly the phrase someone reaches for backticks to set
+    off. The file's own convention is single quotes for that, and this is what
+    keeps it.
+    """
+    script = _format_md_script(doc_package)
+
+    assert "$" not in script, (
+        "a `$` reached the format-md entrypoint. compose interpolates it out "
+        "before the shell sees it, so it must be doubled the way check-pdf's "
+        f"script is -- and then this test updated deliberately:\n{script}"
+    )
+    assert "`" not in script, (
+        "a backtick reached the format-md entrypoint. Inside the double-quoted "
+        "echos here that is command substitution, so the message would run "
+        f"what it meant to name. Use single quotes, as the rest do:\n{script}"
+    )
+
+
+def test_the_refusal_tells_the_consumer_what_to_do(doc_package):
+    """A checksum mismatch answers nobody's question.
+
+    Whoever hits this guard either edited the lockfile for a reason of their
+    own or was handed a package by someone who did, and "sha256sum: FAILED"
+    speaks to neither. The message has to say three things: the file is
+    stencil's, editing it has no supported effect, and `stencil gen` puts it
+    back. Asserted here rather than only in the container tier, which skips on
+    every machine without a compose implementation -- and asserted against the
+    parsed entrypoint, so the comment above the service cannot satisfy it.
+
+    The existing presence guard's message is pinned the same way, one test
+    below, and for the same reason.
+    """
+    script = _format_md_script(doc_package)
+    refusal = script[script.index("sha256sum -c") :]
+
+    assert "is not the file stencil generated" in refusal, (
+        f"the refusal does not say what is wrong:\n{refusal}"
+    )
+    assert "no supported effect" in refusal, (
+        "the refusal does not tell the reader that editing the lockfile is not "
+        f"a supported thing to do, so they will try again:\n{refusal}"
+    )
+    assert "Run 'stencil gen'" in refusal, (
+        f"the refusal does not say how to get back to a working package:\n{refusal}"
+    )
+
+
+def test_the_rendered_digest_is_the_digest_of_the_lockfile_in_the_package(doc_package):
+    """The guard cannot go stale, because both come from the same bytes.
+
+    A digest written down once and a lockfile re-vendored later is a guard that
+    refuses every honest build -- the failure mode of every checksum kept by
+    hand. ``pipeline.lockfile_digest`` hashes what ``read_lockfile`` returns
+    plus the newline the template restores, which is exactly the file
+    ``stencil gen`` writes; this asserts that against the file in a real
+    generated package rather than against the constant it was computed from.
+    """
+    script = _format_md_script(doc_package)
+    digests = set(_SHA256_HEX.findall(script))
+    assert len(digests) == 1, (
+        f"expected exactly one sha256 in the entrypoint, found {sorted(digests)}"
+    )
+
+    emitted = (doc_package / pipeline.FORMAT_LOCKFILE).read_bytes()
+    assert digests == {hashlib.sha256(emitted).hexdigest()}, (
+        "the digest rendered into the entrypoint is not the digest of the "
+        "lockfile rendered beside it, so `make format-md` refuses a package "
+        "stencil itself generated"
+    )
+    assert digests == {pipeline.lockfile_digest(pipeline.FORMAT_LOCKFILE)}
+
+
+def test_lockfile_digest_hashes_the_file_the_package_gets(tmp_path, monkeypatch):
+    """The helper's own contract, including the failure channel it inherits.
+
+    It hashes ``read_lockfile(...) + "\n"`` rather than the bytes on disk, so
+    the two cannot disagree about the trailing newline -- and it raises
+    VendoredAssetError, not ValueError, for a damaged install, for the reason
+    stn-hwo gives at read_lockfile.
+    """
+    monkeypatch.setattr(pipeline, "ASSETS_DIR", tmp_path)
+    (tmp_path / "y.json").write_text("{}\n")
+    assert pipeline.lockfile_digest("y.json") == hashlib.sha256(b"{}\n").hexdigest()
+
+    with pytest.raises(pipeline.VendoredAssetError, match="vendor_npm_locks"):
+        pipeline.lockfile_digest("absent.json")
+
+    (tmp_path / "z.json").write_text("{}\n\n")
+    with pytest.raises(pipeline.VendoredAssetError, match="exactly one newline"):
+        pipeline.lockfile_digest("z.json")
 
 
 def test_a_package_that_renders_no_markdown_still_gets_the_format_lockfile(
