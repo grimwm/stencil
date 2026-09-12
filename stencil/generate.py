@@ -1228,17 +1228,26 @@ def validate_config(
     file-existence check before anything is written; see package_contexts's
     own docstring for what running behind it costs the checks below.
     """
+    contexts = package_contexts(config, config_dir)
+    available: set[str] = set()
+    for context in contexts.values():
+        available |= set(context)
+
+    # stn-dl3r: built AFTER package_contexts, not before. `tdef.get("when")`
+    # assumes every `templates:` entry is a mapping -- a shape
+    # package_contexts now checks and raises on (via
+    # _checked_template_defs) -- and this loop used to run ABOVE that call,
+    # so a malformed entry reached `tdef.get` here as a bare `str` and
+    # tracebacked with AttributeError before `gen`'s only pre-flight ever
+    # got a chance to name the real problem. By the time this runs,
+    # `package_contexts` has already raised on that shape, so every `tdef`
+    # here is guaranteed to be a mapping.
     when_keys: set[str] = set()
     for tdef in config.get("templates", []):
         when = tdef.get("when")
         if when is None:
             continue
         when_keys |= {when} if isinstance(when, str) else set(when)
-
-    contexts = package_contexts(config, config_dir)
-    available: set[str] = set()
-    for context in contexts.values():
-        available |= set(context)
 
     unknown = sorted(when_keys - available)
     if unknown:
@@ -1527,6 +1536,78 @@ def _raise_config_problems(
     raise ValueError(f"the config has {count}:\n{bullets}\n\n{text}")
 
 
+def _checked_template_defs(
+    declared: object, who: str
+) -> tuple[list[dict], list[str]]:
+    """Shape-check a config's top-level ``templates:`` value. ONE spelling
+    for a rule two callers need (stn-dl3r).
+
+    `package_contexts` runs this as part of gen/install's fail-closed
+    pre-flight (and of `clean`'s own `config_readable` probe), raising
+    before anything is written; `_config_template_defs` runs it again for
+    `clean`'s config-derived removal list, which a caller of
+    `clean_generated(config_readable=True)` can reach without ever having
+    called `package_contexts` (see that function's docstring). An earlier
+    version of this file kept the rule in `_config_template_defs` alone and
+    called that "belt and braces" for `package_contexts` -- it was not:
+    `package_contexts` never checked this shape at all, so a malformed
+    `templates:` reached `gen` and `install` as a bare
+    AttributeError/KeyError while `clean` alone named it. Two independent
+    implementations of the same shape check is the drift this file has
+    already paid for three times (see `package_entries`'s docstring), so
+    this is the one place the rule is written; each caller keeps its own
+    failure mode -- `package_contexts` appends to a `problems` list it
+    raises on once every package has been checked, `_config_template_defs`
+    appends to one its own caller was handed.
+
+    An ABSENT `templates:` key is not a problem. Every caller already reads
+    `config.get("templates", [])`, so a config with no key at all sees `[]`
+    here -- the same value an explicit `templates: []` produces -- and
+    refusing an absent key would refuse every config that has no templates
+    yet. `templates: []` is legal on its own merits too: it is the ordinary
+    shape of a `package_type: none` package with no pages, and stn-jez's own
+    reproduction config depends on it staying legal. A `templates:` key
+    present with no value (YAML null) is NOT the same statement as an
+    absent key, and is still refused below -- `None` is not a list either.
+
+    Returns ``(kept, problems)``. `kept` is every entry that is a mapping
+    with a non-empty string `src` -- the only shape a caller can go on to
+    read `tdef["src"]` / call `tdef.get(...)` on without checking again.
+    `problems` names, in words shared by every caller, each entry that was
+    dropped and why, or (for a non-list `templates:`) that none of them
+    could be identified at all -- worded so `gen`, `install` and `clean`
+    report the identical shape mistake identically, which is the whole
+    point of stn-dl3r.
+    """
+    if not isinstance(declared, list):
+        return [], [
+            f"Package(s) {who}: 'templates' must be a list of template "
+            f"definitions, not {type(declared).__name__} -- the file(s) it "
+            "renders cannot be identified"
+        ]
+
+    kept: list[dict] = []
+    dropped = 0
+    for tdef in declared:
+        if not isinstance(tdef, dict):
+            dropped += 1
+            continue
+        src = tdef.get("src")
+        if not isinstance(src, str) or not src:
+            dropped += 1
+            continue
+        kept.append(tdef)
+
+    if not dropped:
+        return kept, []
+
+    return kept, [
+        f"Package(s) {who}: {dropped} entr{'y' if dropped == 1 else 'ies'} "
+        f"under 'templates' {'is' if dropped == 1 else 'are'} not a mapping "
+        "with a `src:` -- the file(s) it renders cannot be identified"
+    ]
+
+
 def package_contexts(
     config: dict, config_dir: Path | None = None, trailer: str | None = None
 ) -> dict[str, dict]:
@@ -1608,29 +1689,41 @@ def package_contexts(
     # one side. A nested dest is still fine: `.vscode/settings.json` is in the
     # config's own documentation, and check_config_path allows a subdirectory
     # while rejecting `..`, an absolute path and the rest.
-    templates = config.get("templates")
-    if isinstance(templates, list):
-        for tdef in templates:
-            if not isinstance(tdef, dict):
-                continue
-            declared = tdef.get("dest")
-            if declared is None:
-                continue
-            # check_config_path str()s what it is given, so `dest: 2024`
-            # would pass it and then reach `output_dir / 2024` in
-            # render_templates as a TypeError, after earlier templates had
-            # already been written. A dest is a filename, so it is a string.
-            if not isinstance(declared, str):
-                problems.append(
-                    f"Package config: dest {declared!r} is "
-                    f"{type(declared).__name__}, not a string. A template's "
-                    "dest is the filename it renders to."
-                )
-                continue
-            try:
-                check_config_path("config", "dest", declared)
-            except ValueError as error:
-                problems.append(str(error))
+    #
+    # stn-dl3r. The SHAPE of `templates:` itself -- a non-list value, a
+    # non-mapping entry, an entry with no (string) `src` -- used to be
+    # unchecked here at all: this loop skipped a non-dict member silently and
+    # did nothing when `templates` was not a list. `validate_config`'s
+    # `when:` loop and `when_holds` (reached via `get_generated_files` ->
+    # `package_entries` on `install`) both assume that shape, so a config
+    # this broken tracebacked on `gen` and `install` while only `clean`
+    # named it, via `_config_template_defs`. `_checked_template_defs` is the
+    # one place that shape check is written now; both this function and
+    # `_config_template_defs` call it.
+    who = ", ".join(sorted(packages)) if packages else "(no packages configured)"
+    kept_templates, template_problems = _checked_template_defs(
+        config.get("templates", []), who
+    )
+    problems.extend(template_problems)
+    for tdef in kept_templates:
+        declared = tdef.get("dest")
+        if declared is None:
+            continue
+        # check_config_path str()s what it is given, so `dest: 2024`
+        # would pass it and then reach `output_dir / 2024` in
+        # render_templates as a TypeError, after earlier templates had
+        # already been written. A dest is a filename, so it is a string.
+        if not isinstance(declared, str):
+            problems.append(
+                f"Package config: dest {declared!r} is "
+                f"{type(declared).__name__}, not a string. A template's "
+                "dest is the filename it renders to."
+            )
+            continue
+        try:
+            check_config_path("config", "dest", declared)
+        except ValueError as error:
+            problems.append(str(error))
 
     # The top-level output_dir (stn-40a, stn-pe3), config-level like `dest`
     # just above -- but this call is the SHAPE half only (check_output_dir).
@@ -3272,37 +3365,29 @@ def _config_template_defs(
     """The config's `templates:` list, shape-guarded, for the config-derived
     removal list.
 
-    `package_contexts` inspects `templates` only when it is a list and skips
-    any member that is not a mapping, so `templates: ["Makefile.j2"]` --
-    strings rather than mappings -- passes validation outright and then
-    reaches `tdef.get(...)` here as a `str`. Measured on this branch: the
-    first package's files were deleted from its manifest and the SECOND
-    group raised AttributeError, so the command tracebacked after a partial
-    delete. (On the predecessor the whole list was computed before the first
-    unlink, so the same config failed harmlessly.)
+    Delegates the shape rule itself to `_checked_template_defs` -- see its
+    docstring for what it checks and why it is the one place that check is
+    written. This function's own job is just to read `templates` off
+    `config` and append onto the `problems` list its caller
+    (`_config_derived_entries`) was handed, which is the failure mode
+    `clean`'s config-derived fallback needs: a named problem, not a raise,
+    since this runs interleaved with the deleting.
 
-    A dropped member is a NAMED problem rather than a silent filter: the
-    files those templates render to cannot be identified, so `clean` is
-    knowingly leaving them behind and has to say so.
+    `package_contexts` runs the identical check earlier, as part of
+    gen/install's fail-closed pre-flight and of `clean`'s own
+    `config_readable` probe (`_main`'s `clean` branch) -- so by the time
+    `clean_generated` reaches here with `config_readable=True` on the CLI
+    path, that pre-flight has already passed and `templates` is already
+    known to be well-shaped. This still earns its place: `clean_generated`
+    defaults `config_readable` to True for a caller that never ran
+    `package_contexts` at all (see its docstring), and this is what that
+    caller gets instead of a bare AttributeError/KeyError part way through
+    a delete -- see stn-dl3r for what a config this broken used to do here.
     """
-    declared = config.get("templates", [])
-    if not isinstance(declared, list):
-        problems.append(
-            f"Package(s) {who}: 'templates' must be a list of template "
-            f"definitions, not {type(declared).__name__} -- the files it "
-            "renders cannot be named, so none of them was removed"
-        )
-        return []
-    kept = [tdef for tdef in declared if isinstance(tdef, dict)]
-    dropped = len(declared) - len(kept)
-    if dropped:
-        problems.append(
-            f"Package(s) {who}: {dropped} entr"
-            f"{'y' if dropped == 1 else 'ies'} under 'templates' "
-            f"{'is' if dropped == 1 else 'are'} not a mapping with a `src:` "
-            "-- the file(s) they render to could not be named, so they were "
-            "not removed"
-        )
+    kept, template_problems = _checked_template_defs(
+        config.get("templates", []), who
+    )
+    problems.extend(template_problems)
     return kept
 
 
@@ -3441,23 +3526,42 @@ def _clean_one_directory(
                 # The authorised set itself could not be derived, so there is
                 # nothing reliable to narrow this manifest against.
                 #
-                # TRUSTING IT HERE IS AN INTERIM STATE, NOT THE INTENDED ONE,
-                # and stn-dl3r (same PR, next commit) is what makes the
-                # better answer safe. Today a malformed top-level `templates:`
-                # entry reaches here because `package_contexts` skips a
-                # non-mapping member silently; once it names that as a config
-                # problem, `clean_generated`'s own `package_contexts` call
-                # raises, the CLI drops to `config_readable=False`, and this
-                # branch stops being reachable through that door at all. At
-                # that point it becomes fail-closed -- see stn-dl3r's change.
+                # FAILS CLOSED (stn-dl3r), not "trust the manifest". Before
+                # stn-dl3r, this branch fell through and used the manifest
+                # anyway -- the one option that is never right on its own,
+                # since the widen check above exists precisely because the
+                # manifest is an unvalidated file on disk, and trusting it
+                # because the thing that bounds it could not be computed
+                # defeats the check. That was tolerated for exactly one
+                # commit: a malformed top-level `templates:` entry used to
+                # reach here because `package_contexts` skipped a
+                # non-mapping member silently, and refusing here too (before
+                # `package_contexts` named the shape mistake itself) would
+                # have made `clean` LESS able to clean a package whose
+                # manifest is perfectly good -- the capability stn-p9a
+                # exists to provide.
                 #
-                # Trusting an unvalidated file because the thing that bounds
-                # it could not be computed is the one option that is never
-                # right on its own; it is tolerable only for the one commit
-                # in which refusing would instead make `clean` LESS able to
-                # clean a package whose manifest is perfectly good, which is
-                # the capability stn-p9a exists to provide.
-                pass
+                # That door is closed now: `package_contexts` (via
+                # `_checked_template_defs`) names a malformed `templates:`
+                # itself, so `clean_generated`'s own `package_contexts` call
+                # (in `_main`, above this) raises on it first,
+                # `config_readable` drops to False, and this branch is never
+                # reached through that door at all. What can still land here
+                # is a narrower, rarer fault local to computing THIS
+                # directory's authorised set (see `_config_derived_entries`)
+                # -- and refusing is still the right answer for it: nothing
+                # bounds what the manifest would be allowed to remove, so
+                # nothing is removed for the group, and the underlying
+                # problem(s) are surfaced so they can be fixed.
+                problems.append(
+                    f"Package(s) {', '.join(sorted(full_member_set))}: what "
+                    "the config authorises for this directory could not be "
+                    "derived, so its manifest cannot be checked against it "
+                    "-- nothing was removed. Fix the problem(s) below and "
+                    "run `clean` again."
+                )
+                problems.extend(authorised_problems)
+                return
             else:
                 # Compared as LITERAL STRINGS, unexpanded: both sides come
                 # from `package_entries`, so a glob pattern like
@@ -4062,15 +4166,29 @@ def _main():
         return
 
     env = build_environment(config, config_dir)
-    template_defs = config.get("templates", [])
-    if not template_defs:
-        print("Error: No templates defined in config", file=sys.stderr)
-        sys.exit(1)
 
     try:
         validate_config(config, env, config_dir)
     except ValueError as e:
         print(f"Error: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    # stn-dl3r: moved BELOW validate_config (which runs package_contexts),
+    # not above it. `{}`, `None` and `""` are all falsy just like `[]`, so
+    # this check used to fire FIRST for a malformed, non-list `templates:`
+    # -- printing "No templates defined in config" before package_contexts
+    # ever got a chance to name the actual shape mistake. `install` has no
+    # matching emptiness check and went straight to package_contexts, so the
+    # two commands disagreed about the identical config. Below
+    # validate_config, a shape mistake is reported identically on both;
+    # only a config with a WELL-SHAPED but genuinely empty `templates:`
+    # (`[]`, or the key absent) still reaches this line. `gen` refusing
+    # `templates: []` while `install` accepts it is a separate,
+    # pre-existing asymmetry -- about emptiness, not shape -- and is out of
+    # scope here.
+    template_defs = config.get("templates", [])
+    if not template_defs:
+        print("Error: No templates defined in config", file=sys.stderr)
         sys.exit(1)
 
     # stn-zfc. Two ways a package could fail while `gen` still exited 0, and
