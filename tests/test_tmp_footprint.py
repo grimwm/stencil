@@ -35,6 +35,15 @@ from pathlib import Path
 
 PYPROJECT = Path(__file__).parent.parent / "pyproject.toml"
 
+
+def _inner_env(**overrides):
+    """See conftest.inner_pytest_env: an inner pytest must not inherit this
+    run's xdist worker identity, or it exempts itself from the guard these
+    tests exist to check."""
+    from conftest import inner_pytest_env
+
+    return inner_pytest_env(**overrides)
+
 INNER = '''
 def test_passes(tmp_path):
     (tmp_path / "artifact.txt").write_text("x" * 1024)
@@ -72,6 +81,7 @@ def _run_inner(tmp_path: Path) -> Path:
             "-q",
         ],
         cwd=project,
+        env=_inner_env(),
         capture_output=True,
         text=True,
     )
@@ -308,7 +318,7 @@ def _inner_run_against(basetemp: Path):
             "-k", "no_test_matches_this_name",
             "-p", "no:cacheprovider", f"--basetemp={basetemp}", "-q",
         ],
-        cwd=PYPROJECT.parent, capture_output=True, text=True,
+        cwd=PYPROJECT.parent, env=_inner_env(), capture_output=True, text=True,
     )
 
 
@@ -411,12 +421,11 @@ def _start_holder(tmp_path: Path, basetemp: Path):
     ready = tmp_path / "ready"
     stop = tmp_path / "stop"
 
-    env = {
-        **os.environ,
-        "PYTHONPATH": str(PYPROJECT.parent / "tests"),
-        "HOLDER_READY": str(ready),
-        "HOLDER_STOP": str(stop),
-    }
+    env = _inner_env(
+        PYTHONPATH=str(PYPROJECT.parent / "tests"),
+        HOLDER_READY=str(ready),
+        HOLDER_STOP=str(stop),
+    )
     process = subprocess.Popen(
         [
             sys.executable, "-m", "pytest", "test_holder.py",

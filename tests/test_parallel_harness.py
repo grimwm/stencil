@@ -1,0 +1,266 @@
+"""What the container tier's harness has to get right to run in parallel.
+
+The tier runs under `pytest -n auto --dist loadfile` in CI (stn-vda), and two
+pieces of this suite's own state were written on the assumption of a single
+process. Both are pinned here rather than in the integration job, because a
+code path exercised only in CI is a code path that can silently stop working
+-- the failure AGENTS.md records for the pre-push hook and for `_pid_alive`.
+
+Nothing in this file needs a container runtime. The build lock is driven with
+an injected callable, so the thing being tested is the locking rather than
+docker.
+
+Measured facts these tests encode, all verified against pytest-xdist 3.8
+before anything was written:
+
+- xdist hands every worker its own `--basetemp` of `<run-dir>/popen-gwN`, both
+  when the top-level run passes `--basetemp` and when it does not.
+- `getbasetemp().parent` is therefore run-scoped and identical across workers
+  -- but in a SERIAL run it is the system temp root, shared by every run the
+  user has ever made, which is why the build lock cannot simply always use it.
+- an environment variable set in the controller's `pytest_configure` reaches
+  every worker, because execnet passes `os.environ` down at spawn time.
+"""
+
+from __future__ import annotations
+
+import os
+import subprocess
+import sys
+from pathlib import Path
+
+PYPROJECT = Path(__file__).parent.parent / "pyproject.toml"
+TESTS = Path(__file__).parent
+
+
+def _inner_env(**overrides):
+    """See conftest.inner_pytest_env. An inner run that inherited this one's
+    `$PYTEST_XDIST_WORKER` would exempt itself from the guard below, and these
+    tests would pass while checking nothing."""
+    from conftest import inner_pytest_env
+
+    return inner_pytest_env(**overrides)
+
+REPORTER = '''
+import os
+from pathlib import Path
+
+
+def test_report(tmp_path):
+    # Touching tmp_path is load-bearing: it is what makes pytest build (and
+    # so rotate) this process's basetemp.
+    (tmp_path / "touched").write_text("x")
+    worker = os.environ.get("PYTEST_XDIST_WORKER", "none")
+    (Path(os.environ["REPORT_DIR"]) / f"{worker}.txt").write_text(
+        os.environ.get("STENCIL_BROWSER_IMAGE_TAG", "<unset>")
+    )
+'''
+
+
+def _inner_xdist(tmp_path: Path, basetemp: Path, workers: int = 2):
+    """An inner `pytest -n <workers> --dist each` that loads the REAL conftest.
+
+    `-p conftest` with this repository's `tests/` on PYTHONPATH: the module
+    under test is loaded as a plugin, hooks and all, so these are the real
+    `pytest_configure` and `pytest_sessionstart` rather than a copy. A
+    throwaway directory with no conftest would run neither, which is the
+    mistake tests/test_tmp_footprint.py records against itself.
+
+    `--dist each` rather than the default `load` because it sends every test
+    to EVERY worker, so "both workers reported" is a fact about the run rather
+    than a hope about how xdist happened to bin-pack two tests.
+    """
+    project = tmp_path / "inner"
+    project.mkdir()
+    (project / "test_report.py").write_text(REPORTER)
+    reports = tmp_path / "reports"
+    reports.mkdir()
+
+    result = subprocess.run(
+        [
+            sys.executable, "-m", "pytest", "test_report.py",
+            "-p", "conftest", "-p", "no:cacheprovider",
+            "-n", str(workers), "--dist", "each",
+            f"--basetemp={basetemp}", "-q",
+        ],
+        cwd=project,
+        env=_inner_env(PYTHONPATH=str(TESTS), REPORT_DIR=str(reports)),
+        capture_output=True,
+        text=True,
+    )
+    return result, reports
+
+
+def test_every_worker_observes_the_same_browser_image_tag(tmp_path):
+    """The premise the build lock rests on, and it was never tested.
+
+    `pytest_configure` mints `$STENCIL_BROWSER_IMAGE_TAG` in the CONTROLLER,
+    before any worker exists. Workers inherit it because execnet hands them
+    `os.environ` at spawn. If that ever stopped being true, four workers would
+    build four differently-tagged images and the lock below would serialize
+    nothing -- silently, since every worker would still find an image under
+    the tag it was looking for.
+    """
+    result, reports = _inner_xdist(tmp_path, tmp_path / "bt")
+    assert result.returncode == 0, f"{result.stdout}\n{result.stderr}"
+
+    observed = {path.name: path.read_text() for path in reports.iterdir()}
+    assert set(observed) == {"gw0.txt", "gw1.txt"}, (
+        f"both workers should have reported: {sorted(observed)}"
+    )
+    assert len(set(observed.values())) == 1, (
+        f"workers disagreed about the image tag: {observed}"
+    )
+    tag = next(iter(observed.values()))
+    assert tag.startswith("localhost/stencil_browser:run-"), (
+        f"the controller did not mint a per-run tag: {tag!r}"
+    )
+
+
+def test_a_worker_does_not_claim_its_own_basetemp(tmp_path):
+    """xdist workers are exempt from the `--basetemp` ownership guard.
+
+    Not for the reason it is tempting to assume. A worker does NOT see its
+    controller's marker: worker basetemps are `<run-dir>/popen-gwN`, a
+    different directory from the controller's, so the guard was never going
+    to refuse a worker its controller's claim.
+
+    What it would do is claim a path nobody chose. xdist invents a
+    `--basetemp` for every worker even when the top-level run passed none, so
+    without the exemption a plain `pytest -n auto` starts writing owner
+    markers where a plain `pytest` writes none. The guard answers one
+    question -- did someone point two runs at one directory -- and that
+    question cannot arise for a directory xdist made up and no second run can
+    be pointed at.
+
+    Asserted on the real thing rather than on a hand-planted marker, because
+    a hand-planted marker in a directory nothing rotates is exactly how the
+    stn-zim guard passed its own test while doing nothing (stn-6fs).
+    """
+    basetemp = tmp_path / "bt"
+    result, _ = _inner_xdist(tmp_path, basetemp)
+    assert result.returncode == 0, f"{result.stdout}\n{result.stderr}"
+
+    from conftest import RUN_OWNER
+
+    strays = sorted(
+        str(path.relative_to(basetemp))
+        for path in basetemp.glob(f"popen-gw*/{RUN_OWNER}")
+    )
+    assert not strays, (
+        f"a worker claimed ownership of the basetemp xdist invented for it: "
+        f"{strays}"
+    )
+    assert (basetemp / RUN_OWNER).exists(), (
+        "the controller should still own the basetemp it was given -- "
+        "exempting workers must not switch the guard off for the run"
+    )
+
+
+def test_the_controller_of_a_parallel_run_is_still_refused(tmp_path):
+    """The control, and the reason this one is allowed to pass from the start.
+
+    A test that cannot fail proves nothing on its own; this one exists to
+    catch the exemption being written too broadly. `PYTEST_XDIST_WORKER` is
+    set in workers and NOT in the controller, and an exemption keyed on
+    anything coarser -- the presence of the xdist plugin, `-n` on the command
+    line -- would turn the guard off for exactly the runs most likely to be
+    sharing a basetemp between worktrees.
+    """
+    basetemp = tmp_path / "bt"
+    basetemp.mkdir()
+    # An owner whose pid is certainly alive: this very process.
+    (basetemp / ".pytest-run-owner").write_text(f"{os.getpid()}-1")
+
+    result, _ = _inner_xdist(tmp_path, basetemp)
+
+    assert "in use by a running pytest" in result.stdout + result.stderr, (
+        f"a parallel run was allowed onto a live basetemp:\n{result.stdout}"
+    )
+    assert result.returncode == 4, "a UsageError should be pytest's exit 4"
+
+
+# --- the browser image is built once per run, not once per worker -----------
+#
+# `pdf_workspace` is session-scoped, and under xdist "session" means per
+# WORKER PROCESS. It installs Chromium, puppeteer and pa11y -- minutes -- so
+# four workers would start four cold builds at once, with no layer cache to
+# share because none of them has finished.
+#
+# Driven here with real subprocesses rather than threads, because that is the
+# thing being modelled: xdist workers are separate processes, and a lock that
+# only excludes threads would pass a threaded test and do nothing in CI.
+
+BUILD_WORKER = '''
+import sys, time
+from pathlib import Path
+
+import conftest
+
+shared, log, mode = Path(sys.argv[1]), Path(sys.argv[2]), sys.argv[3]
+
+
+def build():
+    with log.open("a") as handle:
+        handle.write("built\\n")
+    time.sleep(0.5)
+    if mode == "fail":
+        raise RuntimeError("the image did not build")
+
+
+try:
+    outcome = conftest.build_once(shared, "browser-image", build)
+except conftest.BuildFailed as exc:
+    print(f"FAILED {exc}")
+    sys.exit(3)
+print(f"OK {outcome}")
+'''
+
+
+def _race(tmp_path: Path, mode: str, callers: int = 4):
+    script = tmp_path / "caller.py"
+    script.write_text(BUILD_WORKER)
+    shared = tmp_path / "shared"
+    shared.mkdir()
+    log = tmp_path / "builds.log"
+    log.touch()
+
+    env = _inner_env(PYTHONPATH=str(TESTS))
+    processes = [
+        subprocess.Popen(
+            [sys.executable, str(script), str(shared), str(log), mode],
+            env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+        )
+        for _ in range(callers)
+    ]
+    results = [(p.wait(timeout=120), p.stdout.read()) for p in processes]
+    return results, log.read_text().splitlines()
+
+
+def test_the_build_runs_once_however_many_workers_ask(tmp_path):
+    results, builds = _race(tmp_path, "ok")
+
+    assert builds == ["built"], (
+        f"the build ran {len(builds)} times across four concurrent callers"
+    )
+    assert all(code == 0 for code, _ in results), results
+    assert all("OK" in output for _, output in results), results
+
+
+def test_a_failed_build_fails_every_worker(tmp_path):
+    """The half that matters more.
+
+    If only the worker that attempted the build learns it failed, the other
+    three carry on against an image that is not there and report a wall of
+    unrelated container errors. Recording the failure and re-raising it to
+    every caller makes four workers fail identically, once, with the reason.
+    """
+    results, builds = _race(tmp_path, "fail")
+
+    assert builds == ["built"], (
+        f"a failed build was retried by later callers: {len(builds)} attempts"
+    )
+    assert all(code == 3 for code, _ in results), results
+    assert all("the image did not build" in output for _, output in results), (
+        f"a caller was not told why the build failed: {results}"
+    )

@@ -18,6 +18,7 @@ from pathlib import Path
 import pytest
 import yaml
 from bs4 import BeautifulSoup
+from filelock import FileLock
 
 from stencil import generate, pipeline
 
@@ -155,6 +156,19 @@ def _run_id() -> str:
     return f"{os.getpid()}-{int(time.time())}"
 
 
+def _is_xdist_worker() -> bool:
+    """Whether this process is an xdist worker rather than the controller.
+
+    xdist sets this in every worker and never in the controller, which is the
+    distinction the guard below needs. Nothing coarser will do: keying on the
+    xdist plugin being loaded, or on `-n` appearing in the command line, would
+    switch the guard off for the whole of a parallel run -- and a parallel run
+    is exactly as capable of being pointed at another worktree's basetemp as a
+    serial one.
+    """
+    return bool(os.environ.get("PYTEST_XDIST_WORKER"))
+
+
 def _pid_alive(pid: int) -> bool:
     """Whether a process with this pid exists.
 
@@ -205,6 +219,33 @@ def _claim_basetemp(basetemp: Path) -> None:
     marker.write_text(_run_id())
 
 
+XDIST_WORKER_ENV = (
+    "PYTEST_XDIST_WORKER",
+    "PYTEST_XDIST_WORKER_COUNT",
+    "PYTEST_XDIST_TESTRUNUID",
+)
+
+
+def inner_pytest_env(**overrides) -> dict[str, str]:
+    """The environment for a pytest this suite runs as a SUBPROCESS.
+
+    Several tests answer questions that can only be answered from outside the
+    process, by running an inner pytest. Those inner runs must not inherit
+    this one's xdist identity: under `-n auto` every test executes inside a
+    worker with `$PYTEST_XDIST_WORKER` set, a subprocess inherits the whole
+    environment, and the inner run would then announce itself as somebody
+    else's worker -- exempt itself from the basetemp guard above, and quietly
+    stop testing the thing it was written to test.
+
+    Found the first time the fast tier was run under `-n auto --dist
+    loadfile`: four guard tests failed at once, all of them inner runs that
+    had been handed a worker identity belonging to their own parent.
+    """
+    env = {k: v for k, v in os.environ.items() if k not in XDIST_WORKER_ENV}
+    env.update(overrides)
+    return env
+
+
 def pytest_configure(config):
     if not os.environ.get(pipeline.BROWSER_IMAGE_TAG_ENV):
         # An explicit tag wins: a CI job that builds the image once and reuses
@@ -214,8 +255,18 @@ def pytest_configure(config):
         )
 
     basetemp = config.getoption("basetemp")
-    if not basetemp:
+    if not basetemp or _is_xdist_worker():
         # pytest's own default is already per-run.
+        #
+        # And a worker has nothing to claim. xdist invents a --basetemp for
+        # every worker -- `<run-dir>/popen-gwN` -- even when the top-level run
+        # passed none, so without this a plain `pytest -n auto` would write
+        # owner markers where a plain `pytest` writes none. The question this
+        # guard answers is whether a PERSON pointed two runs at one directory,
+        # and that cannot be asked of a path xdist made up and nothing else can
+        # be aimed at. Measured, in case the obvious reason is assumed instead:
+        # a worker never sees its controller's marker, because the controller's
+        # basetemp is the parent directory rather than the worker's own.
         return
 
     # The CHECK belongs here and nowhere later, because the thing that makes
@@ -250,7 +301,7 @@ def pytest_sessionstart(session):
     did nothing.
     """
     basetemp = session.config.getoption("basetemp")
-    if not basetemp:
+    if not basetemp or _is_xdist_worker():
         return
 
     session.config._tmp_path_factory.getbasetemp()
@@ -381,12 +432,79 @@ def render_soup(render):
     return _render_soup
 
 
+class BuildFailed(RuntimeError):
+    """A build that failed, reported identically to everyone who waited on it."""
+
+
+def build_once(shared_dir: Path, key: str, build) -> str:
+    """Run `build` once across every process sharing `shared_dir`.
+
+    The problem it solves: `pdf_workspace` below is session-scoped, and under
+    xdist "session" means per WORKER PROCESS. Building the browser image
+    installs Chromium, puppeteer and pa11y -- minutes -- so four workers would
+    start four cold builds simultaneously, with no layer cache to share
+    because none of them has finished yet. The image TAG is already common to
+    the whole run, so the work is genuinely redundant rather than merely
+    duplicated.
+
+    A failure is recorded and re-raised to every caller, which is the half
+    that matters. If only the worker that attempted the build learned it
+    failed, the other three would carry on against an image that is not there
+    and bury the real reason under a wall of container errors.
+    """
+    shared_dir = Path(shared_dir)
+    shared_dir.mkdir(parents=True, exist_ok=True)
+    sentinel = shared_dir / f".{key}.outcome"
+
+    with FileLock(str(shared_dir / f".{key}.lock")):
+        if not sentinel.exists():
+            try:
+                build()
+            except Exception as exc:
+                # Recorded before it is raised, so the callers still blocked on
+                # the lock get the same answer rather than each retrying a
+                # build that has already been shown not to work.
+                sentinel.write_text(f"failed\n{exc}")
+                raise BuildFailed(str(exc)) from exc
+            sentinel.write_text("ok")
+        recorded = sentinel.read_text()
+
+    status, _, detail = recorded.partition("\n")
+    if status != "ok":
+        raise BuildFailed(detail)
+    return status
+
+
+def _shared_run_dir(tmp_path_factory) -> Path:
+    """A directory every process in THIS run shares, and no other run does.
+
+    In a worker that is `getbasetemp().parent`: worker basetemps are
+    `<run-dir>/popen-gwN`, so the parent is the run-scoped directory the
+    controller owns -- true both with an explicit `--basetemp` and with
+    pytest's own default.
+
+    In a serial run it is `getbasetemp()` itself, and the difference is not
+    cosmetic. A serial run's parent is the system temp root
+    (`/tmp/pytest-of-<user>`), shared by every run that user has ever made, so
+    locking there would make one run's recorded build outcome answer for the
+    next one's -- against an image tag that no longer exists.
+    """
+    basetemp = Path(tmp_path_factory.getbasetemp())
+    return basetemp.parent if _is_xdist_worker() else basetemp
+
+
 @pytest.fixture(scope="session")
 def pdf_workspace(tmp_path_factory):
     """A generated package with the browser image built, shared session-wide.
 
     Building it installs Chromium, puppeteer and pa11y, which takes minutes.
-    Once per session rather than once per test.
+    Once per session rather than once per test -- and, under xdist, once per
+    RUN rather than once per worker.
+
+    The workspace directory stays per-worker: `to_pdf` writes source files
+    into it, and it costs 32ms to make. Only the image build is shared. The
+    worker that wins the lock builds from its own copy, which is the same
+    package every other worker generated from the same DEMO_CONFIG.
     """
     if pipeline.container_runtime() is None:
         pytest.skip("no container runtime found (docker, podman)")
@@ -395,9 +513,17 @@ def pdf_workspace(tmp_path_factory):
     package = make_package(base, DEMO_CONFIG)
     install_fixtures(package)
 
-    result = pipeline.build_browser_image(package)
-    if result.returncode != 0:
-        pytest.fail(f"could not build the browser image:\n{result.stderr[-3000:]}")
+    def _build():
+        result = pipeline.build_browser_image(package)
+        if result.returncode != 0:
+            raise RuntimeError(
+                f"could not build the browser image:\n{result.stderr[-3000:]}"
+            )
+
+    try:
+        build_once(_shared_run_dir(tmp_path_factory), "browser-image", _build)
+    except BuildFailed as exc:
+        pytest.fail(str(exc))
 
     return package
 
