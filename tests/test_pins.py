@@ -50,6 +50,7 @@ from __future__ import annotations
 
 import json
 import re
+import shutil
 
 import pytest
 import yaml
@@ -301,6 +302,66 @@ def test_the_browser_image_installs_from_the_pinned_manifest_and_lockfile(doc_pa
     # moving them builds an image whose tools cannot be found.
     assert f"ENV NODE_PATH={pipeline.BROWSER_NODE_MODULES}\n" in dockerfile
     assert f"ENV PATH={pipeline.BROWSER_NODE_MODULES}/.bin:$PATH\n" in dockerfile
+
+
+def test_html_to_pdf_js_roots_its_resolution_at_the_pinned_tools_dir(doc_package):
+    """stn-cnm: puppeteer and pdf-lib must resolve from pipeline.BROWSER_TOOLS_DIR
+    (module.createRequire rooted at "{{ browser_tools_dir }}/package.json", per
+    the approved plan for stn-cnm), not from wherever a bare `require` happens
+    to land starting at /workspace.
+
+    Asserted against the CONSTANT, the way
+    test_the_browser_image_installs_from_the_pinned_manifest_and_lockfile above
+    asserts the Dockerfile's ENV lines against pipeline.BROWSER_NODE_MODULES --
+    so a rewiring of the tools directory cannot leave this test asserting a
+    path the image stopped using.
+    """
+    text = (doc_package / "html-to-pdf.js").read_text()
+    assert f'createRequire("{pipeline.BROWSER_TOOLS_DIR}/package.json")' in text, (
+        "html-to-pdf.js does not root a createRequire() at "
+        f"{pipeline.BROWSER_TOOLS_DIR!r}, so puppeteer/pdf-lib still resolve "
+        "from wherever a bare require lands starting at /workspace"
+    )
+
+
+# Every pinned browser package, as a require-CALL pattern rather than a
+# mention of the name -- stn-cnm.2's guard legitimately contains
+# fromTools.resolve("puppeteer"), which must NOT trip this. Iterated from
+# pipeline.BROWSER_NPM_PINS rather than hardcoding "puppeteer" and "pdf-lib":
+# a fourth pin added tomorrow (pa11y is already one) must be covered without
+# anyone remembering to add a case for it here, the same property
+# test_nothing_in_the_scaffolding_installs_by_name uses above.
+BARE_PINNED_REQUIRE = {
+    name: re.compile(r"""require\(\s*['"]""" + re.escape(name) + r"""['"]\s*\)""")
+    for name in pipeline.BROWSER_NPM_PINS
+}
+
+
+def test_no_generated_js_bare_requires_a_pinned_browser_package(doc_package):
+    """A bare `require("puppeteer")` (or pdf-lib, or pa11y) resolves starting
+    from the requiring file's own directory and walks upward -- which, for
+    html-to-pdf.js, starts at /workspace and lets a consumer's own
+    node_modules outrank the image's pinned tree at pipeline.BROWSER_TOOLS_DIR.
+
+    Scanned over every generated .js file, not only html-to-pdf.js -- a
+    future template that reaches for one of these by a bare specifier must
+    fail this too. Scanned over code_lines(doc_package), NOT read_text():
+    code_lines strips `//` comments, and stn-cnm.2 is required to write a
+    comment EXPLAINING why a bare require is a defect here -- a raw-text scan
+    would find that explanation and report the file as still doing it.
+    """
+    violations = [
+        (path.name, name, line)
+        for path, line in code_lines(doc_package)
+        if path.suffix == ".js"
+        for name, pattern in BARE_PINNED_REQUIRE.items()
+        if pattern.search(line)
+    ]
+    assert not violations, (
+        "these generated .js lines require a pinned package by bare "
+        "specifier, which resolves starting from the file's own directory "
+        f"rather than {pipeline.BROWSER_TOOLS_DIR}: {violations}"
+    )
 
 
 def test_format_md_installs_from_the_pinned_manifest_and_lockfile(doc_package):
@@ -913,3 +974,230 @@ def test_pa11y_runs_in_both_generated_theme_configs(installed):
     for theme in ("light", "dark"):
         assert theme in installed["pa11y"], f"pa11y never ran for the {theme} theme"
         assert isinstance(installed["pa11y"][theme]["issues"], int)
+
+
+# ---------------------------------------------------------------------------
+# stn-cnm: html-to-pdf.js must resolve puppeteer and pdf-lib only from
+# pipeline.BROWSER_TOOLS_DIR, never from a node_modules a consumer's own npm
+# install left in /workspace. Beside the installed-tree assertions above
+# because it needs the same built image; NEVER planted inside pdf_workspace
+# itself -- the PROBE script above opens with a bare require("pa11y"), so a
+# decoy there would corrupt every assertion `installed` makes, not merely
+# these.
+
+DECOY_MARKERS = {
+    "puppeteer": "STN_CNM_DECOY_PUPPETEER_7f2a",
+    "pdf-lib": "STN_CNM_DECOY_PDF_LIB_9c3b",
+}
+
+
+def _copy_rendered_page(pdf_workspace, dest):
+    """document.html and html-to-pdf.js, copied out of pdf_workspace.
+
+    Generated pages are self-contained -- assets are inlined at `stencil gen`
+    time -- so these two files are everything the pdf service needs, and
+    nothing else about pdf_workspace (in particular its own decoy-free
+    node_modules layout) is disturbed by whatever gets planted in ``dest``.
+    """
+    shutil.copy2(pdf_workspace / "document.html", dest / "document.html")
+    shutil.copy2(pdf_workspace / "html-to-pdf.js", dest / "html-to-pdf.js")
+
+
+def _plant_decoy(workdir, name, marker):
+    """A node_modules/<name> a bare `require(name)` from /workspace would
+    reach, whose module body THROWS at require time rather than on first use.
+
+    The shape is load-bearing, not incidental. Node's resolution algorithm
+    treats a directory it cannot load as a package (no `main`, no
+    `index.js` it can find) as ABSENT and CONTINUES to the next candidate
+    rather than raising -- so a decoy missing either of these would be
+    silently skipped in favour of NODE_PATH, and the acceptance test below
+    would pass vacuously against unfixed code rather than because the fix
+    works.
+    """
+    pkg_dir = workdir / "node_modules" / name
+    pkg_dir.mkdir(parents=True)
+    (pkg_dir / "package.json").write_text(
+        json.dumps({"name": name, "version": "0.0.0-decoy", "main": "index.js"})
+    )
+    (pkg_dir / "index.js").write_text(f'throw new Error("{marker}");\n')
+
+
+@pytest.fixture(scope="session")
+def rendered_pdf_page(pdf_workspace):
+    """document.html, rendered once into the shared pdf_workspace.
+
+    Exactly what the `installed` fixture above does at test_pins.py:809 --
+    pipeline.render("doc", ...) over the same session-scoped workspace pytest
+    already paid to build the browser image for.
+    """
+    built = pipeline.render(
+        "doc", "document.md", "document.html", workdir=pdf_workspace
+    )
+    assert built.returncode == 0, f"pandoc failed\n{built.stderr}"
+    return pdf_workspace
+
+
+@pytest.fixture(scope="session")
+def decoy_tools_workdir(rendered_pdf_page, tmp_path_factory):
+    """The real generated html-to-pdf.js and a real rendered page, in an
+    isolated directory of its own carrying decoy node_modules/{puppeteer,
+    pdf-lib} -- never inside pdf_workspace itself, per the module comment
+    above. Session-scoped so the cost is paid once.
+    """
+    workdir = tmp_path_factory.mktemp("tools-resolution-decoy")
+    _copy_rendered_page(rendered_pdf_page, workdir)
+    for name, marker in DECOY_MARKERS.items():
+        _plant_decoy(workdir, name, marker)
+    return workdir
+
+
+@pytest.fixture(scope="session")
+def bare_tools_workdir(rendered_pdf_page, tmp_path_factory):
+    """The same two real generated files, with NO node_modules planted at
+    all -- kept separate from decoy_tools_workdir so
+    test_the_missing_tools_guard_names_the_pinned_dir is not also, silently,
+    a test about the decoy fixture above.
+    """
+    workdir = tmp_path_factory.mktemp("tools-resolution-bare")
+    _copy_rendered_page(rendered_pdf_page, workdir)
+    return workdir
+
+
+@pytest.mark.integration
+def test_html_to_pdf_ignores_a_decoy_in_the_workspace(decoy_tools_workdir):
+    """ACCEPTANCE for stn-cnm. Same image, same mount, same entrypoint as the
+    generated pdf compose service -- pipeline.html_to_pdf runs
+    `node html-to-pdf.js document.html document.pdf` over a directory that
+    also carries decoy node_modules/{puppeteer,pdf-lib}, planted above.
+
+    A decoy /workspace/node_modules/puppeteer with a wrong version must not
+    be used by make pdf: exit 0, a PDF actually written, and neither decoy's
+    marker anywhere in stderr.
+    """
+    result = pipeline.html_to_pdf(
+        "document.html",
+        "document.pdf",
+        workdir=decoy_tools_workdir,
+        timeout=180,
+    )
+    assert result.returncode == 0, (
+        f"html-to-pdf.js exited {result.returncode} instead of 0\n"
+        f"stderr:\n{result.stderr[-3000:]}"
+    )
+    assert (decoy_tools_workdir / "document.pdf").is_file(), (
+        "html-to-pdf.js exited 0 but wrote no document.pdf"
+    )
+    for name, marker in DECOY_MARKERS.items():
+        assert marker not in result.stderr, (
+            f"the {name} decoy's marker appeared in stderr, so the decoy "
+            f"ran instead of the pinned tree at {pipeline.BROWSER_TOOLS_DIR}:\n"
+            f"{result.stderr[-3000:]}"
+        )
+
+
+@pytest.mark.integration
+def test_a_workspace_decoy_would_win_a_bare_require(decoy_tools_workdir):
+    """CONTROL, and it must assert the RIGHT half.
+
+    The acceptance test's load-bearing assertion is exit 0; "the marker is
+    absent from stderr" is vacuous unless something proves the decoy WOULD
+    have produced that marker. Node's resolution algorithm treats a
+    directory it cannot load as a package as ABSENT and silently continues to
+    the next candidate rather than erroring -- so a decoy fixture that is
+    malformed in a way an implementer plausibly gets wrong on the first try
+    (no `main`, no `index.js` Node can find) would be skipped in favour of
+    NODE_PATH, and the acceptance test above would then pass vacuously
+    against unfixed code. This control is what would catch that: it proves,
+    in the same image and the same directory, that a bare `require` issued
+    from /workspace really does reach the decoy, before trusting the
+    acceptance test's silence about it.
+
+    pdf-lib gets its own assertion here rather than "the same as puppeteer by
+    symmetry": both decoys throw at module load and html-to-pdf.js's
+    puppeteer require comes first, so in the red state the script dies on
+    puppeteer and never reaches its pdf-lib require at all -- pdf-lib's
+    exposure would otherwise go completely unmeasured by the acceptance test,
+    and pdf-lib is the more damaging hijack of the two: it is what writes the
+    PDF/UA role map `make check-pdf` exists to require.
+    """
+    script = """
+const results = {};
+for (const name of ["puppeteer", "pdf-lib"]) {
+  const entry = { resolved: require.resolve(name) };
+  try {
+    require(name);
+    entry.threw = false;
+  } catch (error) {
+    entry.threw = true;
+    entry.message = String(error.message);
+  }
+  results[name] = entry;
+}
+console.log("<<<CONTROL>>>" + JSON.stringify(results));
+"""
+    result = pipeline.run_in_browser(script, workdir=decoy_tools_workdir, timeout=120)
+
+    marker = "<<<CONTROL>>>"
+    line = next(
+        (line for line in result.stdout.splitlines() if line.startswith(marker)), None
+    )
+    assert line is not None, (
+        f"the control script printed no result (exit {result.returncode})\n"
+        f"stdout: {result.stdout[-2000:]}\nstderr: {result.stderr[-2000:]}"
+    )
+    results = json.loads(line[len(marker):])
+
+    for name, expected_marker in DECOY_MARKERS.items():
+        entry = results[name]
+        assert entry["threw"], (
+            f"require({name!r}) issued from /workspace did not throw at all; "
+            f"the decoy fixture is malformed (Node treated it as absent "
+            f"rather than as a package), so the acceptance test would pass "
+            f"vacuously against unfixed code"
+        )
+        assert expected_marker in entry["message"], (
+            f"require({name!r}) threw {entry['message']!r}, which does not "
+            f"contain {expected_marker!r} -- something other than the "
+            f"planted decoy ran"
+        )
+        assert entry["resolved"].startswith("/workspace"), (
+            f"require.resolve({name!r}) resolved to {entry['resolved']!r}, "
+            f"not under /workspace -- the decoy would not have been reached "
+            f"by a bare require issued from there"
+        )
+
+
+@pytest.mark.integration
+def test_the_missing_tools_guard_names_the_pinned_dir(bare_tools_workdir):
+    """THE GUARD MUST BE PROVEN TO FIRE. AGENTS.md is explicit that a guard
+    which silently does not run is worse than no guard at all
+    (tests/test_export_drift.py exists for exactly that reason), and nothing
+    else in this file would notice if stn-cnm.2's existsSync guard were ever
+    deleted.
+
+    pipeline.NODE_IMAGE is the plain node base image the generated
+    Dockerfile.browser starts FROM, before anything under
+    pipeline.BROWSER_TOOLS_DIR is installed -- so running html-to-pdf.js
+    there, over the same kind of mount the pdf service uses, is "somebody ran
+    `node html-to-pdf.js` on their laptop" made real rather than simulated.
+    One container invocation; it builds no second image, only running the
+    public tag pipeline.NODE_IMAGE already names (already pulled locally, as
+    the base layer of the browser image pdf_workspace built).
+    """
+    result = pipeline.html_to_pdf(
+        "document.html",
+        "document.pdf",
+        workdir=bare_tools_workdir,
+        tag=pipeline.NODE_IMAGE,
+        timeout=60,
+    )
+    assert result.returncode != 0, (
+        "html-to-pdf.js exited 0 under a plain node image with no "
+        f"{pipeline.BROWSER_TOOLS_DIR} at all -- it must refuse rather than "
+        "silently succeed against tools that are not there"
+    )
+    assert pipeline.BROWSER_TOOLS_DIR in result.stderr, (
+        f"the failure did not name {pipeline.BROWSER_TOOLS_DIR}:\n"
+        f"stderr: {result.stderr[-2000:]}\nstdout: {result.stdout[-2000:]}"
+    )
