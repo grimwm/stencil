@@ -92,6 +92,109 @@ RUN apk add --no-cache chromium font-noto ttf-dejavu
 RUN mkdir -p {{ browser_tools_dir }} \
  && printf '%s\n' '{{ browser_manifest }}' > {{ browser_tools_dir }}/package.json
 COPY {{ browser_lockfile_name }} {{ browser_tools_dir }}/package-lock.json
+
+# AND THE DIGEST SAYS WHAT A SUCCESSFUL `npm ci` DOES NOT (stn-egv). The COPY
+# above takes the lockfile out of the build context -- `context: .` in the
+# compose file, which is the generated package directory the consumer owns and
+# edits. `npm ci` then fetches whatever host each `resolved` names and checks
+# `integrity` against a value in that same file, so a consumer-editable file
+# chose which bytes became the puppeteer, pa11y and pdf-lib that `make pdf` and
+# `make check-access` run as uid 0 over the read-write mount. --ignore-scripts
+# does not touch it, for the reason stn-qge gives: nothing has to run at install
+# time, because the payload runs when puppeteer or pa11y runs. Measured before
+# the fix, with one `resolved` host changed and nothing else: npm requested that
+# host.
+#
+# So this carries the sha256 of the lockfile `stencil gen` wrote -- rendered
+# from the same bytes by pipeline.lockfile_digest, never written down, so a
+# re-vendor moves the file and the digest together -- and refuses anything else.
+# It is the stronger half of what tests/test_pins.py already demands of
+# stencil's own copy, where every `resolved` must be a registry.npmjs.org URL
+# for the package it claims to be: one hash covers every URL, every integrity
+# value, and the shape of the dependency graph, all at once.
+#
+# AFTER THE COPY, BEFORE THE INSTALL. format-md verifies its copy rather than
+# the original because its source sits in a bind mount the host can rewrite
+# between the check and the `cp`. There is no such window to close here: a RUN
+# cannot read the build context at all, and COPY has already snapshotted the
+# bytes into a layer nothing outside the build can reach. The placement is the
+# same and the property is the same -- what is hashed is exactly what npm reads
+# -- but it is arrived at from the other side. The property to preserve is that
+# nothing reintroduces a window: no `RUN --mount=type=bind` here, and no
+# `podman build -v`, either of which would put a host-writable path back under
+# the check.
+#
+# ITS OWN RUN, AND THE REASON IS NOT THE ONE YOU FIRST REACH FOR. "The COPY
+# layer's cache key includes the file's content, so a tampered lockfile misses
+# the cache" is true of both engines today and is an argument about how they
+# derive cache keys, which rots. The engine-independent one: a FAILED RUN IS
+# NEVER COMMITTED, so no cache entry for one can exist. A cache hit on this
+# instruction therefore requires both the same parent layer -- the same lockfile
+# bytes -- and the same command text -- the same digest; it replays a pairing
+# that previously PASSED. The guard being skipped and the guard being satisfied
+# are the same event. Folding this into the `npm ci` line below would be
+# fail-safe by construction rather than by that argument, and was rejected only
+# so this reasoning has somewhere to live; if you fold it, keep the argument.
+# The exception either way is an imported registry cache, which BuildKit trusts
+# without re-execution -- nothing stencil generates uses `cache_from`.
+#
+# AFTER `apk add chromium`, DELIBERATELY. A tampered package therefore pays for
+# that layer before being refused. That is cost, not exposure -- nothing hostile
+# has run -- and moving the COPY above it would invalidate the Chromium layer on
+# every re-vendor, which is minutes on every build to save seconds on a build
+# that is about to fail anyway.
+#
+# `>/dev/null` WITHOUT `2>&1`. Measured on the pinned image: a match prints `OK`
+# on stdout, a mismatch prints sha256sum's WARNING on stderr, an absent file
+# prints `can't open`, and an absent sha256sum gives `sh: not found` and exit
+# 127. All four are fail-closed, so this never passes for the wrong reason --
+# but discarding stderr would make all four print the refusal below, and a base
+# image that broke sha256sum would then tell the consumer their lockfile is
+# wrong and send them to re-run `stencil gen` forever over a correct file.
+# Keeping stderr costs nothing and leaks nothing: that line names no digest.
+#
+# THE COMMENTARY STAYS ABOVE THE RUN. The Dockerfile parser deletes a `#` line
+# inside a `\`-continued instruction and /bin/sh never sees it, with no warning
+# -- so a comment moved down into the block silently changes the command that
+# gets built. tests/test_pins.py asserts there is none.
+#
+# WHAT THIS DOES NOT CLOSE. A digest is a checksum, not a signature: it proves
+# two files in this directory agree with each other, and both are files whoever
+# edited the lockfile could edit. Anyone who changes one and recomputes the
+# other passes this check. It is still worth having, because it refuses every
+# edit that touches only the lockfile -- a script, a dependency bot, a
+# half-finished hand edit, a bad merge -- which is what a `resolved` URL in a
+# generated artifact attracts, since it reads as data rather than as a choice of
+# what code to run.
+#
+# AND IT IS ONLY REACHED WHEN THE BUILD ACTUALLY USES THIS FILE, which is a
+# weaker statement than it sounds and is worth keeping straight. `make` pins its
+# compose file explicitly since stn-qli, and an explicit `-f` makes compose
+# ignore `COMPOSE_FILE` outright -- so a `docker-compose.override.yml` or a
+# `.env` dropped beside this Dockerfile no longer redirects `make pdf` or
+# `make check-access` at a different one. What is closed is the documented path.
+# A hand-run `docker compose build pdf` with no `-f` still merges an override,
+# as compose has always done, and builds whatever Dockerfile that names --
+# without touching either file this guard is about. So this guard is what makes
+# stencil's own lockfile authoritative for the build that actually uses it; it
+# is not a claim that nothing else can build this image.
+RUN if ! echo "{{ browser_lockfile_digest }}  {{ browser_tools_dir }}/package-lock.json" \
+      | sha256sum -c >/dev/null; then \
+      echo "Dockerfile.browser: {{ browser_lockfile_name }} is not the file stencil generated." >&2; \
+      echo "That file is stencil's. It is the lockfile this image installs from," >&2; \
+      echo "and editing it has no supported effect: a changed 'resolved' URL would" >&2; \
+      echo "decide which bytes become the puppeteer, pa11y and pdf-lib that run" >&2; \
+      echo "here, as root, over the mounted package -- so the build refuses it" >&2; \
+      echo "rather than installing from it." >&2; \
+      echo "Run 'stencil gen' for this package to restore it." >&2; \
+      echo "If you deliberately override browser-package-lock.json.j2 from your" >&2; \
+      echo "own templates_dir, 'stencil gen' will not help: the digest above is" >&2; \
+      echo "stencil's vendored lockfile, not your rendered one. Override this" >&2; \
+      echo "Dockerfile's guard with it, or drop the override. See STENCIL.md." >&2; \
+      echo "On Windows, see stn-at4: generated files are written CRLF, which" >&2; \
+      echo "changes this digest even though nobody edited the file." >&2; \
+      exit 1; \
+    fi
 #
 # --ignore-scripts, and it costs nothing here. A lifecycle script runs as root
 # during the build, with network, before any test in this repository gets to
