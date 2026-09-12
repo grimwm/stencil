@@ -326,7 +326,11 @@ def check_output_dir(config: dict) -> str | None:
         # base is the config directory. Preserved rather than refused.
         return None
     try:
-        return check_config_path("config", "output_dir", value)
+        return check_gitignore_literal(
+            "config",
+            "output_dir",
+            check_config_path("config", "output_dir", value),
+        )
     except ValueError as error:
         # check_config_path's messages all end "escapes the package
         # directory. Paths are relative to it and must stay inside." --
@@ -364,7 +368,9 @@ def check_package_dir(package_id: str, value) -> str:
     typed. Refused here by name instead, in the pre-flight that lists every
     config problem at once.
     """
-    text = check_config_path(package_id, "dir", value)
+    text = check_gitignore_literal(
+        package_id, "dir", check_config_path(package_id, "dir", value)
+    )
     if not Path(text).parts:
         raise ValueError(
             f"Package {package_id}: dir {text!r} names no directory, so the "
@@ -373,6 +379,53 @@ def check_package_dir(package_id: str, value) -> str:
             "it removes under this one."
         )
     return text
+
+
+# A gitignore line is a PATTERN, not a path, and two characters change what
+# the whole line MEANS when they lead it: `!` negates (re-includes a path the
+# author's own rules ignore) and `#` comments the line out. `dir` and the
+# top-level `output_dir` are the two config values that become the leading
+# segment of every line in the managed section, so they are the two that can
+# do it.
+#
+# MEASURED, against a course-handout repository whose own .gitignore says
+# `*.pdf`, with `dir: "!solutions"`:
+#
+#   $ stencil install
+#   $ git check-ignore -v -- solutions/answers.pdf
+#   .gitignore:7:!solutions/answers*.pdf    solutions/answers.pdf
+#   $ git status --porcelain
+#   ?? solutions/
+#
+# `stencil install` -- the command whose entire purpose is to stop generated
+# files being committed -- UN-IGNORED the answer key and made it committable,
+# silently. That is the worst outcome available in this tool's problem
+# domain, and it is why the refusal is here rather than an escape (`\!` is
+# the documented gitignore escape and would work, but a `dir` beginning with
+# `!` is not a directory name anyone means).
+_GITIGNORE_LEADING = {"!": "negates the line, re-including files git would "
+                      "otherwise ignore", "#": "comments the line out"}
+
+
+def check_gitignore_literal(package_id: str, where: str, value: str) -> str:
+    """Refuse a value that would not behave like a literal path in the
+    managed `.gitignore` section (found by the adversarial review of
+    stn-jl3).
+
+    Applied to `dir` and the top-level `output_dir` only -- the two values
+    that lead a managed line. A metacharacter further along the line is
+    literal to git, so `docs` and the rest need nothing here; the glob
+    refusal below is the exception, because `*` matches anywhere in the
+    pattern and would widen what the section ignores rather than narrow it.
+    """
+    for character, effect in _GITIGNORE_LEADING.items():
+        if value.startswith(character):
+            raise ValueError(
+                f"Package {package_id}: {where} {value!r} starts with "
+                f"{character!r}, which {effect} in the .gitignore section "
+                "stencil manages. This names a directory, not a pattern."
+            )
+    return check_no_glob(package_id, where, value)
 
 
 def check_package_output_dir(package_id: str, value) -> str | None:
@@ -2578,14 +2631,44 @@ def get_generated_files(config: dict) -> list[str]:
 
     contexts = package_contexts(config)
 
+    # stn-jl3. Every entry carries the top-level `output_dir` as well as the
+    # package `dir`, because that is where `gen` and `clean` both resolve to
+    # and this list is the only view git gets of it. Without it, a config
+    # with `output_dir: out` produced a managed section naming `demo/Makefile`
+    # for a file at `out/demo/Makefile`, so the section ignored NOTHING
+    # stencil writes and the whole generated tree was offered to the author
+    # as untracked.
+    #
+    # THE VALUE COMES FROM check_output_dir, not from `config.get`. That is
+    # the shape-checked declared string, and it is already computed on this
+    # path -- package_contexts above calls it -- so this adds no second
+    # spelling of a rule that lives in two places already. It is NOT
+    # `checked_output_base`, which returns a resolved ABSOLUTE path: useless
+    # as a gitignore prefix, and it needs a config_dir this function is not
+    # given.
+    #
+    # Note what that means for `install` specifically: `_main`'s install
+    # branch returns above `checked_output_base`, so on `install` this value
+    # has had its string checks and NOT the containment check. `..` and an
+    # absolute path are already refused by the string half, so the prefix
+    # cannot leave the tree; the deferred half is the symlink case, which
+    # `install` never writes through. Same split STENCIL.md records.
+    #
+    # `Path(value).parts` rather than a string test, so `.`, `./`, `./out`
+    # and `out/` normalize the way git needs: a leading `./` matches nothing
+    # at all in a gitignore pattern, which is a silent way to ignore nothing.
+    declared = check_output_dir(config)
+    output_parts = Path(declared).parts if declared else ()
+    prefix = "/".join(output_parts) + "/" if output_parts else ""
+
     for package_id, context in contexts.items():
         package = config["packages"][package_id]
         pkg_dir = package.get("dir", package_id)
 
         for entry in package_entries(package_id, package, context, config_templates):
-            entries.add(f"{pkg_dir}/{entry}")
+            entries.add(f"{prefix}{pkg_dir}/{entry}")
 
-        entries.add(f"{pkg_dir}/{MANIFEST_NAME}")
+        entries.add(f"{prefix}{pkg_dir}/{MANIFEST_NAME}")
 
     return sorted(entries)
 
@@ -3352,13 +3435,25 @@ def clean_generated(
     return problems
 
 
-def install_gitignore(config: dict, dry_run: bool = False):
+def install_gitignore(config: dict, config_dir: Path, dry_run: bool = False):
     """Install or update .gitignore with stencil-managed entries.
 
     Uses marker comments to manage a section within .gitignore, allowing
     stencil to update its entries without disturbing user entries.
+
+    BESIDE THE CONFIG FILE, not in the working directory (stn-jl3). Every
+    entry this writes is relative to the config file's directory -- that is
+    what `output_dir` and `dir` are relative to -- so a section written into
+    a `.gitignore` somewhere else names paths that do not exist from there.
+    `stencil --config sub/.config.yaml install` from a repository root wrote
+    a section none of whose lines applied, while the directory a fresh clone
+    actually opens got nothing.
+
+    `config_dir` is positional-required for the reason `brand_problem`'s is:
+    a default would let a caller forget it and get the old behaviour back
+    silently, which is the shape of defect this whole epic exists to close.
     """
-    gitignore_path = Path.cwd() / ".gitignore"
+    gitignore_path = config_dir / ".gitignore"
 
     entries = get_generated_files(config)
 
@@ -3398,10 +3493,34 @@ def install_gitignore(config: dict, dry_run: bool = False):
         print("-" * 40)
         print(new_content)
     else:
+        # Written with `write_text`, deliberately, and NOT through
+        # `write_text_nofollow` like everything stn-h5q covers. This is the
+        # AUTHOR's file, not one stencil generated: a `.gitignore` that is a
+        # symlink into a dotfiles repository is a thing people really do, and
+        # refusing it would break a working setup to guard a file whose whole
+        # content the author already controls.
         gitignore_path.write_text(new_content)
         print(f"{action} {gitignore_path}")
         for entry in entries:
             print(f"  {entry}")
+
+    # The section this used to write, if it is somewhere else. Named rather
+    # than removed: it is a file outside the config directory, possibly in
+    # another repository, and deleting from there is a worse hazard than
+    # leaving a stale block. But saying nothing would leave the author with
+    # two managed sections and stencil maintaining only one.
+    stale = Path.cwd() / ".gitignore"
+    if stale != gitignore_path and stale.is_file():
+        try:
+            if GITIGNORE_START in stale.read_text():
+                print(
+                    f"Note: {stale} still holds a stencil section from an "
+                    "older version, which stencil no longer maintains. "
+                    "Delete that block; the managed section now lives beside "
+                    "the config file."
+                )
+        except OSError:
+            pass
 
 
 def main():
@@ -3542,7 +3661,7 @@ def _main():
         except ValueError as e:
             print(f"Error: {e}", file=sys.stderr)
             sys.exit(1)
-        install_gitignore(config, args.dry_run)
+        install_gitignore(config, config_dir, args.dry_run)
         return
 
     if "packages" not in config:
