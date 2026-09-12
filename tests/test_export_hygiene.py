@@ -107,19 +107,26 @@ def test_no_credential_shaped_string_reaches_the_public_export(pattern, what):
         )
 
 
+# Built at runtime rather than written down: a literal in the documented
+# example shape is exactly what GitHub's secret scanning is for, and it filed
+# an alert on this file the first time these were spelled out (2026-09-12).
+# None of these is a credential; the AWS ones are Amazon's own example id.
+_EXAMPLES = [
+    ("ghp_", "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789", "a GitHub token"),
+    ("github_pat_", "11ABCDEFG0123456789_abcdefghij", "a fine-grained GitHub token"),
+    ("AKIA", "IOSFODNN7EXAMPLE", "an AWS access key id"),
+    ("ASIA", "IOSFODNN7EXAMPLE", "an AWS access key id"),
+    ("xoxb-", "0123456789-abcdefghij", "a Slack token"),
+    ("-----BEGIN ", "RSA PRIVATE KEY-----", "a private key"),
+]
+
+
 @pytest.mark.parametrize(
     "sample,what",
-    [
-        ("ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789", "a GitHub token"),
-        ("github_pat_11ABCDEFG0123456789_abcdefghij", "a fine-grained GitHub token"),
-        ("AKIAIOSFODNN7EXAMPLE", "an AWS access key id"),
-        ("ASIAIOSFODNN7EXAMPLE", "an AWS access key id"),
-        ("xoxb-0123456789-abcdefghij", "a Slack token"),
-        ("-----BEGIN RSA PRIVATE KEY-----", "a private key"),
-    ],
+    [(prefix + rest, what) for prefix, rest, what in _EXAMPLES],
+    ids=[prefix.strip("-_ ") for prefix, _, _ in _EXAMPLES],
 )
 def test_each_credential_shape_is_recognised(sample, what):
     """The patterns' own positive cases, so a regex loosened by accident
-    cannot quietly stop matching the form it was written for. The samples
-    are the documented example shapes, not credentials."""
+    cannot quietly stop matching the form it was written for."""
     assert any(p.search(sample) for p, w in SECRETS if w == what), sample
