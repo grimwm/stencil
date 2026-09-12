@@ -558,8 +558,66 @@ reported clean at the versions 0.31.0 pinned; that was a measurement of a day, n
 property of the pins, and the lockfile does not change that — it fixes *which* code you
 get, not whether that code is sound.
 
-The images are still pinned by mutable tag rather than by digest, for all three of them —
-`stn-8vi`.
+**The images are pinned by manifest digest too, not only by tag** (`stn-8vi`), and bumping
+one is two steps for the same reason the npm pins are: edit the tag, then re-resolve.
+
+```bash
+$EDITOR stencil/pipeline.py                    # the tag, in IMAGE_TAGS
+python3 scripts/resolve_image_digests.py       # re-resolve, needs docker/podman + network
+```
+
+Commit both together, along with the `stencil/assets/image-digests.json` the script
+rewrites. `NODE_IMAGE`, `PANDOC_IMAGE` and `VERAPDF_IMAGE` now carry
+`<tag>@sha256:<digest>`, and the digest is looked up **by** the tag in
+`image-digests.json` rather than written inline beside it as one string. That is
+deliberate: a registry resolves `name:tag@digest` BY THE DIGEST and ignores the tag
+entirely, so an inline pair that goes stale — tag bumped, digest not re-resolved — would
+silently keep building the OLD image under a name that now says something else. Keyed by
+the tag, that state cannot be expressed: `pinned_image()` has nothing to look up for a tag
+with no entry, so a forgotten re-resolve fails loudly and offline, the same way `npm ci`
+refuses a lockfile the manifest does not satisfy. It fails at the first *read* of
+`NODE_IMAGE`/`PANDOC_IMAGE`/`VERAPDF_IMAGE` rather than at import, which is deliberate and
+is why those three resolve lazily: failing at import would take `stencil version` down with
+them, and — worse — would deadlock `scripts/resolve_image_digests.py` itself, which has to
+import `pipeline` to read `IMAGE_TAGS` before it can resolve the very tag that is missing.
+
+Pinning by digest broke the pull guard every *generated* package runs, so the fix reaches
+the generated Makefile, not only `pipeline.py`. Measured: `docker images -q <ref>` prints
+nothing for a reference that carries a digest, even when that exact image is present
+locally under it, while the bare-tag form of the same probe prints the id — so the old
+`ensure_image` guard could never succeed once a digest was pinned, and every `make doc`,
+`make pdf` and `make format-md` would have pulled again on every build. The guard runs
+`docker image inspect <ref>` now (through `$(CONTAINER)`, derived from `$(DC)` so a
+podman-only host probes with `podman` rather than a hardcoded `docker`), which checks the
+reference actually named, digest included — stricter than the old probe was ever able to
+be, since it also catches a wrong digest rather than only a missing name.
+
+veraPDF is the odd one out: `verapdf/cli:v1.30.2` is a single `linux/amd64` manifest, not a
+manifest list, so there is no index to resolve per architecture and its pin is an ordinary
+image digest rather than a multi-arch one. It already runs emulated on arm64 today; pinning
+the digest makes that fact visible rather than causing it, and freezes it — a future
+multi-arch repush of the same tag would otherwise start running it native on arm64 with
+nothing in any diff to say so.
+
+**The cost of a digest pin, so it is not "fixed" back to a tag later.** This is the same
+shape of regret AGENTS.md already records about Chromium above — a pin with no consumer
+override — reproduced deliberately on three more images rather than silently:
+
+1. Registry garbage collection gives a digest pin an expiry date a tag pin did not. A tag
+   degrades to different bytes under the same name; a digest degrades to `manifest unknown`, once upstream repushes the tag and the old manifest is untagged and eventually
+   reclaimed.
+1. `docker save` → transfer → `docker load` loses `RepoDigests`, so both `docker image inspect <ref>@sha256:...` and the compose pull fail against a reference that worked fine
+   as a tag. A pull-through cache preserves digests; a save/load air gap does not.
+1. `generate.py`'s `reject_derived` refuses `template_env: {pandoc_image: ...}` on purpose,
+   so a consumer behind a mirror has no supported override, and hand-editing the generated
+   Makefile is undone by the next `stencil gen`.
+
+The recovery path is the same for all three: a pull failing with `manifest unknown` means
+the digest was garbage-collected upstream — re-resolve with
+`python3 scripts/resolve_image_digests.py` and regenerate. There is deliberately no escape
+hatch beyond that; wiring an override through `Makefile-doc.j2`, `Makefile-pkg.j2` and
+`docker-compose-html.yml.j2` would let an environment variable downgrade the very pin this
+exists to create.
 
 ### Keep the two guides in step with the templates
 

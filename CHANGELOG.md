@@ -111,6 +111,115 @@ How the version gets bumped is written down in
   worse than the corruption being guarded against. It retries once and then
   refuses in the guard's own words.
 
+- **The three images the scaffolding pulls are pinned by manifest digest, not only by
+  tag** (`stn-8vi`, closing the sibling gap `stn-5hv` left open). A registry tag is
+  mutable — `docker.io/pandoc/core:3.10.0.0` can be repushed, and every rebuild after
+  that silently gets different bytes under a name that says otherwise. `stn-5hv` fixed
+  the layer above this — the npm tree the browser image installs is now fixed by a
+  committed lockfile and verified by integrity hash — which left the images themselves
+  as the remaining floating input.
+
+  **Measured**, 2026-09-12: `node:24.20.0-alpine3.24` resolves to the OCI image index
+  `sha256:e67514e5…`, covering `linux/amd64`, `linux/arm64/v8` and `linux/s390x`;
+  `pandoc/core:3.10.0.0` resolves to the index `sha256:8d7467e8…`, covering
+  `linux/amd64` and `linux/arm64`. `NODE_IMAGE` and `PANDOC_IMAGE` now carry
+  `<tag>@sha256:<digest>`, keyed by the tag in the new
+  `stencil/assets/image-digests.json` rather than written inline beside it — a
+  registry resolves `name:tag@digest` **by the digest** and ignores the tag, so an
+  inline pair that goes stale (tag bumped, digest not re-resolved) would silently keep
+  building the old image under a name that no longer describes it. Keyed, that state
+  cannot be expressed: `pipeline.pinned_image()` raises for a tag with no recorded
+  digest, loudly and offline, the same way `npm ci` refuses a lockfile the manifest
+  does not satisfy.
+
+  `scripts/resolve_image_digests.py` writes the file, following
+  `scripts/vendor_page_assets.py`'s shape — `urllib`, a maintainer runs it once with
+  the network — but hardened well past
+  that, because this script is the step that *establishes* trust rather than merely
+  caching a CDN asset: what it writes is pinned permanently and rendered into a
+  Makefile, a compose file and a `FROM` line. It refuses every redirect on the
+  manifest and token requests (measured: Hub does not redirect either today, so this
+  costs nothing), drops proxy inheritance, computes the digest locally rather than
+  trusting the advertised `Docker-Content-Digest` header, and cross-checks the result
+  against a real `docker pull`'s `RepoDigests` — by membership, not `[0]`, because
+  podman records the arch-specific child digest there as well as the index digest and
+  `[0]` compares against the wrong one under podman. All three tags resolve before one
+  write, so a rate limit on the third cannot leave one fresh digest sitting beside two
+  stale ones in a file that looks complete.
+
+- **`verapdf/cli:v1.30.2` turned out not to be a manifest list at all.** The source
+  ticket assumed all three images were multi-arch, the way node and pandoc are.
+  Measured instead: veraPDF's tag resolves to a single
+  `application/vnd.docker.distribution.manifest.v2+json`, `linux/amd64` only —
+  `sha256:d5ee3296…` — with no index to resolve a per-architecture digest from. Its pin
+  is an ordinary image digest, `image-digests.json` records the single-arch media type
+  by name rather than treating "not an index" as an error, and a test checks for it
+  explicitly so a future multi-arch veraPDF release is a deliberate edit rather than a
+  silent pass. It already runs emulated on arm64 today; the digest makes that visible
+  rather than causing it, and freezes it — a later multi-arch repush of the same tag
+  would otherwise start running it native on arm64 with nothing in any diff to say so.
+
+- **The generated `ensure_image` pull guard could not see a digest-pinned image**, so
+  pinning the three above without this would have made every `make doc`, `make pdf`
+  and `make format-md` pull on every build. Measured: `docker images -q <ref>` prints
+  nothing for a reference that carries a digest, even when that exact image is present
+  locally under it, while the bare-tag form of the same probe prints the id — the
+  guard looked like it worked because some other tag happened to satisfy it, while
+  compose pulled the pinned reference anyway. The guard now runs `docker image inspect <ref>`, which checks the reference actually named, digest included, and reports the
+  image absent for a wrong digest — stricter than the old probe was ever able to be.
+  Both the POSIX and the Windows branch changed; the old literal was one string shared
+  by both, so a fix to one alone would have left every Windows consumer pulling on
+  every build with a green suite.
+
+  The runtime the probe names is derived rather than hardcoded now too: `CONTAINER = $(firstword $(subst -, ,$(DC)))` reads `docker` or `podman` out of whichever of the
+  four `DC` spellings `pipeline.compose_command()` falls through to, because a
+  podman-only host has always failed this probe outright — `docker images -q` doesn't
+  merely miss the digest there, it fails to run at all.
+
+- **The cost of pinning by digest is written down, not only accepted silently.** A
+  digest pin gives a consumer three new ways to fail that a tag pin did not: registry
+  garbage collection turns a repushed tag into `manifest unknown` instead of quietly
+  different bytes; `docker save`/`load` loses `RepoDigests`, so an image that worked
+  fine as a tag fails both `image inspect` and the compose pull after a save/load air
+  gap; and `generate.py`'s `reject_derived` gives a consumer behind a mirror no
+  supported override. The recovery path is the same for all three and is now in
+  `AGENTS.md` next to the pin: a pull failing with `manifest unknown` means the digest
+  was garbage-collected upstream — re-resolve with
+  `python3 scripts/resolve_image_digests.py` and regenerate.
+
+- **`format-md` no longer executes a consumer's prettier config** (`stn-20h`).
+  The service installs prettier into `/tmp/fmt` precisely so npm resolves
+  stencil's manifest and not the package's. That answered which *manifest*, and
+  stopped one loader short: prettier's own config discovery was still rooted in
+  the mount.
+
+  **Measured**, running the generated service the way `make pkg` does, on the
+  pinned node image with the pinned prettier: a `.prettierrc.cjs` in the package
+  was evaluated as uid 0 and wrote to the read-write mount; and a
+  `.prettierrc.json` — a file containing no JavaScript at all — named a
+  `plugins` path that prettier then required out of the package's own
+  `node_modules`, also as uid 0. The second is the one that matters, because
+  "we only ship JSON" was never a defence. Both ran with the network up, on
+  every build, and the build printed its usual success output afterwards.
+
+  `--no-config` closes both. There is deliberately no allowlist of safe config
+  formats: the dangerous file in the second case was the inert-looking one, and
+  a `plugins` entry is available in every format prettier reads.
+
+  **What this costs a consumer, and it is not nothing.** A package's own
+  prettier settings stop applying — so do `.editorconfig`'s, including
+  `end_of_line` and `indent_size`, which is the one most likely to surprise a
+  Windows-authored repository whose markdown will come back LF. Plugins loaded
+  through a config stop loading. Nothing is printed when this happens and
+  `--write` means the reformat is already on disk, so run `make format-md` on a
+  clean tree first and commit the result as its own commit, before anything
+  else. `.prettierignore` and `.gitignore` still apply — they choose which files
+  are formatted rather than what code runs — and they remain the way to keep the
+  formatter away from a directory. If you also run prettier yourself, give it
+  the same flags or exclude the package, or the two will take turns rewriting
+  each other's output. [AUTHORING.md](AUTHORING.md#fenced-divs-and-prettier)
+  says all of this to the person writing the markdown.
+
 ## 0.38.0
 
 - **Two test runs at once no longer corrupt each other** (`stn-zim`). The

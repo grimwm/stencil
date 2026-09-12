@@ -1,7 +1,8 @@
 # Vendored assets
 
-Two kinds of artifact live here, both fetched once by a script and committed, so
-that `stencil gen` ships them without touching the network.
+Three kinds of artifact live here, each fetched once by a script and committed. Two of
+them are shipped into every generated package so that `stencil gen` never touches the
+network; the third is stencil's own build metadata and never leaves this repository.
 
 ## Page assets
 
@@ -63,3 +64,33 @@ Say plainly what this checklist is carrying: a pin bumped without re-vendoring
 fails loudly, in the tests and again in `npm ci`. **A lockfile re-vendored with a
 newer transitive tree while the pins are unchanged passes every test and every
 build.** That case is a person's job, and it is the reason this section exists.
+
+## Image digests
+
+`image-digests.json` records, for each tag in `pipeline.IMAGE_TAGS`, the manifest
+digest a build actually pulls: `NODE_IMAGE`, `PANDOC_IMAGE` and `VERAPDF_IMAGE` are
+`<tag>@sha256:<digest>`, looked up here by the tag rather than carried inline beside
+it. **Unlike the two lockfiles above, this file is not shipped into a generated
+package.** It is stencil's own build metadata — what a package actually receives is
+the resolved `tag@digest` string, already rendered into its compose file, Dockerfile
+and Makefile by `stencil gen`.
+
+Re-resolve after changing a tag in `IMAGE_TAGS`, and commit both in one commit:
+
+```bash
+python3 scripts/resolve_image_digests.py   # needs docker or podman, and the network
+```
+
+The script resolves all three tags before writing anything, so a rate limit or a
+network failure partway through cannot leave one new digest sitting beside two stale
+ones in a file that looks complete. It also records the `media_type` and the
+`platforms` each tag's manifest covers — node and pandoc are OCI image indexes
+spanning `linux/amd64` and `linux/arm64`; veraPDF has no index at all, only a single
+`linux/amd64` manifest, and is recorded that way rather than treated as an error, so
+a future multi-arch veraPDF release is a deliberate edit here rather than a silent
+pass.
+
+What no test can judge, and a reviewer must: `image-digests.json` is build output, not
+prose, so a re-resolve that changes a digest without a tag change in the same diff is
+the thing to stop and ask about — it means the tag was repushed upstream, which is
+exactly the drift a digest pin exists to make loud rather than silent.
