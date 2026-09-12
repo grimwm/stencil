@@ -11,6 +11,132 @@ How the version gets bumped is written down in
 
 ## 0.39.0
 
+- **The output side's writes are contained at every component, not only at the
+  package directory** (`stn-h5q`, `stn-17h`, `stn-1a4`, `stn-jl3`). These are the
+  four residuals `stn-pe3`/`stn-vhr`/`stn-40a`/`stn-9rn` named below and did not
+  close. Each was reproduced before it was fixed, and each reproduction is now a
+  test that asserts on the file outside the tree rather than on an exit code.
+
+  **This is a behaviour change in five places.** A `dir: "."` or `dir: ""`
+  generated and cleaned at exit 0 yesterday and is refused today; a package-level
+  `output_dir` carrying a metacharacter, whitespace, `~`, an absolute path, `#` or
+  a glob is refused; a `dir` or top-level `output_dir` starting with `!` or `#` is
+  refused; the managed `.gitignore` section's lines gain the top-level
+  `output_dir` prefix; and that section is now written beside the config file
+  rather than in the working directory.
+
+  **The consumer configs were not re-measured for this one**, unlike `stn-pe3`
+  below — they are not in this checkout, and a claim to have checked them would
+  be worth less than saying so. What was done instead: each refused value is one
+  that cannot appear in a working config by accident (`.` and `""` for `dir`, a
+  leading `!` or `#`, a metacharacter), the `..` escape a consumer is known to
+  rely on is deliberately preserved *and* pinned by a new test at the declared
+  value, and the `.gitignore` relocation is a no-op for any `stencil install` run
+  from the config file's own directory, which is how the documented workflow runs
+  it. Anyone running it from elsewhere is told about the section left behind.
+
+  - `stn-h5q` — `gen` followed a link at any component *below* the package
+    directory, which `stn-vhr`'s check cannot see because the package directory
+    itself is genuine and resolves cleanly. Four ways: a symlink at the generated
+    file (`write_text` has no `O_NOFOLLOW`); a **hardlink** at the same place,
+    which no path check can ever catch because the second name for the inode
+    lives outside and `resolve()` correctly reports the path contained; a
+    symlinked intermediate directory under a nested `dest`, which
+    `mkdir(parents=True)` walks happily; and `copy_brand_image`'s destination,
+    whose *source* has taken `O_NOFOLLOW` care since `stn-ttg`. All four exited 0
+    with a success message naming a path inside the tree, and the third left the
+    package permanently un-cleanable.
+
+    `gen` now checks every component of every destination before it creates
+    anything — an allowlist, not a denylist: a regular file with one link at the
+    last component, a directory at every other. That matters more than it sounds,
+    because a **FIFO** is neither a symlink nor a regular file, needs no
+    privilege to create, and made the write block *forever* — `stencil gen` hung
+    with no timeout and `clean` then left the FIFO in place. The writes use
+    `O_NOFOLLOW` and `O_NONBLOCK`, and the `.sh` execute bit is set through the
+    descriptor just written rather than by reopening the path.
+
+    **What that makes symmetric is the parent.** `gen` and `clean` now compute it
+    with one shared function, so anything `gen` writes, `clean` can remove — a
+    second copy agreeing today and drifting later would have closed the symptom
+    and left the cause. The final component stays asymmetric deliberately: `gen`
+    refuses a link there because it would follow it, `clean` unlinks one without
+    resolving it because that is the only way such a package is ever cleanable.
+    So `gen` is at least as strict as `clean`, never the reverse.
+
+    Two things this does **not** close, filed rather than described away: a
+    symlink planted at an intermediate directory *between* the check and the
+    write (`stn-avv`, with the descriptor-walk fix — it needs write permission on
+    one directory in the output tree, not the running user's whole authority,
+    and the earlier note claiming otherwise was wrong), and a
+    `.stencil-manifest.json` stencil did not write (`stn-jez`).
+
+    It also closes a live bug nobody had filed: a template `dest` *derived from*
+    `src` went through no check at all, so `src: "a b.txt.j2"` generated
+    `a b.txt` at exit 0 and `clean` then refused its own manifest entry for
+    containing whitespace — `stn-9rn`'s permanently-un-cleanable package,
+    complaining about an entry the author never wrote.
+
+  - `stn-17h` — `dir: "."` made the package directory the config directory
+    itself, and every containment check in the tree endorsed it: `Path(".").parts`
+    is empty so there is no `..` to find, and `relative_to` answers yes for a path
+    *equal* to the base. A planted `.stencil-manifest.json` — a gitignored JSON
+    file, invisible in a diff — was then a delete list anchored at the repository
+    root, and removed a hand-written markdown file, a dotfile holding a secret and
+    a whole source directory at exit 0. Containment now requires *strictly*
+    beneath, in the one helper `gen` and `clean` both go through, so a `dir` that
+    is a symlink back to the output base is caught too.
+
+    **This does not close the planted manifest itself**, and the ticket's summary
+    should not be read as saying it does: a manifest with no `package` key
+    bypasses `clean`'s ownership guard under an ordinary `dir`, reproduced and
+    filed as `stn-jez`.
+
+  - `stn-1a4` — the package-level `output_dir` was the last package path key with
+    no validation of any kind, and the only one that lands in a Make *variable*
+    rather than a recipe word, so a metacharacter there is a second command:
+    `output_dir: "../../../../../../tmp/pwn; echo OWNED"` generated at exit 0 and
+    made `make doc` run `mkdir -p` and then `echo OWNED`. It now gets
+    `check_config_path`'s whole class except the `..` clause, which stays off
+    because that escape is documented and a consumer may depend on it — plus `#`,
+    which comments out the `OUT_HOST` assignment, and glob characters, which make
+    the generated compose file unparseable YAML when they lead. The `#` case
+    measured here on GNU Make 3.81: `OUT_HOST := ../../build#x` reads back as
+    `../../build`, so the Makefile creates and `rm -f`s one directory while the
+    compose mount — YAML keeps the `#` mid-scalar — sends the container's output
+    to another.
+
+    Worth recording how close this came to being "fixed" wrongly: the only `..`
+    the test suite pinned was in the *derived* `package_output_dir`, never in a
+    declared value, so a verbatim `check_config_path` call would have kept every
+    test green while deleting the feature. There is now a test that declares it.
+
+    And the escape means what it says: stencil writes nothing there, but the
+    package stencil generates `mkdir -p`s, `rm -f`s and root-bind-mounts it.
+
+  - `stn-jl3` — `get_generated_files` emitted `<dir>/<entry>` with no top-level
+    `output_dir` prefix while `gen` and `clean` both resolve one, so with
+    `output_dir: out` the managed section listed `demo/Makefile` for a file at
+    `out/demo/Makefile` and ignored nothing stencil writes. `install_gitignore`
+    separately wrote to the working directory rather than beside the config whose
+    directory those entries are relative to. Both fixed, and proven with
+    `git check-ignore` on a real tree rather than by reading the section — which
+    is how it shipped in the first place. A section left behind by an older
+    stencil in a different directory is now named by `install` so you can delete
+    it; it is not removed for you, because it may be in another repository.
+
+    **A managed line is a pattern, not a path**, and that turned out to matter
+    more than the prefix. A leading `!` negates a gitignore line, and `dir` and
+    the top-level `output_dir` lead every line in the section. On a handout
+    repository whose own `.gitignore` says `*.pdf`, `dir: "!solutions"` made
+    `stencil install` — the command whose entire purpose is to stop generated
+    files being committed — *un-ignore the answer key* and make it committable,
+    silently. Measured here: with the managed line present, `git check-ignore -q`
+    on the answer key exits 1 and `git status` lists it as untracked; without it,
+    the author's own `*.pdf` rule applies and it exits 0. Since this change moves the section into the file holding your own
+    rules, which is where a negation first has something to negate, `!`, `#` and
+    glob characters are refused in both keys.
+
 - **Every configured path that names the output side is now checked and
   contained** (`stn-pe3`, `stn-vhr`, `stn-40a`, `stn-9rn`). The input side got
   this in `stn-vhm`, `stn-c25` and `stn-k73`; three keys on the output side
