@@ -12,11 +12,95 @@ format-md: ## Format markdown files
 	$(STENCIL_COMPOSE) run --rm format-md
 
 {% if has_pages %}
+# Helper to define comma (must be before its use -- which now includes the
+# character lists below, where a comma is an allowed character)
+comma := ,
+
+# WITH, `with` AND BUILD_DATE ARE CHECKED AGAINST A CHARACTER CLASS BEFORE
+# ANYTHING INTERPOLATES THEM (stn-cb8). All three reach a recipe, and before
+# this there was nothing between the caller's value and /bin/sh. MEASURED
+# against a real generated package:
+#
+#   $ make doc DC=true 'BUILD_DATE=2026-01-01";touch /tmp/PWN;"'
+#   $ ls /tmp/PWN                    # *** the injected command RAN ***
+#
+#   $ make doc DC=true 'WITH=a;/tmp/mark.sh;b'
+#   WITH-MARKER-RAN                  # *** and so did this one ***
+#
+# CHECKED, NOT QUOTED, and that is the decision worth reading. Quoting cannot
+# do this job in either direction:
+#
+#   * make runs recipes through cmd on Windows, where a single quote is an
+#     ordinary character and not a quoting one, so the POSIX spelling of that
+#     fix would silently do nothing on the arm with no shell to speak of.
+#   * MAKE EXPANDS THESE VALUES ITSELF, before any shell sees them. MEASURED:
+#     `WITH='$(shell touch /tmp/PWN)'` in the ENVIRONMENT created the file
+#     under `make -n`, with no recipe run at all, because METADATA_FLAGS below
+#     is `:=` and expands WITH right here. No shell quoting reaches that,
+#     which is why the check reads `$(value ...)` -- the UNEXPANDED text.
+#
+# WHAT `$(value ...)` DOES AND DOES NOT CLOSE, stated rather than implied: it
+# defeats a `$(shell ...)` smuggled into a RECURSIVE assignment, which is
+# every ordinary route -- the environment, `make X=...`, `make -e`,
+# `MAKEFLAGS=X=value`. A SIMPLY-EXPANDED spelling is expanded by make before
+# it reads this file at all, so the side effect has already happened and the
+# check sees only the clean remainder. MEASURED:
+# `MAKEFLAGS='BUILD_DATE:=$(shell touch /tmp/PWN)2026-01-01'` fires the
+# $(shell) and passes the check. Nobody exports a `:=` spelling by accident,
+# so that stays open and named rather than papered over.
+#
+# THE ALLOWED SETS, written as lists of characters because make has no regex
+# and no way to iterate a string. _stencil_residue folds $(subst) over the
+# list and returns whatever the value has left over.
+#
+# THE DATE CLASS IS DERIVED, NOT INVENTED. build-date is assigned straight
+# into `meta.date` by frontmatter-filter.lua, which then runs it through the
+# same grammar `date:` and `due:` use -- so these are exactly the characters
+# appearing in tests/test_dates.py's ACCEPTED list (yyyy-mm-dd and
+# yyyy-mm-ddThh:mm), and a test iterates that list through this check so the
+# two layers cannot drift. It IS ONLY A CHARACTER CLASS, never a date check:
+# `2026-13-45T99:99` passes here and is refused later, by the filter, with a
+# message about months.
+_stencil_chars_date := 0 1 2 3 4 5 6 7 8 9 - T :
+_stencil_chars_with := a b c d e f g h i j k l m n o p q r s t u v w x y z A B C D E F G H I J K L M N O P Q R S T U V W X Y Z 0 1 2 3 4 5 6 7 8 9 - _ $(comma)
+
+_stencil_residue = $(if $(1),$(call _stencil_residue,$(wordlist 2,$(words $(1)),$(1)),$(subst $(firstword $(1)),,$(2))),$(2))
+
+# THE SENTINEL IS DRAWN FROM THE ALLOWED LIST, AND THAT IS LOAD-BEARING. The
+# residue holds, by construction, zero allowed characters -- so a sentinel
+# taken from the list cannot occur in it, and `<s><s>` can appear as a word
+# only when the residue is empty. With an OUTSIDE character the guard passes
+# values it was written to refuse, SILENTLY: MEASURED on GNU Make 3.81 and
+# 4.4.1, an `x` sentinel against the date class accepted
+# `BUILD_DATE=2026-01-01 xx ";touch /tmp/PWN;"` -- residue ` xx ";touch ...`,
+# wrapped `x xx ";touch ...x`, and $(filter) matched the word `xx`. Do not
+# "simplify" this to a fixed letter.
+#
+# AND THE TEST IS $(filter), NOT $(if $(strip ...)) OR $(words). A residue of
+# pure whitespace is not empty and must not read as empty -- a NEWLINE
+# expanded into a recipe line is a second command. $(strip) reads such a
+# residue as empty on both makes; $(words) catches it on 4.4.1 and NOT on
+# 3.81, where the same value is still one word. MEASURED, all three.
+_stencil_in_class = $(filter $(firstword $(2))$(firstword $(2)),$(firstword $(2))$(call _stencil_residue,$(2),$(value $(1)))$(firstword $(2)))
+_stencil_check_class = $(if $(call _stencil_in_class,$(1),$(2)),,$(error $(1) may contain only $(3) -- got: $(value $(1))))
+
+# WITH AND `with` ARE CHECKED HERE, AT PARSE TIME, because METADATA_FLAGS
+# below is `:=` and expands them on that very line -- a check placed after it
+# would be reporting on an expansion that had already happened. `with` is
+# checked even when WITH is set and `?=` would have dropped it: refusing a
+# value that was going to be ignored is the right direction, and it is one
+# fewer rule to remember.
+$(call _stencil_check_class,WITH,$(_stencil_chars_with),letters digits - _ and commas)
+$(call _stencil_check_class,with,$(_stencil_chars_with),letters digits - _ and commas)
+
 # with: Comma-separated features to include (e.g., with=hidden or with=hidden,draft)
 WITH ?= $(with)
 
-# Helper to define comma (must be before its use)
-comma := ,
+# FROZEN, so $(value WITH) at the point of use below is the text checked above
+# rather than the `$(with)` this line would otherwise leave behind.
+# METADATA_FLAGS and OUTPUT_SUFFIX are `:=` already, so this changes nothing
+# about when WITH is read.
+WITH := $(WITH)
 
 # Build metadata flags from WITH variable
 METADATA_FLAGS := $(foreach feat,$(subst $(comma), ,$(WITH)),--metadata include-$(feat)=true)
@@ -26,7 +110,46 @@ METADATA_FLAGS := $(foreach feat,$(subst $(comma), ,$(WITH)),--metadata include-
 # day, not the image's UTC one -- a handout generated at 7pm Central otherwise
 # prints tomorrow's date. frontmatter-filter.lua falls back to its own
 # os.date() when this is absent, so a hand-run pandoc still works.
+#
+# ONLY A `$` IS REFUSED HERE; THE CLASS CHECK WAITS FOR THE POINT OF USE, and
+# the asymmetry with WITH above is deliberate. `BUILD_DATE` is not stencil's
+# name -- it is the OCI `org.opencontainers.image.created` convention, and
+# a `BUILD_DATE` set from `date -u +%Y-%m-%dT%H:%M:%SZ` is ordinary CI
+# boilerplate. That
+# value carries a `Z`, which is out of class. Refusing it HERE would abort
+# `make help` and `make clean` for someone who exported it once for something
+# unrelated and never goes near a date stamp -- the same actor the
+# COMPOSE_FILES origin guard serves, and the same call stn-3y8 made when it
+# left a stray CONTAINER inert rather than fatal. So the class is enforced on
+# the targets that actually interpolate the value, and nowhere else.
+#
+# The `$` refusal cannot wait, because the freeze below expands this value:
+# without it `make help` alone would run a `$(shell ...)` smuggled in from the
+# environment. A `$` is never legitimate in a date.
+$(if $(findstring $$,$(value BUILD_DATE)),$(error BUILD_DATE must not contain a `$$` -- got: $(value BUILD_DATE)))
 BUILD_DATE ?= $(shell date +%F)
+
+# Frozen for the reason WITH is: it makes $(value BUILD_DATE) at the point of
+# use the date itself rather than this line's own `$(shell ...)` text, so the
+# check below reads the UNEXPANDED value and refuses a late one BEFORE its
+# expansion runs anything.
+BUILD_DATE := $(BUILD_DATE)
+
+# THE POINT-OF-USE CHECK, expanded by every recipe that interpolates either
+# value. The parse-time checks above see only what was assigned above them,
+# and two routes reach past that WITHOUT a makefile the consumer controls:
+# MAKEFILES (an environment variable naming makefile text to read first) and,
+# on GNU Make 4.x, MAKEFLAGS=--eval -- both already documented in
+# Makefile-base.j2 as routes that reach further than the consuming makefile.
+# Either can carry a PATTERN-SPECIFIC assignment, invisible at parse time and
+# live by the time a recipe expands. MEASURED on GNU Make 3.81 and 4.4.1:
+# `MAKEFILES=evil.mk` carrying `%: BUILD_DATE = 2026-01-01";touch /tmp/PWN;"`
+# reached the recipe and ran the command; with this check it does not.
+#
+# It expands to nothing when both values are in class, so it costs a generated
+# package only the check. A consumer's own in-class target-specific value --
+# `doc: BUILD_DATE = 2026-09-01` -- still passes.
+_stencil_late_check = $(call _stencil_check_class,BUILD_DATE,$(_stencil_chars_date),digits and - T :)$(call _stencil_check_class,WITH,$(_stencil_chars_with),letters digits - _ and commas)
 
 {% if has_package_output_dir %}
 # Build products go somewhere other than beside the sources.
@@ -114,7 +237,7 @@ pre-build:{% for step in pre_build %} {{ step.name }}{% endfor %}
 {% endif %}
 doc: out-dir{% if has_pre_build %} pre-build{% endif %} format-md{% if has_slides %} slide{% endif %} ## Generate HTML{% if has_docs and has_slides %} (documents and slide decks){% elif has_slides %} (slide decks){% endif %} (use with=hidden to include hidden sections)
 {% if has_docs %}
-	$(call ensure_image,{{ pandoc_image }},doc)
+	$(_stencil_late_check)$(call ensure_image,{{ pandoc_image }},doc)
 {% for md in docs %}
 	$(STENCIL_COMPOSE) run --rm doc --metadata build-date="$(BUILD_DATE)" $(METADATA_FLAGS) {{ md }} -o $(OUT)/{{ md | replace('.md', '') }}$(OUTPUT_SUFFIX).html
 {% endfor %}
@@ -123,7 +246,7 @@ doc: out-dir{% if has_pre_build %} pre-build{% endif %} format-md{% if has_slide
 
 {% if has_slides %}
 slide: out-dir{% if has_pre_build %} pre-build{% endif %} format-md ## Generate HTML slide decks (use with=hidden to include presenter-only sections)
-	$(call ensure_image,{{ pandoc_image }},slide)
+	$(_stencil_late_check)$(call ensure_image,{{ pandoc_image }},slide)
 {% for md in slides %}
 	$(STENCIL_COMPOSE) run --rm slide --metadata build-date="$(BUILD_DATE)" $(METADATA_FLAGS) {{ md }} -o $(OUT)/{{ md | replace('.md', '') }}$(OUTPUT_SUFFIX).html
 {% endfor %}
@@ -135,7 +258,7 @@ slide: out-dir{% if has_pre_build %} pre-build{% endif %} format-md ## Generate 
 # one. $(OUTPUT_SUFFIX) has to appear on both sides: `make pdf with=hidden`
 # must print the -hidden HTML into the -hidden PDF, not pair one with the other.
 pdf: doc ## Generate PDFs from the generated HTML (use with=hidden to include hidden sections)
-	$(STENCIL_COMPOSE) build pdf
+	$(_stencil_late_check)$(STENCIL_COMPOSE) build pdf
 {% for md in docs + slides %}
 	$(STENCIL_COMPOSE) run --rm pdf $(OUT)/{{ md | replace('.md', '') }}$(OUTPUT_SUFFIX).html $(OUT)/{{ md | replace('.md', '') }}$(OUTPUT_SUFFIX).pdf
 {% endfor %}

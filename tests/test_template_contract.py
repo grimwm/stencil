@@ -195,6 +195,15 @@ MAKE_CONTRACT = {
         "METADATA_FLAGS",
         "OUTPUT_SUFFIX",
         "OUT_HOST",
+        # _stencil_late_check is Makefile-doc.j2's too, and is the same shape
+        # of requirement as the three above: the has_package_sources arm's
+        # `pkg` recipe expands it to re-check WITH and BUILD_DATE against
+        # their character classes at the point of use (stn-cb8). An undefined
+        # make variable expands to nothing rather than failing, so a
+        # composition that included Makefile-pkg.j2 without Makefile-doc.j2
+        # would render a `pkg` recipe whose guard is silently absent -- which
+        # is exactly the silent breakage this table exists to make visible.
+        "_stencil_late_check",
     },
 }
 

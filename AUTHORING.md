@@ -510,6 +510,10 @@ make doc WITH=hidden,draft  # multiple features     -> assignment-hidden-draft.h
 The feature name lands in the output filename, so the student build and the answer-key build sit
 side by side without overwriting each other. `with=hidden` in lowercase works too.
 
+Because the name reaches both a pandoc command line and a filename, it may contain only letters,
+digits, `-` and `_`, with commas between features. A name with anything else in it stops the build
+rather than being passed along.
+
 This is the mechanism for answer keys, grading rubrics, solutions, and presenter notes. It applies
 only to fenced divs — you cannot hide a single word or list item this way.
 

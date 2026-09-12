@@ -449,6 +449,15 @@ _ALLOWED_DC_WINDOWS = (
     # bug: the guard is what closes the sibling hole $(DC) carrying a flag
     # would open, documented at length in Makefile-base.j2 itself.
     re.compile(r"^ifneq \(\$\(filter -%,\$[({]DC[)}]\),\)\s*$", re.MULTILINE),
+    # The EMPTINESS guard's own reference (stn-mbq), for the same reason as
+    # the flag guard above: `ifeq ($(strip $(DC)),)` reads DC to VALIDATE it,
+    # not to invoke anything. MEASURED: without this entry the guard's own
+    # line is reported as an offender and this test fails against the real
+    # templates. It is the sibling of the COMPOSE_FILES emptiness guard, and
+    # it is what stops an empty DC turning the probe into a bare `image`
+    # command and every compose line into `f docker-compose.yml ...` whose
+    # failure make ignores by construction.
+    re.compile(r"^ifeq \(\$\(strip \$[({]DC[)}]\),\)\s*$", re.MULTILINE),
 )
 
 
@@ -795,10 +804,19 @@ def _deliver(
     var_name: str,
     var_value: str,
     *,
-    dc: str = SENTINEL,
+    dc: str | None = SENTINEL,
     os_name: str | None = None,
 ):
     """`<var_name>=<var_value>` delivered to `make -n <target> DC=<dc>` by `route`.
+
+    `dc=None` omits the `DC=` command-line argument entirely, and that mode is
+    REQUIRED whenever DC is itself the variable under test. MEASURED on GNU
+    Make 3.81: a command-line assignment beats the environment, `make -e` and
+    `MAKEFLAGS=VAR=value` alike, so `DC= make -n doc DC=sentinel-compose`
+    leaves DC non-empty and any emptiness guard silent -- three of the five
+    routes below could never go green while this helper always appended one.
+    Only `command_line` would have passed, and for the wrong reason (the last
+    command-line assignment wins, so it was testing itself).
 
     Deliberately NOT built on make_n(): make_n() has no env hook at all, and
     -- the finding that matters most in this tier -- make_n() builds its
@@ -816,7 +834,8 @@ def _deliver(
     if route == "environment_dash_e":
         argv.append("-e")
     argv.append(target)
-    argv.append(f"DC={dc}")
+    if dc is not None:
+        argv.append(f"DC={dc}")
     if os_name is not None:
         argv.append(f"OS={os_name}")
     if route in ("environment", "environment_dash_e"):
@@ -858,9 +877,16 @@ def test_a_planted_runtime_never_reaches_the_probe(
 
     NOT CLOSED, and deliberately not asserted here: `MAKEFLAGS='--eval %:
     STENCIL_CONTAINER = x'` beats `override` on every GNU Make 4.x, because
-    `--eval` can carry a pattern-specific assignment. Filed as stn-2je with
-    its reproduction. It is absent from _INJECTION_ROUTES because it would be
-    red, not because it does not exist.
+    `--eval` can carry a pattern-specific assignment. It is absent from
+    _INJECTION_ROUTES because it would be red, not because it does not exist.
+
+    stn-2je CLOSED THAT AS A WON'T-FIX, with the measurements in
+    Makefile-base.j2's comment: two defences were built, both close the filed
+    reproduction, and both are defeated by a one-clause change to the same
+    hostile string while each costs a real capability. So this is a recorded
+    decision now rather than an open ticket, and the route's true cost -- not
+    a repointed probe but arbitrary shell, via a pattern-specific BUILD_DATE
+    -- is stated there too.
 
     EVERY ROUTE CARRIES ITS OWN POSITIVE CONTROL, in the same test instance,
     and this is the finding that matters most for this tier. make_n() builds
@@ -1130,6 +1156,500 @@ def test_a_target_specific_assignment_still_wins(require_make, tmp_path):
         f"a plain global assignment AFTER `override` was not ignored -- the "
         f"override itself did not hold:\n{result.stdout}"
     )
+
+
+# === (h): DC must name an implementation, and EMPTY is not one -------------
+#
+# stn-mbq. `DC ?= docker compose` tests whether DC is DEFINED, never whether it
+# is non-empty -- the same fact Makefile-base.j2 spells out for COMPOSE_FILES,
+# which has an `ifeq ($(strip ...),)` guard for exactly this and which DC had
+# none of. REPRODUCED against a real generated package before the fix:
+# `DC= make doc` exited 0, wrote no HTML, and ran a planted `image` from PATH
+# three times. Both guards are asserted below because they catch different
+# things: the parse-time `ifeq` fails early for the ordinary `DC= make doc`,
+# and `_stencil_pin_check` catches the include-then-set composition AGENTS.md
+# documents, which walks straight past a parse-time snapshot.
+
+
+@pytest.mark.parametrize("os_name", ["Darwin", "Windows_NT"])
+@pytest.mark.parametrize("route", _INJECTION_ROUTES)
+def test_an_empty_dc_is_a_hard_error(require_make, pages_package, route, os_name):
+    """`DC=` by any route must stop the build, naming DC.
+
+    Goes red against the template without `ifeq ($(strip $(DC)),)`: every route
+    there exits 0 and renders the two broken lines the tier comment quotes.
+
+    `dc=None` IS LOAD-BEARING -- see _deliver's docstring. With the helper's
+    default `DC=sentinel-compose` still appended, the environment, `make -e`
+    and MAKEFLAGS routes would deliver an empty DC that the command line
+    immediately overrode, and this test would stay red after a correct fix.
+
+    THE POSITIVE CONTROL IS THE SAME ROUTE CARRYING A LEGITIMATE DC. Without
+    it a route that does not reach make at all is indistinguishable from one
+    the guard closed -- the finding this module's CONTAINER tier already
+    records, applied here.
+    """
+    _skip_if_gnumakeflags_dead(route)
+
+    empty = _deliver(
+        pages_package, route, "doc", "DC", "", dc=None, os_name=os_name
+    )
+    combined = empty.stdout + empty.stderr
+    assert empty.returncode != 0, outcome(
+        f"make -n doc (DC= via {route}, OS={os_name}) did not fail", empty
+    )
+    assert "DC" in combined, (
+        f"the failure does not name DC, so a consumer cannot act on it:\n{combined}"
+    )
+
+    control = _deliver(
+        pages_package, route, "doc", "DC", "podman-compose", dc=None, os_name=os_name
+    )
+    assert control.returncode == 0, outcome(
+        f"POSITIVE CONTROL: a legitimate DC via {route} (OS={os_name}) failed, "
+        "so the assertion above may be firing for an unrelated reason",
+        control,
+    )
+    assert "podman image inspect" in control.stdout.replace('"', ""), (
+        f"the control did not derive its runtime from DC, so the route may "
+        f"not be delivering DC at all:\n{control.stdout}"
+    )
+
+
+@pytest.mark.parametrize("os_name", ["Darwin", "Windows_NT"])
+def test_an_empty_dc_assigned_after_the_include_is_caught_at_the_point_of_use(
+    require_make, env, tmp_path, os_name
+):
+    """The half a parse-time snapshot cannot catch.
+
+    A composition that includes Makefile-base.j2 and THEN empties DC -- the
+    a-la-carte arrangement AGENTS.md documents, and the case
+    Makefile-base.j2's own comment cites for COMPOSE_FILES -- reads as
+    non-empty at the `ifeq` and is empty by the time the recipe expands.
+
+    Goes red against a fix carrying only the parse-time guard: the build then
+    succeeds and renders the bare-`image` probe line.
+    """
+    context = get_template_context(
+        "demo", {"packages": {"demo": {"name": "Demo", "package_type": "none"}}}
+    )
+    appendix = (
+        "\n\nDC =\n\nprobe: ## probe target\n\t$(call ensure_image,test-image,probe)\n"
+    )
+    result = _run_make_on_rendered_partial(
+        env,
+        tmp_path,
+        "Makefile-base.j2",
+        context,
+        appendix=appendix,
+        targets=("probe", f"OS={os_name}"),
+    )
+    combined = result.stdout + result.stderr
+    assert result.returncode != 0, outcome(
+        f"make -n probe (DC emptied after the include, OS={os_name})", result
+    )
+    assert "DC" in combined, f"the failure does not name DC:\n{combined}"
+
+
+def test_an_empty_dc_neither_runs_a_planted_probe_nor_reports_success(
+    require_make, pages_package, tmp_path
+):
+    """The stn-mbq reproduction itself, driven through the generated Makefile.
+
+    NOT `integration`-marked, deliberately, and NO container runtime is needed
+    in either state. Red: `$(STENCIL_CONTAINER)` is empty, so the probe line
+    starts with its own arguments and runs the PLANTED `image`, while every
+    compose line degrades to `f docker-compose.yml ...` whose failure make
+    ignores as the leading-`-` prefix -- exit 0, no HTML. Green: the parse-time
+    `$(error)` fires before any recipe runs. Marking it `integration` would
+    skip it for every contributor without docker, and tests/test_export_drift.py
+    already paid for the lesson that a guard which silently does not run is
+    worse than no guard.
+
+    Asserts all three halves of the reproduction, because exiting non-zero
+    alone would not prove the planted command never ran.
+    """
+    plant = tmp_path / "plant"
+    plant.mkdir()
+    ran = tmp_path / "planted-image-ran"
+    (plant / "image").write_text(f'#!/bin/sh\ntouch "{ran}"\nexit 0\n')
+    (plant / "image").chmod(0o755)
+
+    env_vars = clean_env()
+    env_vars["PATH"] = f"{plant}{os.pathsep}{env_vars.get('PATH', '')}"
+    env_vars["DC"] = ""
+
+    result = subprocess.run(
+        ["make", "--no-print-directory", "doc"],
+        cwd=pages_package,
+        capture_output=True,
+        text=True,
+        env=env_vars,
+    )
+    assert result.returncode != 0, outcome(
+        "DC= make doc exited 0 -- the build reported success having built nothing",
+        result,
+    )
+    assert not ran.exists(), (
+        "an empty DC made the image probe run a bare `image` command from "
+        f"PATH:\n{result.stdout}\n{result.stderr}"
+    )
+    produced = sorted(p.name for p in pages_package.glob("*.html"))
+    assert "Guide.html" not in produced and "Deck.html" not in produced, (
+        f"the build wrote HTML despite failing: {produced}"
+    )
+
+
+# === (i): WITH, `with` and BUILD_DATE cannot carry a command ---------------
+#
+# stn-cb8. All three interpolate into a recipe, and before the fix nothing sat
+# between the caller's value and /bin/sh. REPRODUCED against a real generated
+# package: `make doc DC=true 'BUILD_DATE=2026-01-01";touch /tmp/PWN;"'` created
+# the file, and `WITH=a;/tmp/mark.sh;b` ran the script.
+#
+# `DC=true` throughout: it passes both DC guards (non-empty, no leading dash),
+# derives `true` as the probe runtime so `true image inspect ...` exits 0 and
+# the `|| pull` arm is skipped, and turns every compose line into a no-op that
+# exits 0. So the build runs end to end, with no container, and the only thing
+# that can create the marker file is the injection under test.
+
+# Written by the payload, and the ONLY evidence that matters here: a non-zero
+# exit proves the build stopped, never that it stopped before executing.
+_INJECTED = "INJECTED"
+
+
+def _hostile(package: Path, marker: Path, name: str, payload: str, target="doc", n=False):
+    """`make [-n] <target> DC=true` with `<name>=<payload>` exported."""
+    env_vars = clean_env()
+    env_vars[name] = payload
+    argv = ["make", "--no-print-directory"]
+    if n:
+        argv.append("-n")
+    argv += [target, "DC=true"]
+    return subprocess.run(
+        argv, cwd=package, capture_output=True, text=True, env=env_vars
+    )
+
+
+@pytest.fixture
+def marker_script(tmp_path):
+    """A script that leaves a file behind, and the file it leaves.
+
+    A marker FILE rather than a printed marker: the payload's own stdout can
+    be swallowed (the probe sends both streams to /dev/null), and this module
+    already learned from stn-3y8 that "a marker printed to stdout proves
+    nothing here".
+    """
+    marker = tmp_path / _INJECTED
+    script = tmp_path / "mark.sh"
+    script.write_text(f'#!/bin/sh\ntouch "{marker}"\necho {_INJECTED}\n')
+    script.chmod(0o755)
+    return script, marker
+
+
+@pytest.mark.parametrize("name", ["WITH", "with", "BUILD_DATE"])
+def test_a_shell_metacharacter_never_reaches_the_shell(
+    require_make, pages_package, marker_script, name
+):
+    """A `;`-separated command smuggled through any of the three names.
+
+    A REAL `make` RUN, NOT `make -n`, AND THAT IS NOT INTERCHANGEABLE.
+    MEASURED against the unfixed template: under `-n` this payload never
+    creates the marker (make prints the line rather than running it), so the
+    marker assertion passes against the bug and the test is decoration. The
+    `$(shell ...)` spelling in the next test is the opposite -- it fires under
+    `-n`, because it is make doing the expanding.
+    """
+    script, marker = marker_script
+    payload = (
+        f'2026-01-01";{script};"' if name == "BUILD_DATE" else f"a;{script};b"
+    )
+    result = _hostile(pages_package, marker, name, payload)
+    combined = result.stdout + result.stderr
+
+    assert not marker.exists(), (
+        f"a hostile {name} reached /bin/sh and executed:\n{combined}"
+    )
+    assert result.returncode != 0, outcome(f"hostile {name} did not fail", result)
+    assert name in combined, (
+        f"the failure does not name {name}, so a consumer cannot act on it:\n{combined}"
+    )
+
+
+@pytest.mark.parametrize("name", ["WITH", "with", "BUILD_DATE"])
+def test_a_make_level_expansion_never_fires(
+    require_make, pages_package, marker_script, name
+):
+    """`$(shell ...)` smuggled in from the environment is expanded by MAKE.
+
+    This is the half no shell quoting could ever have reached, and it is why
+    the guard reads `$(value ...)` rather than the value. MEASURED against the
+    unfixed template: `WITH='$(shell touch MARKER)'` created the marker under
+    `make -n`, with no recipe run at all, because METADATA_FLAGS is `:=` and
+    expands WITH at parse time.
+
+    Asserted under `-n` on purpose -- the expansion happens while make reads
+    the file, so no recipe needs to run for the bug to bite.
+    """
+    script, marker = marker_script
+    result = _hostile(pages_package, marker, name, f"$(shell {script})", n=True)
+    combined = result.stdout + result.stderr
+
+    assert not marker.exists(), (
+        f"a `$(shell ...)` in {name} was expanded by make:\n{combined}"
+    )
+    assert result.returncode != 0, outcome(f"hostile {name} did not fail", result)
+    assert name in combined, f"the failure does not name {name}:\n{combined}"
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        # The sentinel attack: with an out-of-class sentinel (`x`) the
+        # emptiness test matched the word `xx` in the residue and reported
+        # CLEAN. MEASURED on GNU Make 3.81 and 4.4.1 -- this exact value
+        # executed `touch` through a guard that said nothing.
+        '2026-01-01 xx ";{script};"',
+        # Whitespace-only residues. $(strip) reads each as empty on both
+        # makes; $(words) catches the newline on 4.4.1 and NOT on 3.81. A
+        # newline expanded into a recipe line is a second command.
+        "2026-01-01 ;{script}",
+        "2026-01-01\t;{script}",
+        "2026-01-01\n{script}",
+    ],
+    ids=["sentinel-xx", "space", "tab", "newline"],
+)
+def test_a_residue_of_whitespace_is_not_empty(
+    require_make, pages_package, marker_script, payload
+):
+    """The inputs that defeat a naive emptiness test.
+
+    Each goes red against a different wrong spelling of the same check:
+    `sentinel-xx` against `$(filter xx,x<residue>x)` with its sentinel outside
+    the allowed class, and the three whitespace cases against
+    `$(if $(strip ...))` on either make and against `$(words)` on 3.81.
+    """
+    script, marker = marker_script
+    result = _hostile(
+        pages_package, marker, "BUILD_DATE", payload.format(script=script)
+    )
+    combined = result.stdout + result.stderr
+    assert not marker.exists(), (
+        f"a residue of whitespace read as empty and the payload ran:\n{combined}"
+    )
+    assert result.returncode != 0, outcome("hostile BUILD_DATE did not fail", result)
+    assert "BUILD_DATE" in combined, f"the failure does not name BUILD_DATE:\n{combined}"
+
+
+def test_the_legitimate_values_still_render_what_they_always_rendered(
+    require_make, pages_package
+):
+    """The other direction, and the reason the class is narrow rather than
+    paranoid: AUTHORING.md documents WITH variants and they must keep working.
+
+    Goes red against a class that forgets the comma (`with=hidden,draft`),
+    uppercase (`WITH=Answers`), `T` or `:` (the ISO date), or that refuses an
+    unset value.
+    """
+    cases = [
+        ([], "--metadata build-date="),
+        (["WITH=solutions"], "--metadata include-solutions=true"),
+        (["with=hidden,draft"], "--metadata include-hidden=true"),
+        (["with=hidden,draft"], "--metadata include-draft=true"),
+        (["WITH=Answers_2"], "--metadata include-Answers_2=true"),
+        (["BUILD_DATE=2026-09-01"], '--metadata build-date="2026-09-01"'),
+        (
+            ["BUILD_DATE=2026-09-01T21:45"],
+            '--metadata build-date="2026-09-01T21:45"',
+        ),
+    ]
+    for extra, expected in cases:
+        result = make_n(pages_package, "doc", *extra, dc="true")
+        assert result.returncode == 0, outcome(f"make -n doc {extra}", result)
+        assert expected in result.stdout, (
+            f"make -n doc {extra} did not render {expected!r}:\n{result.stdout}"
+        )
+
+    suffixed = make_n(pages_package, "doc", "WITH=hidden", dc="true")
+    assert "Guide-hidden.html" in suffixed.stdout, (
+        f"the WITH suffix stopped reaching the output filename:\n{suffixed.stdout}"
+    )
+
+
+def test_a_pattern_specific_assignment_is_caught_at_the_point_of_use(
+    require_make, pages_package, marker_script, tmp_path
+):
+    """MAKEFILES: an ENVIRONMENT VARIABLE plus a file, past the parse-time check.
+
+    Makefile-base.j2 already documents MAKEFILES as a route that "reaches
+    further than the consuming makefile", so a parse-time-only guard here
+    would have been making exactly the dismissal that file refuses to make.
+    A pattern-specific assignment is invisible while make reads this file and
+    live by the time a recipe expands.
+
+    THE POSITIVE CONTROL IS AN IN-CLASS VALUE DELIVERED THE SAME WAY. Without
+    it, a MAKEFILES file that make silently ignored -- a typo in the pattern,
+    say -- would satisfy both assertions for having delivered nothing.
+    """
+    script, marker = marker_script
+    evil = tmp_path / "evil.mk"
+    evil.write_text(f'%: BUILD_DATE = 2026-01-01";{script};"\n')
+
+    env_vars = clean_env()
+    env_vars["MAKEFILES"] = str(evil)
+    result = subprocess.run(
+        ["make", "--no-print-directory", "doc", "DC=true"],
+        cwd=pages_package, capture_output=True, text=True, env=env_vars,
+    )
+    combined = result.stdout + result.stderr
+    assert not marker.exists(), (
+        f"a pattern-specific BUILD_DATE arrived via MAKEFILES and ran:\n{combined}"
+    )
+    assert result.returncode != 0, outcome("the MAKEFILES payload did not fail", result)
+    assert "BUILD_DATE" in combined, f"the failure does not name BUILD_DATE:\n{combined}"
+
+    benign = tmp_path / "ok.mk"
+    benign.write_text("%: BUILD_DATE = 2026-09-01\n")
+    env_vars["MAKEFILES"] = str(benign)
+    control = subprocess.run(
+        ["make", "--no-print-directory", "-n", "doc", "DC=true"],
+        cwd=pages_package, capture_output=True, text=True, env=env_vars,
+    )
+    assert control.returncode == 0, outcome(
+        "POSITIVE CONTROL: an IN-CLASS pattern-specific BUILD_DATE was refused, "
+        "so the assertion above may be rejecting the route rather than the value",
+        control,
+    )
+    assert '--metadata build-date="2026-09-01"' in control.stdout, (
+        "the control's value never reached the recipe, so MAKEFILES may not be "
+        f"delivering anything on this host:\n{control.stdout}"
+    )
+
+
+@pytest.mark.parametrize("target", ["help", "clean", "format-md", "check-access"])
+def test_an_unrelated_build_date_export_does_not_break_an_unrelated_target(
+    require_make, pages_package, target
+):
+    """`BUILD_DATE` is the OCI `org.opencontainers.image.created` convention.
+
+    `BUILD_DATE` set from `date -u +%Y-%m-%dT%H:%M:%SZ` is ordinary CI
+    boilerplate, and its `Z` is out of class. Checking it at PARSE time would
+    abort every target in the file for someone who exported it once for
+    something unrelated -- the actor the COMPOSE_FILES origin guard serves,
+    and the reason stn-3y8 left a stray CONTAINER inert rather than fatal.
+
+    Goes red the moment the class check moves to the top of the file.
+    """
+    env_vars = clean_env()
+    env_vars["BUILD_DATE"] = "2026-09-12T14:30:00Z"
+    result = subprocess.run(
+        ["make", "--no-print-directory", "-n", target, "DC=true"],
+        cwd=pages_package, capture_output=True, text=True, env=env_vars,
+    )
+    assert result.returncode == 0, outcome(
+        f"an unrelated BUILD_DATE export broke `make {target}`", result
+    )
+
+
+@pytest.mark.parametrize("target", ["doc", "slide", "pdf", "check-pdf"])
+def test_an_out_of_class_build_date_is_refused_by_every_target_that_stamps_it(
+    require_make, pages_package, target
+):
+    """The other side of the trade above: confining the check to the point of
+    use must not leave a stamping target unguarded.
+
+    `check-pdf` carries no check of its own -- it depends on `pdf`, which
+    depends on `doc`, and all three are .PHONY so the check has already run.
+    That is the assertion, not an assumption: adding the prefix to check-pdf's
+    own recipe instead breaks test_pdf_ua_gate.py's parse of that line.
+    """
+    env_vars = clean_env()
+    env_vars["BUILD_DATE"] = "2026-09-12T14:30:00Z"
+    result = subprocess.run(
+        ["make", "--no-print-directory", "-n", target, "DC=true"],
+        cwd=pages_package, capture_output=True, text=True, env=env_vars,
+    )
+    combined = result.stdout + result.stderr
+    assert result.returncode != 0, outcome(
+        f"`make {target}` accepted an out-of-class BUILD_DATE", result
+    )
+    assert "BUILD_DATE" in combined, f"the failure does not name BUILD_DATE:\n{combined}"
+
+
+# --- the date class and the frontmatter grammar cannot drift ---------------
+
+
+def _accepted_date_shapes() -> list[str]:
+    """tests/test_dates.py's ACCEPTED list, loaded BY PATH.
+
+    `from tests.test_dates import ACCEPTED` resolves locally (the repo root is
+    on sys.path) and fails on CI with ModuleNotFoundError -- the trap
+    conftest.py documents for its own fixtures. test_dates.py is
+    `integration`-marked as a module and this tier is not, so importing it
+    must not drag the mark along either; loading the module object by path
+    takes the data and nothing else.
+    """
+    import importlib.util
+
+    path = Path(__file__).parent / "test_dates.py"
+    spec = importlib.util.spec_from_file_location("_stencil_test_dates", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return list(module.ACCEPTED)
+
+
+def _rendered_date_class(env) -> set[str]:
+    """The characters `_stencil_chars_date` lists, read out of the rendered partial."""
+    context = get_template_context(
+        "demo", {"packages": {"demo": {"name": "Demo", "package_type": "doc",
+                                      "docs": ["README.md"]}}}
+    )
+    text = env.get_template("Makefile-doc.j2").render(context)
+    line = next(
+        l for l in text.splitlines() if l.startswith("_stencil_chars_date :=")
+    )
+    return set(line.split(":=", 1)[1].split())
+
+
+def test_the_make_level_date_class_is_exactly_the_frontmatter_grammar_s(env):
+    """The closing direction of the drift guard, and the one that fires when
+    somebody WIDENS the class.
+
+    Iterating ACCEPTED through make (below) only fires if the frontmatter
+    grammar gains a character. Adding `/` or `+` or `Z` here -- the tempting
+    "just let ISO through" change -- is invisible to that, and this catches it.
+
+    REJECTED is deliberately NOT iterated: `2026-13-01` and
+    `2026-09-01T21:45:30` are made entirely of in-class characters and are
+    correctly accepted by a CHARACTER check, then refused by the filter with a
+    message about months. A future contributor "completing" this test with
+    REJECTED would be asserting something the Makefile never claimed.
+    """
+    assert _rendered_date_class(env) == set("".join(_accepted_date_shapes())), (
+        "the Makefile's BUILD_DATE class and tests/test_dates.py's ACCEPTED "
+        "shapes have drifted apart"
+    )
+
+
+def test_every_accepted_date_shape_passes_the_make_level_check(
+    require_make, pages_package
+):
+    """Every shape the frontmatter filter honours must survive the Makefile.
+
+    The integration proof behind the set comparison above: a class that looks
+    right in a diff can still be wrong about how make splits words, and this
+    drives the real generated Makefile with each value.
+    """
+    for value in _accepted_date_shapes():
+        result = make_n(pages_package, "doc", f"BUILD_DATE={value}", dc="true")
+        assert result.returncode == 0, outcome(
+            f"BUILD_DATE={value} is accepted by the frontmatter grammar but "
+            "refused by the generated Makefile",
+            result,
+        )
+        assert f'--metadata build-date="{value}"' in result.stdout, (
+            f"BUILD_DATE={value} did not reach the recipe:\n{result.stdout}"
+        )
 
 
 # === CONTAINER TIER =========================================================

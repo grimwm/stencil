@@ -98,7 +98,7 @@ PKG = {{ package_stem }}$(OUTPUT_SUFFIX).pdf
 # PDF so `make pkg with=hidden` prints the answer-key HTML into the answer-key
 # PDF rather than pairing one with the other.
 pkg: format-md ## Build {{ package_name }} from {{ package_sources | join(' ') }}
-	$(if $(strip $(PKG_SOURCES)),,$(error package_sources matched nothing: $(PKG_SOURCE_SPECS)))
+	$(_stencil_late_check)$(if $(strip $(PKG_SOURCES)),,$(error package_sources matched nothing: $(PKG_SOURCE_SPECS)))
 	$(call ensure_image,{{ pandoc_image }},doc)
 	$(STENCIL_COMPOSE) run --rm doc --metadata course="{{ name }}" $(METADATA_FLAGS) $(PKG_SOURCES) -o $(PKG_HTML)
 	$(STENCIL_COMPOSE) build pdf
