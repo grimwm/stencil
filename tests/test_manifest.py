@@ -824,3 +824,42 @@ def test_clean_of_a_single_manifest_backed_package_succeeds_despite_a_broken_sib
     )
     assert not (tmp_path / "good" / MANIFEST_NAME).exists()
     assert not (tmp_path / "good" / "Makefile").exists()
+
+
+def test_a_control_character_in_a_package_id_does_not_reach_the_terminal_raw(
+    tmp_path,
+):
+    """clean's degraded path prints TWO reports about the same package -- the
+    config warning, and the "could not be cleaned" list underneath it -- and
+    they must not disagree about whether an id is safe to print.
+
+    Found by probing stn-2x4.8 rather than by a test: the warning ran through
+    _safe and rendered the id as `demo\\x1b[2Jx`, while the error list printed
+    the escape raw and repainted the terminal. The unescaped half sat directly
+    below a sentence promising the escape "cannot repaint this line".
+
+    YAML refuses a raw control BYTE in the file, which is why this looked
+    unreachable; a double-quoted scalar honours \\x escapes, so the id carries
+    one without the file containing one. test_cli.py pins the same rule for
+    the paths that existed before this ticket.
+    """
+    esc = chr(27)
+    (tmp_path / ".config.yaml").write_text(
+        "templates:\n"
+        "  - src: Makefile.j2\n"
+        "packages:\n"
+        '  "demo\\x1b[2Jx":\n'
+        "    name: Demo\n"
+        "    package_type: none\n"
+        "  broken:\n"
+        "    name: B\n"
+        "    package_type: none\n"
+        '    show_download: "no"\n'
+    )
+
+    result = run_cli("clean", "--all", cwd=tmp_path)
+
+    assert esc not in result.stdout + result.stderr, (
+        "a control character in a package id reached the terminal raw, so a "
+        "config can repaint the report that is describing it"
+    )
