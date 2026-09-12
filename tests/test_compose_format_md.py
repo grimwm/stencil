@@ -109,6 +109,26 @@ honour the config and the file comes back CRLF, ignore it and the file stays
 LF. Asserting no ``\r`` survived is what makes these tests fail if the config
 was never in the search path to begin with.
 
+WHY THE TAMPERED-LOCKFILE TEST EXISTS -- A LOCKFILE IS CODE, ONE LOADER
+EARLIER (stn-qge). The two hostile-config tests above close what prettier
+READS once it has been installed. They stop one loader short of what prettier
+IS. The service copies ``format-package-lock.json`` out of the mount, and
+``npm ci`` fetches whatever host each ``resolved`` names and checks
+``integrity`` against a value in that same file -- so a consumer-editable file
+decided which bytes became ``/tmp/fmt/node_modules/.bin/prettier``, which then
+ran as uid 0 over that mount. Neither ``--ignore-scripts`` nor ``--no-config``
+touches that: nothing has to run at install time, because the payload runs when
+prettier runs.
+
+``test_a_tampered_lockfile_is_refused_before_npm_fetches_anything`` plants the
+ticket's own reproduction -- one ``resolved`` host changed, nothing else -- and
+the load-bearing assertion is the one that looks like an afterthought: that the
+tampered host never appears in the output. The service failing is NOT evidence
+of anything on its own, because an unreachable host fails the install too; the
+two outcomes are told apart by whether npm ever asked for it. Then it restores
+the lockfile stencil generated and runs again, so a guard that refused
+everything -- which would pass every assertion above it -- fails here.
+
 WHY NO PORT IS BOUND, AND WHY THAT IS ASSERTED ELSEWHERE.
 ``test_no_generated_service_binds_a_host_port`` in
 tests/test_compose_check_access.py already covers every service the compose
@@ -220,6 +240,14 @@ def hostile_plugin(marker: str) -> str:
         'as uid=" + process.getuid());\n'
         "module.exports = { languages: [], parsers: {}, printers: {} };\n"
     )
+
+
+# The stn-qge fixture: a host that cannot resolve anywhere, in a TLD reserved
+# by RFC 2606 for exactly this. It is not a lure -- it is a tripwire. If the
+# digest guard ever stops running, npm asks DNS for this name and prints it,
+# which is what the test looks for; and because nothing can answer, a
+# regression cannot quietly install something either.
+TAMPERED_HOST = "stencil-tampered-lockfile.invalid"
 
 
 DECOY_PACKAGE_JSON = json.dumps(
@@ -548,6 +576,90 @@ def test_a_plugin_named_by_a_json_prettier_config_is_not_loaded(
         "the file came back with CRLF line endings, which only the planted "
         "config asks for -- so prettier read it, and would have read its "
         f"plugins entry too:\n{after.decode()!r}"
+    )
+
+
+@pytest.mark.integration
+def test_a_tampered_lockfile_is_refused_before_npm_fetches_anything(
+    demo_config, generate_package, compose
+):
+    """stn-qge, run rather than read.
+
+    Changes one ``resolved`` host in the package's own copy of the lockfile and
+    nothing else -- the smallest edit that redirects where a tarball comes from,
+    and the one the ticket reproduced with. Then asserts four things, of which
+    only the third discriminates:
+
+    1. the service fails,
+    2. it fails with stencil's own message rather than npm's,
+    3. the tampered host appears NOWHERE in the output, so npm never resolved
+       it -- before the fix this run failed with
+       ``ENOTFOUND stencil-tampered-lockfile.invalid`` and the host named in
+       the error,
+    4. the markdown is byte-for-byte what the test wrote, so no prettier ran
+       over the mount at all.
+
+    Then it puts the lockfile back and runs again. That second run is the
+    control: a guard that refused every lockfile, stencil's included, satisfies
+    every assertion above and would ship a formatter that never formats.
+    """
+    config = demo_config
+    config["packages"] = {"tampered": config["packages"].pop("demo")}
+    package = generate_package(config, "tampered")
+
+    lockfile = package / pipeline.FORMAT_LOCKFILE
+    vendored = lockfile.read_bytes()
+    lock = json.loads(vendored)
+    prettier = lock["packages"]["node_modules/prettier"]
+    assert prettier["resolved"].startswith("https://registry.npmjs.org/"), (
+        "the fixture edits prettier's resolved URL; it no longer looks like "
+        f"one: {prettier['resolved']!r}"
+    )
+    prettier["resolved"] = prettier["resolved"].replace(
+        "registry.npmjs.org", TAMPERED_HOST
+    )
+    lockfile.write_text(json.dumps(lock, indent=2) + "\n")
+
+    target = package / "scratch.md"
+    target.write_text(BADLY_FORMATTED_MARKDOWN)
+    before = target.read_bytes()
+
+    run = compose(package)
+    refused = run("run", "--rm", "-T", "format-md", timeout=1800)
+    output = refused.stdout + refused.stderr
+
+    assert refused.returncode != 0, (
+        "the service installed from a lockfile stencil did not write:\n"
+        f"{outcome('compose run format-md', refused)}"
+    )
+    assert "is not the file stencil generated" in output, (
+        "it failed, but not on the guard -- so this test cannot tell a refusal "
+        f"from npm tripping over a bad URL:\n{outcome('compose run', refused)}"
+    )
+    assert TAMPERED_HOST not in output, (
+        "npm asked for the host the tampered lockfile named, so the install "
+        "read it before anything checked it. A host that happened to answer "
+        "would have been installed and run as uid 0:\n"
+        f"{outcome('compose run format-md', refused)}"
+    )
+    assert target.read_bytes() == before, (
+        "the markdown was rewritten, so a prettier ran despite the refusal:\n"
+        f"{outcome('compose run format-md', refused)}"
+    )
+
+    # The control. Same package, same project, same everything but the bytes
+    # this test changed.
+    lockfile.write_bytes(vendored)
+    formatted = run("run", "--rm", "-T", "format-md", timeout=1800)
+
+    assert formatted.returncode == 0, (
+        "the guard refuses the lockfile stencil itself generated, so the "
+        "refusal above proves nothing about tampering:\n"
+        f"{outcome('compose run format-md', formatted)}"
+    )
+    assert target.read_bytes() != before, (
+        "the service exited 0 on stencil's own lockfile but never reformatted "
+        f"the file:\n{outcome('compose run format-md', formatted)}"
     )
 
 

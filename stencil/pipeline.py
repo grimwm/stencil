@@ -16,6 +16,7 @@ that the real build never uses.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -552,6 +553,34 @@ def read_lockfile(filename: str) -> str:
             f"one. Re-vendor it: python3 scripts/vendor_npm_locks.py"
         )
     return text[:-1]
+
+
+def lockfile_digest(filename: str) -> str:
+    """The sha256 of the lockfile a generated package receives.
+
+    stn-qge. `npm ci` fetches whatever host each `resolved` names and checks
+    `integrity` against a value in the same file, so whoever can edit the
+    lockfile decides which bytes get installed. Both installs read their
+    lockfile out of the consumer's package directory -- format-md `cp`s it out
+    of the mount -- which made a consumer-editable file the thing that chose
+    what prettier is. The scaffolding therefore carries this digest and checks
+    the copy before installing from it.
+
+    HASHED FROM ``read_lockfile(...) + "\n"``, NOT FROM THE BYTES ON DISK, and
+    that is the whole reason this is a function rather than a constant. The
+    file a package gets is what the template writes: read_lockfile strips the
+    trailing newline and the template puts one back. Hashing the asset
+    directly would agree with that today and diverge the moment either side of
+    that dance changes -- and a digest that disagrees with the file it guards
+    refuses every honest build, which is how a checksum kept by hand always
+    fails. Deriving both from one call cannot drift, and re-vendoring moves
+    them together with no extra step: scripts/vendor_npm_locks.py writes the
+    asset and this reads it.
+
+    It inherits read_lockfile's validation, VendoredAssetError included -- a
+    damaged install is not a config mistake, stn-hwo.
+    """
+    return hashlib.sha256((read_lockfile(filename) + "\n").encode("utf-8")).hexdigest()
 
 
 # ---------------------------------------------------------------------------
