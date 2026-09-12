@@ -2863,9 +2863,7 @@ def test_a_manifest_naming_a_strict_subset_of_the_configs_entries_still_cleans(
     )
 
 
-def test_a_sibling_packages_config_error_does_not_disable_the_widen_check(
-    tmp_path, demo_config
-):
+def test_a_sibling_packages_config_error_does_not_disable_the_widen_check(tmp_path):
     """A fault in a package this command never touches must NOT switch the
     authority rule off for the package it does touch.
 
@@ -3000,4 +2998,37 @@ def test_a_manifest_that_lists_itself_is_refused_not_exempted(
     assert manifest_path.exists(), "nothing is removed for a refused package"
     assert (generated / "Makefile").exists(), (
         "the refusal is whole-package: no entry is removed"
+    )
+
+
+def test_the_degraded_path_warns_that_the_manifest_is_taken_on_trust(tmp_path):
+    """The one path where an unauthenticated file is trusted must say so.
+
+    Found by the local CodeRabbit pass: the branch recorded exactly why it
+    could not derive the authorised set and then discarded it, so from
+    outside, "the manifest passed the check" and "the check never ran" looked
+    identical -- the absence of a refusal was the only signal either way.
+
+    A WARNING, not a problem: `problems` decides the exit status and this run
+    is a success. stn-p9a's promise is that the command you reach for because
+    your config broke still cleans from the manifest, so it exits 0 and says
+    what it could not verify while doing it.
+    """
+    broken = copy.deepcopy(GOOD_AND_BROKEN_CONFIG)
+    initially_fine = copy.deepcopy(broken)
+    del initially_fine["packages"]["broken"]["show_download"]
+    write_config(tmp_path, initially_fine)
+    setup = run_cli("gen", "--all", cwd=tmp_path)
+    assert setup.returncode == 0, setup.stderr
+
+    write_config(tmp_path, broken)
+    result = run_cli("clean", "broken", cwd=tmp_path)
+
+    assert result.returncode == 0, result.stderr
+    combined = result.stdout + result.stderr
+    assert "taken on trust" in combined, (
+        f"the degraded path must say the manifest was not checked: {combined!r}"
+    )
+    assert "show_download" in combined, (
+        "and it must name the underlying reason it could not be checked"
     )

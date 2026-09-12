@@ -1605,6 +1605,7 @@ def _checked_template_defs(
 
     kept: list[dict] = []
     dropped = 0
+    bad_when = 0
     for tdef in declared:
         if not isinstance(tdef, dict):
             dropped += 1
@@ -1633,18 +1634,30 @@ def _checked_template_defs(
                 or not names
                 or not all(isinstance(name, str) and name for name in names)
             ):
-                dropped += 1
+                # COUNTED SEPARATELY, because "is not a mapping with a
+                # `src:`" is a false diagnosis for an entry whose `src` is
+                # perfectly good and whose `when` is not. Sending an author
+                # to look at the wrong key is the failure stn-dl3r is about.
+                bad_when += 1
                 continue
         kept.append(tdef)
 
-    if not dropped:
-        return kept, []
-
-    return kept, [
-        f"Package(s) {who}: {dropped} entr{'y' if dropped == 1 else 'ies'} "
-        f"under 'templates' {'is' if dropped == 1 else 'are'} not a mapping "
-        "with a `src:` -- the file(s) it renders cannot be identified"
-    ]
+    problems: list[str] = []
+    if dropped:
+        problems.append(
+            f"Package(s) {who}: {dropped} entr{'y' if dropped == 1 else 'ies'} "
+            f"under 'templates' {'is' if dropped == 1 else 'are'} not a mapping "
+            "with a `src:` -- the file(s) it renders cannot be identified"
+        )
+    if bad_when:
+        problems.append(
+            f"Package(s) {who}: {bad_when} entr"
+            f"{'y' if bad_when == 1 else 'ies'} under 'templates' "
+            f"{'has' if bad_when == 1 else 'have'} a `when:` that is not a "
+            "name or a list of names -- the condition cannot be evaluated, "
+            "so the file(s) it guards cannot be identified"
+        )
+    return kept, problems
 
 
 def package_contexts(
@@ -4194,17 +4207,33 @@ def _clean_one_directory(
             # unrelated package leaves this directory's derivation intact and
             # the widen check below applies in full -- which is the whole
             # point of the correction above, and was the hole before it.
-            pass
+            #
+            # SAY SO, on stderr, rather than skipping the check in silence.
+            # This is the one path where an unauthenticated file is taken on
+            # trust, and until this warning existed the only sign of it was
+            # the absence of a refusal -- indistinguishable, from outside,
+            # from a manifest that had passed the check. NOT appended to
+            # `problems`: that list decides the exit status, and this run is
+            # a SUCCESS (stn-p9a -- the command you reach for because your
+            # config broke still cleans from the manifest). A warning is the
+            # right register for "this worked, and here is what it could not
+            # verify while working".
+            print(
+                f"Warning: package(s) {', '.join(sorted(full_member_set))}: "
+                "what the config authorises for this directory could not be "
+                "derived, so the manifest at "
+                f"{manifest_path} was used without checking it against the "
+                "config. It is being taken on trust:",
+                file=sys.stderr,
+            )
+            for problem in authorised_problems:
+                print(f"  - {_safe(problem)}", file=sys.stderr)
         else:
             # Compared as LITERAL STRINGS, unexpanded: both sides come
             # from `package_entries`, so a glob pattern like
             # `Guide*.html` appears the same way on both, and expanding
             # either would compare apples to a set that was never meant
-            # to hold them. `MANIFEST_NAME` itself is exempt --
-            # `package_entries` never lists it (see its docstring: "the
-            # manifest does not list itself"), so it is not the
-            # caller's entry to authorise, and `_remove_entries` never
-            # receives it either.
+            # to hold them.
             # NO EXEMPTION FOR `MANIFEST_NAME`, and an earlier version of
             # this line had one on the grounds that `package_entries` never
             # lists the manifest so it "is not the caller's entry to

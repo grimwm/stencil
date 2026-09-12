@@ -1829,10 +1829,6 @@ def test_walk_dir_fd_write_lands_in_the_original_inode_after_a_swap(tmp_path):
 
 
 @pytestmark_avv
-@pytest.mark.skipif(
-    not generate._DIR_FD_CAPABLE,
-    reason="no O_DIRECTORY/O_NOFOLLOW dir_fd support on this platform",
-)
 def test_walk_dir_fd_hands_back_a_descriptor_the_caller_owns_for_a_top_level_name(
     tmp_path,
 ):
@@ -1875,6 +1871,7 @@ def test_walk_dir_fd_hands_back_a_descriptor_the_caller_owns_for_a_top_level_nam
         os.close(base_fd)
 
 
+@pytestmark_avv
 def test_walk_dir_fd_refuses_a_symlinked_intermediate_component(tmp_path):
     """A symlink at an intermediate component is refused, and the message
     names THAT component -- not only the declared relative path, which for

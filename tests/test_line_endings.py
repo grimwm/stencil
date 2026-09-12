@@ -1,4 +1,4 @@
-"""Generated files carry LF, whatever platform generated them (stn-at4).
+r"""Generated files carry LF, whatever platform generated them (stn-at4).
 
 `Path.write_text(data)` with no `newline=` opens in text mode with
 `newline=None`, which translates every `\n` to `os.linesep` on write. On
@@ -110,7 +110,7 @@ def test_write_text_nofollow_writes_the_exact_utf8_bytes(tmp_path: Path):
 
 
 def test_no_generated_file_contains_a_carriage_return(generate_package):
-    """Every file `gen` produces is free of `\r`.
+    r"""Every file `gen` produces is free of `\r`.
 
     THIS TEST CANNOT FAIL ON POSIX and nobody should count it as coverage on
     its own: `os.linesep` is already "\n" here, so a text-mode write would
