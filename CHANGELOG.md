@@ -44,9 +44,14 @@ How the version gets bumped is written down in
   assert on exactly that inlined payload; a lean variant would mean the
   container tier stops testing the artifact stencil actually ships.
 
-  Locally, the fast tier went from 18.18s serial to 5.24s under `-n auto --dist loadfile` — 553 tests, same assertions. For the container tier, the
-  number that matters is CI wall clock: CI run 34678996838 on `8e17d65`
-  measured the `pytest -v` step at 565s inside a 9m42s job. Under `-n auto --dist loadfile`, the same step measured TKTK.
+  Locally, the container tier went from 689.63s to 191.00s — 989 tests passed
+  either way, the same assertions against the same real containers — and the
+  fast tier from 18.18s to 5.24s. Local wall clock is not the number that
+  matters, though, since a developer machine has more cores than a runner: on
+  CI, run 34678996838 on `8e17d65` measured the `pytest -v` step at 565s
+  inside a 9m42s job, and under `-n auto --dist loadfile` the same step
+  measured TKTK. Four vCPUs put the floor at `565/4 ≈ 141s`, so 3.2-3.5x is
+  the honest expectation rather than the 3.6x seen locally.
 
   No assertion was deleted, weakened, skipped or merged, and the compose gate
   from #86 is untouched.
