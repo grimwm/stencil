@@ -10,6 +10,7 @@ How the version gets bumped is written down in
 [AGENTS.md](AGENTS.md#cutting-a-release), not here.
 
 ## 0.40.0
+
 - **`clean` no longer needs the config to parse** (`stn-p9a`). It used to
   refuse outright — a deliberate, honest trade recorded after stn-445, but
   still not a capability, and it hit hardest exactly when a broken config was
@@ -41,7 +42,9 @@ How the version gets bumped is written down in
   `output_dir: ../victim` deletes outside the config directory) are filed,
   reproduced, and still open, shipping together with stn-40a in one run after
   this lands — "`clean` refuses" is not "`gen` is safe."
+
 ## 0.39.0
+
 - **The three images the scaffolding pulls are pinned by manifest digest, not only by
   tag** (`stn-8vi`, closing the sibling gap `stn-5hv` left open). A registry tag is
   mutable — `docker.io/pandoc/core:3.10.0.0` can be repushed, and every rebuild after
