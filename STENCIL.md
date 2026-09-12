@@ -319,11 +319,50 @@ refuses a link there because it would follow it, `clean` unlinks one without res
 removing the link is the only way such a package is ever cleanable again. `gen` is therefore
 slightly stricter than `clean`, never the reverse.
 
-Two limits, stated rather than implied. A symlink planted at an intermediate directory *between*
-that check and the write is still followed — `O_NOFOLLOW` covers the final component only — which
-needs write permission on one directory inside the output tree, and is filed as `stn-avv` with the
-descriptor-walk fix. And a `.stencil-manifest.json` you did not write is still trusted more than it
-should be: `stn-jez`.
+Since 0.39.0 the writes go through **descriptors rather than paths** (`stn-avv`). `gen` opens the
+package directory once, walks each component of a destination with `os.open(..., O_DIRECTORY | O_NOFOLLOW, dir_fd=…)`, and writes with `dir_fd=`, so the object it checked and the object it wrote
+are the same inode — a symlink swapped in at an intermediate directory *between* the check and the
+write is refused rather than followed. The write also `fstat`s the descriptor it just opened and
+refuses a non-regular file or a hardlink *there*, so all three of the refusals above hold against
+the file actually opened instead of only against a snapshot taken earlier. That last part matters
+more than it sounds: a FIFO with a reader already attached is not refused by `O_NONBLOCK`, and used
+to hand whoever planted it the rendered template content — every `template_env` value the config
+carries — while `gen` printed `Generated:` and exited 0.
+
+**On Windows this is a documented no-op.** There is no `O_DIRECTORY`, no `O_NOFOLLOW` and no
+`dir_fd` support, so `gen` keeps the path-based behaviour and the check-to-write window stays open
+there. Stated rather than implied away.
+
+Three limits remain on the write side, each one pinned by a test so this paragraph cannot quietly
+go stale:
+
+- **The output base itself**, and its own ancestors, are resolved by ordinary path lookup. There is
+  no descriptor further up to walk from — `output_dir` *is* the start — and the declared output root
+  is your boundary, the same way the config directory already is.
+- **The package directory's own name** is followed if it is a symlink, deliberately: a package `dir`
+  that is a symlink resolving back inside the output base is permitted and has been since 0.38.0.
+  For that one component, containment rests on the earlier resolve rather than on the open.
+  Everything *below* the package directory is descriptor-walked.
+- **The delete side is unchanged.** `clean` still resolves an entry's parent and then unlinks by
+  path, so that window is open; it is filed as `stn-cfby`. This release closed the write side, and
+  says only that.
+
+A `.stencil-manifest.json` is **not** authenticated, and cannot be — every field stencil writes into
+one is guessable. What holds instead is an authority rule (`stn-jez`): **a manifest may narrow what
+the config authorises, never widen it.** When the config is readable, `clean` removes only entries
+the config also derives for that package; anything else is named and *nothing* under that package is
+removed. A manifest missing any field stencil's writer emits is refused outright rather than read
+as "no opinion", which is how a planted one used to slip past the ownership check.
+
+The one case that rule cannot cover is when the config does **not** parse. There the manifest is the
+only thing that can name what the directory holds, so it is trusted — that is the trade `clean`
+exists to make, and a forged manifest is then honoured. A documented limit, pinned by a test named
+after it, not a defect with a fix pending.
+
+One consequence worth knowing before it surprises you: if you remove a template from the config and
+then run `clean`, the manifest legitimately names a file the config no longer derives, and `clean`
+now refuses that package rather than removing it. The message names the entry; restore the config
+entry if you still want the file, or delete it by hand.
 
 ### Where the managed `.gitignore` goes
 
@@ -459,6 +498,31 @@ convention rather than stencil's.
 | `pkg`          | `zip` packages: the submission archive; `doc` packages with `package_sources`: the combined PDF. Absent otherwise |
 | `clean`        | Remove generated files                                                                                            |
 | `clean-pkg`    | Remove package-specific generated files                                                                           |
+
+### What `make` actually reads, and what `gen` refuses beside it
+
+GNU make prefers `GNUmakefile`, then `makefile`, then `Makefile`. A file named `GNUmakefile` sitting
+beside the generated `Makefile` therefore **replaces it entirely**, and its recipes run as you, on
+your machine, with no container involved. Nothing inside the generated `Makefile`'s contents can
+prevent that — make has already chosen a different file to read.
+
+So since 0.39.0 `gen` refuses to write a package whose directory already holds a make-file name of
+higher precedence that stencil did not itself generate (`stn-bux`), naming the file and saying what
+`make` would run instead. The check reads the directory listing and compares names exactly, which is
+what make itself does: a lowercase `gnumakefile` does not shadow anything, even as the only file in
+the directory, however `test -f GNUmakefile` answers on a case-insensitive filesystem.
+
+Declaring `dest: GNUmakefile` yourself is fine — stencil only refuses a name it is *not* writing.
+
+**This is a behaviour change, not only a hardening.** `gen` used to be self-healing: re-running it
+overwrote a tampered `Makefile`, compose file, lockfile or Lua filter. While a shadowing file is
+present it refuses instead, so nothing in that package is refreshed until you remove or rename the
+file — and `clean` will not remove it for you, because it is in no manifest and no config-derived
+list. The refusal says so rather than only telling you to delete something.
+
+What this does **not** cover, stated plainly: a file planted *after* `gen` has run, and `MAKEFILES`
+in the environment, which makes `make` read a file of its own before anything in the directory. Both
+are outside what a generator can see at generation time.
 
 ### Compose File Pinning
 

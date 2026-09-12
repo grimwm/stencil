@@ -11,6 +11,52 @@ How the version gets bumped is written down in
 
 ## 0.39.0
 
+- **A manifest may narrow what the config authorises, never widen it** (`stn-jez`). A planted
+  `.stencil-manifest.json` with no `package` key walked past `clean`'s ownership guard and deleted
+  hand-written files at exit 0: the guard only refused a `package` field that was present *and*
+  unrecognised, so omitting the key read as "no opinion" rather than as untrusted. `read_manifest`
+  now requires every field the writer emits — all five have been written since manifest v1, so no
+  manifest stencil ever wrote is affected. That alone stops a *malformed* manifest and not a forged
+  one, since every field in a manifest is guessable, so the authority rule is the real fix: when the
+  config is readable, `clean` removes only entries the config also derives, and refuses the package
+  by name otherwise. When the config does not parse, the manifest remains the only authority — a
+  documented limit, pinned by a test. **Consequence:** removing a template from the config and then
+  running `clean` now refuses that package instead of removing the file the manifest remembers.
+
+- **`gen` writes through descriptors, so the file it checked is the file it wrote** (`stn-avv`).
+  The component check was a snapshot: a symlink swapped in at an intermediate directory between the
+  check and the write was followed, the write landed outside the output tree at exit 0, and the
+  manifest then recorded the entry so `clean` deleted there too. `gen` now opens the package
+  directory once and walks each component with `O_DIRECTORY | O_NOFOLLOW` and `dir_fd=`. The write
+  also `fstat`s the descriptor it opened and refuses a non-regular file or a hardlink against that
+  inode, which closes two refusals that were snapshot-only — including a FIFO with a reader
+  attached, which `O_NONBLOCK` does not refuse and which was handing the rendered template content
+  to whoever planted it. Windows has no `dir_fd` support and keeps the path-based behaviour, stated
+  in STENCIL.md. The delete side is untouched and is `stn-cfby`.
+
+- **One named refusal for a malformed `templates:` entry** (`stn-dl3r`). A string where a mapping
+  belongs, or a mapping with no `src`, was a bare `AttributeError` on `gen`, a `KeyError` carrying a
+  Python class name into a config message on `gen` again, and an `AttributeError` on `install`,
+  while `clean` alone named it properly. The shape check now lives in `package_contexts` — the one
+  function all three commands call — and `gen`, `install` and `clean` emit a byte-identical message,
+  once, rather than once per package. An absent `templates:` key and `templates: []` both stay legal.
+
+- **`gen` refuses a make file that outranks the one it writes** (`stn-bux`). `GNUmakefile` beside
+  the generated `Makefile` replaces it in GNU make's name precedence and runs as the host user, and
+  nothing inside the generated Makefile's contents can prevent that. `gen` now refuses, naming the
+  file. This is a behaviour change as well as a hardening: `gen` is no longer self-healing while a
+  shadowing file is present, and `clean` will not remove the file for you — the refusal says so.
+  `MAKEFILES` in the environment is not covered.
+
+- **Generated files are pinned as LF, on every platform** (`stn-at4`). `gen` used to write in text
+  mode, so on Windows every generated file was CRLF and the lockfile digest guards then refused a
+  correct install — a guard accusing the honest user and telling them to repeat the step that caused
+  it. The write path was already fixed in 0.39.0 by the containment work below, which moved it onto
+  a binary handle; what was missing was anything holding that property, so it now has a test that
+  fails on Linux as well as Windows. The managed `.gitignore` is deliberately **not** included: it
+  is the author's file rather than one stencil generates, it may be a symlink into a dotfiles
+  repository, it round-trips CRLF correctly today, and nothing hashes or containerises it.
+
 - **The output side's writes are contained at every component, not only at the
   package directory** (`stn-h5q`, `stn-17h`, `stn-1a4`, `stn-jl3`). These are the
   four residuals `stn-pe3`/`stn-vhr`/`stn-40a`/`stn-9rn` named below and did not
