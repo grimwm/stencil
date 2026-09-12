@@ -1677,11 +1677,21 @@ def test_html_to_pdf_ignores_a_decoy_in_the_workspace(decoy_tools_workdir):
     of a BARE require as well as a rooted one. This test would now pass with
     the createRequire guard deleted, which it would not have before.
 
-    It is kept, and it is not the guard's test any more. What holds stn-cnm now
-    is the static tier in this same file -- the createRequire needle, the
-    resolved-path startsWith check, and the no-bare-require scan over every
-    generated .js -- none of which this move touches and all of which stayed
-    exactly as strict. What this one still buys is a runtime proof that the
+    It is kept, and it is not the guard's test any more. WHAT HOLDS stn-cnm NOW
+    IS THE FAST, STATIC TIER IN THIS SAME FILE, by name so a reader can go and
+    check rather than take this on trust:
+
+    - test_html_to_pdf_js_roots_its_resolution_at_the_pinned_tools_dir -- the
+      createRequire needle and the resolved-path startsWith check;
+    - test_no_generated_js_bare_requires_a_pinned_browser_package -- the scan
+      over every generated .js;
+    - test_the_missing_tools_guard_names_the_pinned_dir -- the one runtime test
+      that still proves the guard FIRES, which it does by running the script
+      under a plain node image with no pipeline.BROWSER_TOOLS_DIR at all.
+
+    None of those is touched by the move and all stayed exactly as strict. The
+    first two run with no container runtime, so unlike this test they cannot be
+    skipped into silence. What this one still buys is a runtime proof that the
     PINNED tree is what actually launches Chromium and writes the PDF, in a
     directory built to tempt it otherwise: defence in depth, for one container
     minute. Do not read its green as evidence about the guard.
