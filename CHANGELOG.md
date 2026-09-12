@@ -93,6 +93,45 @@ How the version gets bumped is written down in
   section naming paths without the top-level `output_dir` prefix, so it
   ignores nothing whenever that key is set (`stn-r5v`).
 
+- **`make format-md` now says why it refused a lockfile** (`stn-jjw`). The digest
+  guard below piped `sha256sum -c` to `>/dev/null 2>&1`, so all four ways *that
+  check* can end — a match, a mismatch, an absent file to check, and an absent
+  `sha256sum` — reached the consumer as the same message: "`format-package-lock.json`
+  is not the file stencil generated … Run `stencil gen`". (A missing lockfile in
+  the package is a different thing and was never affected: the presence guard
+  above catches it before the `cp` and says "is not here". The file this one can
+  find absent is the copy at `/tmp/fmt/package-lock.json`.) The exit code cannot
+  tell them apart either, because `if ! …; then … exit 1; fi` swallows whatever
+  `sha256sum` returned and substitutes its own `1`, and `>/dev/null` silences
+  stdout by design. stderr was the only channel left that could say which, and it
+  was the one being discarded — so a base image that dropped `sha256sum` told the
+  consumer their lockfile was wrong and sent them to re-run `stencil gen` forever
+  over a file that was correct all along.
+
+  Dropping `2>&1` and keeping `>/dev/null` puts `sha256sum`'s own account of the
+  failure immediately above stencil's explanation. Success stays silent, and the
+  line leaks nothing: it names no digest. All four cases are measured in the
+  pinned image by `tests/test_compose_format_md.py`, which asserts the
+  missing-`sha256sum` case is distinguishable from a mismatch — the thing `2>&1`
+  destroyed.
+
+  The refusal itself also gains the two causes `Dockerfile.browser`'s already
+  named, because each reaches the same dead end by a different route: a
+  `format-package-lock.json.j2` overridden from your own `templates_dir` (the
+  digest comes from stencil's vendored lockfile, so `stencil gen` regenerates
+  your override and refuses again), and Windows CRLF line endings (`stn-at4`,
+  which changes the digest though nobody edited the file). Both presented as a
+  plain mismatch over a correct file and sent the reader to `stencil gen` — the
+  same forever-loop, arrived at sideways. The two guards now match in both the
+  redirection and the refusal.
+
+  The entrypoint's "what this does not close" note also gains the bypass it
+  omitted: compose-file *selection*. `make` pins its compose file with `-f` since
+  `stn-qli`, so a `docker-compose.override.yml` or a `COMPOSE_FILE` in `.env` no
+  longer redirects `make format-md`. A hand-run `docker compose` with no `-f`
+  still merges an override, as compose has always done. The note enumerated only
+  edits to the two files in the package, which read as exhaustive and was not.
+
 - **The generated Makefile's image probe no longer runs a command taken from the
   environment** (`stn-3y8`). The pull guard needs a container runtime rather than a compose
   one — there is no `compose image inspect` — and derived it as
