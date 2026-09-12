@@ -10,6 +10,7 @@
 // way. Puppeteer can wait for the first and detect the second.
 const { createRequire } = require("node:module");
 const fs = require("node:fs");
+const nodePath = require("node:path");
 
 const [input, output] = process.argv.slice(2);
 
@@ -18,18 +19,59 @@ if (!input || !output) {
   process.exit(2);
 }
 
+// RESOLVED HERE, WHILE THE WORKING DIRECTORY IS STILL THE MOUNT, because this
+// script moves out of it a few lines below and every path it was handed is
+// relative to where it started.
+//
+// The pdf service sets `working_dir: /workspace` and the generated Makefile
+// passes `$(OUT)/Guide.html $(OUT)/Guide.pdf`, where OUT is `.` for a package
+// with no output_dir -- so both arguments are relative and only mean anything
+// from /workspace. BOTH have to be resolved, not just the input: page.pdf()'s
+// `path` and the read/write inside addPdfUaStructure() are cwd-relative too,
+// and resolving only the input would leave `make pdf` writing its PDF into the
+// container's throwaway layer and reporting success.
+//
+// AND IT REPLACES A HARD-CODED PREFIX, which is the second bug here (stn-ao5).
+// The page URL used to be built as `file:///workspace/${input}`, joining the
+// argument onto a fixed directory. For a package whose products go to an
+// output_dir, OUT is `/out` -- a SEPARATE mount, because the products are a
+// sibling of the sources and a sibling is `..` away, which escapes a bind
+// mount -- so that join produced
+//
+//     net::ERR_FILE_NOT_FOUND at file:///workspace//out/document.html
+//
+// and `make pdf` could not run at all for such a package. This is the identical
+// defect CHECK_ACCESS_SCRIPT's comment in stencil/pipeline.py records for the
+// sibling service, and the identical repair: one path, built from the argument,
+// rather than two that have to agree.
+//
+// The two names below are kept for MESSAGES -- `input` and `output` are what
+// the caller typed, and echoing those back reads better than an absolute path
+// nobody wrote.
+const inputPath = nodePath.resolve(input);
+const outputPath = nodePath.resolve(output);
+
 // puppeteer and pdf-lib are resolved from the image's PINNED install root
 // ({{ browser_tools_dir }}, the root `npm ci` installs into) rather than by a
-// bare require("puppeteer") / require("pdf-lib"). This script is itself
-// INSIDE /workspace -- the consumer's own mounted package directory -- so a
-// bare require here walks up from /workspace and can reach an incidental
+// bare require("puppeteer") / require("pdf-lib").
+//
+// THE ORIGINAL REASON NO LONGER APPLIES, AND THE GUARD STAYS ANYWAY. This used
+// to say: the script is itself inside /workspace, so a bare require walks up
+// from the consumer's own mounted package directory and can reach an incidental
 // node_modules there (someone, or some tool, once ran `npm install` in the
 // package directory) before resolution ever falls through to
-// {{ browser_node_modules }} on NODE_PATH. That would silently outrank the
-// pinned tree with no trace -- html-to-pdf.js prints the repairs it applied
-// either way. NODE_PATH still makes a bare require WORK for anyone testing
-// outside a polluted workspace, which is exactly how a bare require would
-// come back if a future edit reintroduced one here -- do not.
+// {{ browser_node_modules }} on NODE_PATH. That was true and it is not any
+// more -- stn-7ki moved this file into the image, so a bare require would now
+// walk {{ browser_tools_dir }}/node_modules, /opt/node_modules, /node_modules
+// and never touch the mount at all.
+//
+// What is left is a smaller but real job, and it is why none of this is
+// deleted: a require rooted HERE still fails loudly, and with a message that
+// names the directory, when the script is run somewhere the tools are not --
+// under a plain node image, or against a Dockerfile.browser a consumer
+// overrode without installing them. NODE_PATH would otherwise turn that into a
+// silent fallback. Do not reintroduce a bare require on the grounds that the
+// mount can no longer win; the guard below is measuring something else.
 //
 // module.createRequire, rather than a literal
 // require("{{ browser_node_modules }}/puppeteer"), because requiring an
@@ -69,20 +111,35 @@ const fromTools = createRequire("{{ browser_tools_dir }}/package.json");
 // This closes an INCIDENTAL node_modules outranking the pinned tree (the
 // real, common, traceless case), and a malicious package that arrived via an
 // unrelated npm install in /workspace. It does NOT close a hostile
-// /workspace, and cannot from inside the mount: html-to-pdf.js is itself
-// part of that mount, as are the Makefile, docker-compose.yml,
-// Dockerfile.browser and the Lua filters, and `make pkg` has no `gen`
-// prerequisite -- anyone who can write /workspace/node_modules can equally
-// write /workspace/html-to-pdf.js.
+// /workspace, and moving this file into the image did not change that. The
+// file is BAKED FROM the mount -- Dockerfile.browser COPYs it out of the
+// package directory and the Makefile runs `$(DC) build pdf` before every
+// invocation -- and the Makefile, docker-compose.yml, Dockerfile.browser and
+// the Lua filters are all still in that directory, with no `gen` prerequisite
+// on `make pkg`. Anyone who can write /workspace/node_modules can equally
+// write /workspace/html-to-pdf.js and have it baked on the next build. What
+// stn-jeq and stn-7ki closed is the separate question of which files in the
+// mount get to run or reinterpret this one WITHOUT being it.
 //
 // The message below covers both reachable failure cases, because a
 // MODULE_NOT_FOUND from resolve() is folded into it rather than left to
 // surface as a raw stack: (a) this script is not running inside the
 // generated browser image at all (someone ran `node html-to-pdf.js` on a
 // laptop); (b) it IS running inside a browser image, but Dockerfile.browser
-// -- itself on the template search path and overridable independently of
-// this file, per AGENTS.md -- installed the tools somewhere other than
-// {{ browser_node_modules }}. A package missing INSIDE a tools tree that
+// -- itself on the template search path, per AGENTS.md -- installed the tools
+// somewhere other than {{ browser_node_modules }}.
+//
+// CASE (b) GOT MORE LIKELY AND LESS SURVIVABLE, and that is the cost stn-7ki
+// accepted. Dockerfile.browser used to be overridable INDEPENDENTLY of this
+// file: an override that installed the tools elsewhere still ran this script
+// from the mount, and this guard is what explained the failure. Now the
+// Dockerfile is also what COPYs the script in, so an override that drops that
+// line leaves node reporting `Cannot find module` for a file that is simply
+// not there, and the guard cannot speak at all. The two templates travel
+// together from here -- the same coupling generate.py already documents for
+// Dockerfile.browser and its lockfile -- and STENCIL.md says so.
+//
+// A package missing INSIDE a tools tree that
 // otherwise resolves is left to surface its raw MODULE_NOT_FOUND at the
 // requires below: that is a broken image, and the raw error already names
 // the package.
@@ -121,6 +178,37 @@ for (const name of ["puppeteer", "pdf-lib"]) {
     process.exit(2);
   }
 }
+
+// OUT OF THE MOUNT, BEFORE ANY BROWSER CODE LOADS (stn-jeq).
+//
+// puppeteer's getConfiguration() searches UPWARD FROM process.cwd() for
+// .puppeteerrc.cjs, .puppeteerrc.js, puppeteer.config.cjs, .config/puppeteerrc.cjs
+// and nine more, and `require`s the JavaScript ones. With cwd at /workspace that
+// is the consumer's own package directory, and in a course repository its
+// contents arrive in pull requests: a one-line .puppeteerrc.cjs ran as uid 0,
+// over the read-write mount, with the network up, on every `make pdf` -- and
+// the build printed its usual success output afterwards.
+//
+// THERE IS NO SWITCH FOR THIS. Measured against the pinned puppeteer, not
+// assumed: getConfiguration() is unconditional and calls
+// `lilconfig('puppeteer', {searchPlaces: [...]}).search()` with NO argument,
+// and lilconfig's signature is `search(searchFrom = process.cwd())` with
+// `stopDir: os.homedir()`. No environment variable and no launch option turns
+// discovery off. The working directory is the only lever there is.
+//
+// From here the upward walk is {{ browser_tools_dir }} -> /opt -> / and stops.
+// Every directory on it belongs to the image; none of them is the mount. The
+// one searchPlace that does exist on that walk is
+// {{ browser_tools_dir }}/package.json, the manifest `npm ci` installs from,
+// which carries no `puppeteer` key.
+//
+// AFTER THE GUARD ABOVE, DELIBERATELY. If the tools directory is missing, the
+// guard's own message is the useful failure -- a chdir placed first would throw
+// a raw ENOENT from uv_chdir instead, and tests/test_pins.py asserts that
+// message under a plain node image with no {{ browser_tools_dir }} at all.
+// Measured: the configuration is read lazily at launch(), not at require time,
+// so this is early enough by a wide margin. Do not move it below launch().
+process.chdir("{{ browser_tools_dir }}");
 
 const puppeteer = fromTools("puppeteer");
 const {
@@ -1206,7 +1294,7 @@ async function main() {
       failures.push(`uncaught page error: ${error.message}`);
     });
 
-    await page.goto(`file:///workspace/${input}`, {
+    await page.goto(`file://${inputPath}`, {
       waitUntil: "networkidle0",
       timeout: TIMEOUT_MS,
     });
@@ -1256,7 +1344,7 @@ async function main() {
     const domTables = await collectTableCells(page);
 
     await page.pdf({
-      path: output,
+      path: outputPath,
       // The @page rules in _page-style.css.j2 and _slide-style.css.j2 are the
       // page geometry: letter with 1in margins for documents, letter landscape
       // with one slide per page for decks. Without this, Puppeteer's own
@@ -1281,7 +1369,7 @@ async function main() {
 }
 
 main()
-  .then((facts) => addPdfUaStructure(output, facts))
+  .then((facts) => addPdfUaStructure(outputPath, facts))
   .then(({ mapped, wrapped, links, cells, unicodes, artifacts }) => {
     const notes = [];
     if (mapped.length) notes.push(`role map: ${mapped.join(", ")} -> Span`);

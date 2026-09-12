@@ -259,6 +259,37 @@ BROWSER_TOOLS_DIR = "/opt/tools"
 BROWSER_NODE_MODULES = f"{BROWSER_TOOLS_DIR}/node_modules"
 FORMAT_TOOLS_DIR = "/tmp/fmt"
 
+# WHERE THE PDF DRIVER RUNS FROM, AND WHY IT IS NOT THE MOUNT (stn-jeq, stn-7ki).
+#
+# html-to-pdf.js is still RENDERED into the package directory -- a consuming
+# project overrides it from its own templates_dir, and Dockerfile.browser COPYs
+# it from there, so that override still reaches the image. What changed is where
+# it is RUN from, because two separate loaders take their answer from the script's
+# own location and from the process's working directory:
+#
+# - Node decides CommonJS-vs-ESM from the nearest package.json TO THE FILE. With
+#   the script at /workspace, that is the consumer's, and a course package
+#   legitimately has one: `{"type": "module"}` turned the whole script into a
+#   parse error before any guard inside it could speak (stn-7ki).
+# - puppeteer's getConfiguration() searches UPWARD FROM process.cwd() for
+#   .puppeteerrc.cjs and twelve siblings, and `require`s the JavaScript ones. It
+#   calls lilconfig(...).search() with no argument -- measured against the pinned
+#   puppeteer, where `search(searchFrom = process.cwd())` and `stopDir` is the
+#   home directory -- so there is no environment variable and no launch option
+#   that turns it off. cwd is the only lever (stn-jeq).
+#
+# Baking the script here answers the first. The second is answered by the script
+# chdir()ing to BROWSER_TOOLS_DIR, and by CHECK_ACCESS_SCRIPT's leading `cd`:
+# from there the upward walk is /opt/tools -> /opt -> / and stops, and every
+# directory on it belongs to the image rather than to the mount.
+#
+# The filename is repeated in Dockerfile.browser.j2 and docker-compose-html.yml.j2
+# rather than reaching them through a new template context key, because adding one
+# means editing generate.py. tests/test_pins.py asserts that what those two render
+# equals BROWSER_SCRIPT_PATH, so the three cannot drift apart quietly.
+BROWSER_SCRIPT = "html-to-pdf.js"
+BROWSER_SCRIPT_PATH = f"{BROWSER_TOOLS_DIR}/{BROWSER_SCRIPT}"
+
 # PDF/UA-1 conformance checking. Pinned, because veraPDF's rule set is the
 # thing being asserted against: an unpinned tag lets a build go red or green
 # on someone else's release rather than on a change here.
@@ -351,7 +382,45 @@ exit $failed
 #
 # Every $ is doubled on the way into the compose file, exactly as for veraPDF;
 # the doubling happens in the template so this text stays runnable through sh.
-CHECK_ACCESS_SCRIPT = """\
+#
+# THE FIRST LINE IS THE WHOLE stn-jeq FIX FOR THIS SERVICE, and it is one `cd`
+# only because everything below it was already written in absolute paths.
+#
+# pa11y requires the puppeteer WRAPPER (lib/pa11y.js) and calls launch() inside
+# it, so this half cannot be closed by resolving a different module -- the
+# configuration puppeteer executes is found by searching upward from
+# process.cwd(), which was /workspace, the consumer's own package directory.
+# Measured on the pinned pa11y and puppeteer: a one-line .puppeteerrc.cjs there
+# ran as uid 0 on every `make check-access`, and the check then printed its usual
+# "No issues found!".
+#
+# pa11y ALSO resolves three things of its own from process.cwd() -- loadConfig's
+# `./pa11y.json` default, loadReporter's path.join(process.cwd(), name) and
+# loadRunnerFile's. None is reachable as this service is invoked, because the
+# --config below is absolute and the reporter and runner are built-ins. Moving
+# the working directory closes them by construction instead of leaving them one
+# flag change away.
+#
+# Nothing after this line is cwd-relative: $directory arrives absolute in both
+# layouts and the file:// URL is built from it, which is the property the rest of
+# this comment block already argues for. Do not add a relative path below without
+# revisiting this.
+# IT REFUSES RATHER THAN CARRYING ON, and that matters more here than the `cd`
+# itself. This script runs under `sh -c` with no `set -e`, so a bare `cd` that
+# fails prints one line to stderr and CONTINUES from /workspace -- which reopens
+# stn-jeq in full and still exits 0 with "Checked 2 HTML file(s) at WCAG 2.1 AA,
+# light and dark." Every test stays green while the hole is open. That is the
+# same shape of silent-guard failure the doubled-`$` comment in
+# docker-compose-html.yml.j2 already argues about for the zero-file check: a
+# guard that stops guarding without saying so.
+CHECK_ACCESS_SCRIPT = f"""\
+cd {BROWSER_TOOLS_DIR} || {{
+  echo "check-access: {BROWSER_TOOLS_DIR} is not there, so this cannot move out" >&2
+  echo "of the mount before pa11y launches Chromium. Dockerfile.browser did not" >&2
+  echo "install the tools where this expects them." >&2
+  exit 1
+}}
+""" """\
 directory=${1:?check-access needs a directory to search}
 failed=0
 checked=0
@@ -932,32 +1001,56 @@ def html_to_pdf(
     output: str,
     *,
     workdir: Path,
+    out_dir: Path | None = None,
+    script: str | None = None,
     tag: str | None = None,
     runtime: str | None = None,
     timeout: float | None = None,
 ) -> subprocess.CompletedProcess:
     """Convert an HTML file to PDF the way the generated pdf service does.
 
-    Same image, same entrypoint, same mount -- the compose service is
-    `node html-to-pdf.js` over the package directory at /workspace.
+    Same image, same entrypoint, same mounts and the same working directory --
+    the compose service is `node BROWSER_SCRIPT_PATH` with `working_dir:
+    /workspace`.
+
+    THE WORKING DIRECTORY IS STILL /workspace AND THE SCRIPT IS NOT. That pair
+    is the point rather than an inconsistency: the Makefile passes `$(OUT)/x.html`,
+    which is relative for a package without an output_dir, so the process has to
+    START in the mount for a relative argument to mean anything. html-to-pdf.js
+    resolves its two arguments against that and then moves out of the mount
+    itself, before puppeteer can read a configuration from it. See
+    BROWSER_SCRIPT_PATH.
+
+    ``out_dir`` mounts a second directory at /out, exactly as ``check_access``
+    does and for the same reason -- a package with an ``output_dir`` puts its
+    products in a sibling of its sources, and a sibling is ``..`` away, which
+    escapes a bind mount. Pass ``/out/...`` paths to reach it.
+
+    ``script`` overrides the entrypoint's path, and exists for one caller:
+    tests/test_pins.py runs the generated script under the PLAIN node image,
+    which has no {BROWSER_TOOLS_DIR} and therefore no baked copy, to prove the
+    missing-tools guard fires. Every other caller wants the default.
     """
     tag = tag or browser_image_tag()
     runtime = runtime or container_runtime()
     if runtime is None:
         raise RuntimeError("no container runtime found (looked for docker, podman)")
 
+    mounts = ["-v", f"{Path(workdir).resolve()}:/workspace:z"]
+    if out_dir is not None:
+        mounts += ["-v", f"{Path(out_dir).resolve()}:/out:z"]
+
     return subprocess.run(
         [
             runtime,
             "run",
             "--rm",
-            "-v",
-            f"{Path(workdir).resolve()}:/workspace:z",
+            *mounts,
             "-w",
             "/workspace",
             tag,
             "node",
-            "html-to-pdf.js",
+            script or BROWSER_SCRIPT_PATH,
             source,
             output,
         ],

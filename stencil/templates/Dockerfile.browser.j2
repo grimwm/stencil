@@ -139,4 +139,33 @@ RUN for theme in light dark; do \
         '}' > "/opt/pa11y-$theme.json"; \
     done
 
+# THE PDF DRIVER IS BAKED IN RATHER THAN READ OUT OF THE MOUNT (stn-7ki).
+#
+# It is still GENERATED into the package directory -- that is the build context
+# this copies from, so a consuming project overriding html-to-pdf.js.j2 from its
+# own templates_dir still gets its version here, and `make pdf` runs
+# `$(DC) build pdf` before every invocation, so an edit is never a build behind.
+# What moves is where node READS it from, because Node decides CommonJS-vs-ESM
+# from the nearest package.json TO THE FILE. At /workspace that is the
+# consumer's, and a course package legitimately has one:
+#
+#     $ printf '{"name":"course-package","type":"module"}' > package.json
+#     $ make pdf
+#     ReferenceError: require is not defined in ES module scope
+#
+# which is a parse error before the script's own tools-directory guard, or any
+# other guard in it, can say anything. Here the nearest package.json is the
+# derived manifest written above, which declares no "type", so the file is read
+# as CommonJS no matter what the mount contains.
+#
+# AFTER `npm ci`, deliberately. This layer changes whenever the script does; the
+# install above takes minutes and must not be invalidated with it.
+#
+# This does NOT make the script trusted where it was not before. A package
+# directory whose html-to-pdf.js an attacker can rewrite was already running
+# that file as root -- baking it changes which phase reads it, not who may write
+# it. What it closes is the separate question of what ELSE in that directory
+# gets to decide how the script is parsed.
+COPY html-to-pdf.js {{ browser_tools_dir }}/html-to-pdf.js
+
 WORKDIR /workspace
