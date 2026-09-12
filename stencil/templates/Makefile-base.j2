@@ -28,8 +28,13 @@ DC ?= docker compose
 # LIKE THE COMPOSE_FILES GUARDS BELOW, THIS IS HONEST-MISTAKE PROTECTION AND
 # NOT AN ATTACKER BOUNDARY. DC names the command make runs, so anyone who can
 # set it can already run anything -- `DC='env COMPOSE_FILE=evil.yml docker
-# compose'` carries no dash and passes this check (inert, as it happens: an
-# explicit `-f` makes compose ignore COMPOSE_FILE entirely, measured). What
+# compose'` carries no dash and passes this check. Its COMPOSE_FILE half is
+# inert, measured: an explicit `-f` makes compose ignore COMPOSE_FILE
+# entirely. The value is NOT inert overall, though, and an earlier version of
+# this comment said it was -- the probe runtime below reads DC's FIRST word,
+# so that value probes with `env`, which fails and silently turns the pull
+# guard into an unconditional pull. See the note on prefix-command DC
+# values there. What
 # the check is for is the realistic case: a consumer who read "override DC to
 # use another implementation", reached for the nearest variable to add a
 # compose file too, and would otherwise get a silent merge rather than an
@@ -139,10 +144,11 @@ _stencil_pin_check = $(if $(strip $(COMPOSE_FILES)),,$(error COMPOSE_FILES must 
 
 STENCIL_COMPOSE = $(_stencil_pin_check)$(DC) $(addprefix -f ,$(COMPOSE_FILES))
 
-# The runtime CLI that DC actually drives, derived rather than hardcoded. The
-# four spellings pipeline.compose_command() falls through are "docker
-# compose", "podman compose", "docker-compose" and "podman-compose", and
-# ensure_image below needs the bare binary name to run `image inspect`
+# The runtime CLI that DC actually drives, DERIVED FROM DC AND ONLY FROM DC.
+# Not a knob of its own: DC is the knob, advertised on line 2, and this
+# follows it. The four spellings pipeline.compose_command() falls through are
+# "docker compose", "podman compose", "docker-compose" and "podman-compose",
+# and ensure_image below needs the bare binary name to run `image inspect`
 # against. $(subst -, ,$(DC)) turns "docker-compose" into two words so
 # $(firstword ...) yields "docker" the same way it already does for "docker
 # compose"; the same holds for the two podman spellings. Do NOT simplify this
@@ -150,7 +156,80 @@ STENCIL_COMPOSE = $(_stencil_pin_check)$(DC) $(addprefix -f ,$(COMPOSE_FILES))
 # spellings but returns the whole standalone binary name ("docker-compose")
 # for the other two, and neither standalone binary has an `image inspect`
 # subcommand, so the probe below would fail to run at all on those hosts.
-CONTAINER ?= $(firstword $(subst -, ,$(DC)))
+#
+# WHY DERIVED RATHER THAN OVERRIDABLE (stn-3y8). This used to be spelled
+# `CONTAINER ?=`, and `?=` means an environment value wins. Since ensure_image
+# runs the result as a BARE COMMAND, an exported CONTAINER was executed by
+# four targets, in the package directory, with both streams sent to
+# /dev/null. MEASURED against a real generated package: with CONTAINER naming
+# a planted script, `make format-md` ran it and exited 0 with nothing on
+# either stream. The first attempt at that reproduction looked clean for
+# exactly the reason this is dangerous -- the probe's output is discarded, so
+# a marker printed to stdout proves nothing and the planted command had to
+# write a file to be seen at all.
+#
+# It also silently disabled the pull guard below, which is the consequence a
+# maintainer would not guess: the probe's EXIT STATUS is what decides whether
+# `|| pull` runs. A planted probe exiting 0 means the pull never happens and
+# a stale image is used with nothing said; one exiting non-zero means the
+# pull happens on every build, forever.
+#
+# The name is namespaced for the reason STENCIL_COMPOSE is. CONTAINER is
+# short, unnamespaced, and exactly the name a consumer composition might pick
+# for its own "the name of my container"; COMPOSE_FILES keeps the guessable
+# unprefixed name because it IS the knob a consumer is meant to set, and this
+# is not one. A stray CONTAINER is now INERT rather than an error,
+# deliberately: that name is generic enough that an unrelated export is
+# plausible, and aborting every build over one would be worse than the bug it
+# came from. The cost is that `make doc CONTAINER=podman` is silently
+# ignored, since make does not warn about an unused command-line variable --
+# recorded in STENCIL.md and the changelog rather than left to be discovered.
+#
+# WHY `override` AND NOT A PLAIN `=`. MEASURED, GNU Make 3.81 (macOS) and 4.3
+# (CI); "loses" means the assignment here loses and the injected value wins:
+#
+#                     env    make -e   command line   MAKEFLAGS   GNUMAKEFLAGS
+#   X ?= ...          loses  loses     loses          loses       loses (4.3)
+#   X = ...           wins   loses     loses          loses       loses (4.3)
+#   override X = ...  wins   wins      wins           wins        wins
+#
+# MAKEFLAGS is the route the COMPOSE_FILES origin guard above explicitly
+# cannot close -- it reports origin "command line" and slips straight past.
+# `override` closes it rather than inheriting that caveat. GNUMAKEFLAGS is a
+# live injection route on 4.3 and inert on 3.81, so a green local run on
+# macOS proves nothing about it and the test that covers it skips here and
+# runs in CI. The assignment stays RECURSIVE, so a DC assigned later -- or
+# built from a second variable, the deferred case _stencil_pin_check above
+# exists for -- is still read where it is used.
+#
+# WHAT `override` DOES NOT CLOSE, stated because a guard that overclaims is
+# worse than none. A TARGET-SPECIFIC or PATTERN-SPECIFIC assignment in the
+# consuming makefile beats it -- `doc: STENCIL_CONTAINER = x` for that target,
+# `%: STENCIL_CONTAINER = x` for every one -- while a GLOBAL plain assignment
+# loses. MEASURED on 3.81 and 4.3, and MAKEFILES (an environment variable
+# naming makefile text to read first) carries that form in from the
+# environment. This is the same resolve-after-parse fact _stencil_pin_check
+# above was written for. None of it is defensible in make, and none of it is
+# an attacker route: every one needs the consuming makefile, which can
+# already run anything.
+#
+# THE ESCAPE HATCH, and it has a real customer. A composition needing a
+# differently-named runtime writes, after the include:
+#
+#   override STENCIL_CONTAINER = nerdctl
+#
+# An `override` is required; a plain assignment there loses to this one,
+# which is the one sharp edge in the arrangement. Its customer is a DC that
+# is not a bare implementation name: the derivation reads the FIRST word, so
+# `sudo docker compose` probes with `sudo` (the standard rootful-Linux
+# workaround), `env FOO=1 docker compose` with `env`, and
+# `/opt/my-tools/docker compose` with `/opt/my` -- the subst splits the path
+# too. All three pass the dash-flag guard above, and all three make the probe
+# exit non-zero (MEASURED: 1, 127 and 127), which silently turns the pull
+# guard into an unconditional pull. `podman-remote compose` is quieter and
+# worse: it derives "podman" and probes the LOCAL image store while compose
+# pulls to the remote. A consumer on any of those hosts sets the override.
+override STENCIL_CONTAINER = $(firstword $(subst -, ,$(DC)))
 
 # Pull an image only when it is not already present. Four targets want this and
 # the two shells share no spelling of it, so it lives here rather than as four
@@ -167,8 +246,8 @@ CONTAINER ?= $(firstword $(subst -, ,$(DC)))
 # `image inspect <ref>` checks the reference actually named, digest included,
 # and reports the image absent when the digest is wrong -- which is what this
 # guard always claimed to do and, before this fix, could not. The same
-# measurement holds for podman, and is the reason CONTAINER exists above
-# rather than the literal "docker" this used to say: on a podman-only host
+# measurement holds for podman, and is the reason STENCIL_CONTAINER exists
+# above rather than the literal "docker" this used to say: on a podman-only host
 # the old `-q`-flagged listing doesn't merely miss the digest, it fails
 # outright, so the guard was an unconditional pull there regardless of this
 # bug.
@@ -191,9 +270,9 @@ CONTAINER ?= $(firstword $(subst -, ,$(DC)))
 # containing a space would need its own quoting inside that string, which
 # this does not attempt, so such a path breaks the Windows branch.
 ifeq ($(OS),Windows_NT)
-ensure_image = @powershell -NoProfile -Command "$(CONTAINER) image inspect '$(1)' *> $$null; if ($$LASTEXITCODE -ne 0) { $(STENCIL_COMPOSE) pull $(2) }"
+ensure_image = @powershell -NoProfile -Command "$(STENCIL_CONTAINER) image inspect '$(1)' *> $$null; if ($$LASTEXITCODE -ne 0) { $(STENCIL_COMPOSE) pull $(2) }"
 else
-ensure_image = @$(CONTAINER) image inspect '$(1)' >/dev/null 2>&1 || $(STENCIL_COMPOSE) pull $(2)
+ensure_image = @$(STENCIL_CONTAINER) image inspect '$(1)' >/dev/null 2>&1 || $(STENCIL_COMPOSE) pull $(2)
 endif
 
 # Default target

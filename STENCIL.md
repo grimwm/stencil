@@ -383,6 +383,30 @@ make doc COMPOSE_FILES="docker-compose.yml docker-compose.override.yml"
   `stencil` itself probes for — `docker compose`, `podman compose`, `docker-compose`,
   `podman-compose` — are unaffected, whether exported or passed on the command line.
 
+- **The pull guard's runtime follows `DC`, and is not a knob of its own.** Before each
+  compose call the Makefile probes whether the pinned image is already present, so a build
+  that needs no pull does none. That probe needs the *runtime* CLI rather than the compose one
+  — there is no `compose image inspect` — so it derives one from `DC`: `docker compose` and
+  `docker-compose` both probe with `docker`, both podman spellings with `podman`. It is
+  written `override STENCIL_CONTAINER = ...`, which means an exported or command-line
+  `CONTAINER` or `STENCIL_CONTAINER` is **ignored**. That is deliberate: the probe's result is
+  run as a command, so a value exported once for something unrelated would otherwise change
+  what every generated package executes (`stn-3y8`). The trade is that `make doc CONTAINER=podman` no longer does anything, and make issues no warning for an unused
+  command-line variable, so there is no signal — set `DC` instead, and the probe follows it.
+
+  If your `DC` is not a bare implementation name, the derivation reads its first word and gets
+  this wrong: `sudo docker compose` probes with `sudo`, `env FOO=1 docker compose` with `env`,
+  `/opt/my-tools/docker compose` with `/opt/my`. The probe then always fails, which costs a
+  pull on every build rather than breaking it. `podman-remote compose` is quieter and worse:
+  it probes the *local* image store while compose pulls to the remote. On any of those hosts,
+  name the runtime in your own composition, after the include:
+
+  ```make
+  override STENCIL_CONTAINER = nerdctl
+  ```
+
+  The `override` is required — a plain assignment there loses to the Makefile's own.
+
 - **Bare paths, not flags.** `COMPOSE_FILES` is a space-separated list of compose files, not a
   string of compose arguments — the Makefile adds each file's `-f` itself. Writing
   `COMPOSE_FILES="-f docker-compose.yml"` fails, and loudly: `-f` is a word like any other, so
