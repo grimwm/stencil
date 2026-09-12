@@ -22,9 +22,131 @@ import yaml
 from bs4 import BeautifulSoup
 from filelock import FileLock
 
-from stencil import generate, pipeline
+import stencil
 
 FIXTURES = Path(__file__).parent / "fixtures"
+
+# --- the tests must be testing THIS checkout (stn-2et) ---------------------
+#
+# AGENTS.md tells every contributor and every agent to work in a git worktree,
+# and the `pip install -e .` that makes `stencil` importable points at exactly
+# ONE checkout. pytest's `prepend` import mode puts `<checkout>/tests` on
+# sys.path -- never `<checkout>` -- so `import stencil` used to fall through
+# to that editable install's finder and resolve, by absolute path, to whoever
+# owned it. A worktree then graded another tree's source and said nothing.
+#
+# `pythonpath = ["."]` in [tool.pytest.ini_options] is what fixes it. This is
+# the witness that it worked. It is not redundant with the fix: a setting can
+# be deleted in a merge, overridden by a different rootdir, or defeated by an
+# arrangement nobody has thought of yet, and every one of those failures is
+# silent. The repository has already paid for that lesson once, with a
+# pre-push hook that was gated on `command -v pre-commit` and failed open.
+#
+# The comparison is against THIS FILE's checkout rather than against
+# `config.rootpath`, deliberately. Several tests here run an inner pytest that
+# loads this conftest as a plugin against a throwaway rootdir
+# (tests/test_parallel_harness.py, tests/test_tmp_footprint.py); a
+# rootdir-based rule fires on all of them, which is a guard that breaks
+# legitimate runs. The question worth asking is narrower and exact: does the
+# `stencil` being imported belong to the same tree as the tests being run?
+
+CHECKOUT = Path(__file__).resolve().parent.parent
+
+# The door. A guard with no way past it is a guard somebody deletes outright
+# the first time it blocks something legitimate -- testing an installed wheel
+# to verify packaging, say, which nothing here does today but which is a
+# reasonable thing to want. Going through it is LOUD: the note is warned in
+# every run's summary rather than swallowed, because a guard that can be
+# silenced invisibly is the failure this file already records twice.
+FOREIGN_OK_ENV = "STENCIL_ALLOW_FOREIGN_STENCIL"
+
+
+def stencil_location() -> Path:
+    """Where `stencil` was imported from, even when it has no `__file__`.
+
+    A NAMESPACE package -- a bare `stencil/` directory with no `__init__.py`,
+    which is what a half-deleted or badly-built install leaves behind -- has
+    `__file__` of None, and `Path(None)` raises TypeError. The guard exists to
+    speak clearly precisely in confused import situations, so it must not be
+    the thing that blows up in one.
+
+    The returned path is treated as an `__init__.py` by every caller, so the
+    synthetic one keeps the arithmetic identical; nothing prints it, the
+    DIRECTORY is what reaches the message.
+    """
+    if stencil.__file__:
+        return Path(stencil.__file__)
+    # A namespace package can have SEVERAL portions, and reporting only the
+    # first would clear a run whose second portion comes from another tree.
+    # Any foreign portion is the answer worth giving; the first is only the
+    # fallback when they are all ours.
+    portions = [Path(part) for part in stencil.__path__]
+    foreign = [part for part in portions if part.resolve().parent != CHECKOUT]
+    return (foreign[0] if foreign else portions[0]) / "__init__.py"
+
+
+def foreign_stencil_note(checkout: Path, stencil_file: Path, rootdir: Path) -> str | None:
+    """The refusal, or None when the import belongs to `checkout`.
+
+    Split out from the hook so the message can be asserted directly and so a
+    positive control can prove the guard is capable of saying yes --
+    tests/test_worktree_imports.py does both.
+
+    Both sides are resolved: on macOS a checkout reached through /tmp is a
+    symlink to /private/tmp, and comparing one resolved path against one
+    unresolved path would refuse a perfectly good run.
+    """
+    package = stencil_file.resolve().parent
+    if package.parent == checkout.resolve():
+        return None
+    return (
+        "pytest is testing one checkout and importing stencil from another.\n"
+        f"    tests being run:  {checkout}\n"
+        f"    stencil imported: {package}\n"
+        f"    rootdir:          {rootdir}\n"
+        "\n"
+        "Every result from this run would describe source you did not change.\n"
+        "This usually means a git worktree is borrowing another checkout's\n"
+        "virtualenv, where `pip install -e .` points at that other checkout.\n"
+        "\n"
+        "Fix it either way round:\n"
+        "    python3 -m venv .venv && ./.venv/bin/pip install -e '.[dev]'\n"
+        "        -- in THIS checkout, then use that venv; or\n"
+        "    run the tests from the checkout that owns the venv you are using.\n"
+        "\n"
+        f"Deliberately testing an installed build rather than this tree? Set\n"
+        f"{FOREIGN_OK_ENV}=1. The run proceeds and warns, on every run and\n"
+        "even under -q -- a door, not a silencer.\n"
+    )
+
+# The submodule import, deliberately BELOW the guard rather than at the top.
+#
+# `import stencil` succeeds for any package of that name. `from stencil import
+# generate, pipeline` is what needs it to be THIS project, and when those two
+# lines sat at the top of the file a `stencil` belonging to somebody else --
+# an unrelated distribution of the same name, not another checkout -- failed
+# here with a bare ImportError before pytest_configure could say anything.
+#
+# Narrow, because an editable install answers for `stencil.generate` even when
+# the PACKAGE resolved elsewhere: setuptools appends its finder to
+# sys.meta_path, so sys.path wins for the package while the finder still
+# supplies the submodules. Measured. What remains is a foreign `stencil` with
+# no editable install behind it.
+#
+# The guard is NOT simply moved above the import instead. Raising at conftest
+# IMPORT time renders as `ImportError while loading conftest` with a traceback
+# rather than pytest's clean `ERROR:` line -- measured -- so the common case
+# would pay a worse message to improve a rare one. This way the good message
+# appears exactly when the guard has something to say, and an unrelated
+# ImportError is still reported as itself.
+try:
+    from stencil import generate, pipeline
+except ImportError as exc:
+    _note = foreign_stencil_note(CHECKOUT, stencil_location(), CHECKOUT)
+    if _note is None:
+        raise
+    raise pytest.UsageError(_note) from exc
+
 
 DEMO_CONFIG = {
     "output_dir": "out",
@@ -284,10 +406,46 @@ def inner_pytest_env(**overrides) -> dict[str, str]:
     """
     env = {k: v for k, v in os.environ.items() if k not in INNER_RUN_STRIPPED_ENV}
     env.update(overrides)
+
+    # This checkout, on the inner run's path -- APPENDED, never prepended.
+    #
+    # stn-2et one level down, and it was live: an inner pytest gets no ini file
+    # of its own, so `pythonpath = ["."]` never reaches it, and `import stencil`
+    # there fell through to whatever the interpreter's install pointed at. Under
+    # the borrowed-venv arrangement AGENTS.md now blesses, that is ANOTHER
+    # checkout -- so these runs were testing the wrong tree exactly as the outer
+    # ones were. The guard turned that from silent into `UsageError`, exit 4,
+    # reproduced against `_inner_xdist`'s own command shape before this was
+    # written: the refusal was correct, and the harness was what needed fixing.
+    #
+    # Appended, because two tests here deliberately hand an inner run a
+    # competing `stencil` and need it to win: prepending would make this
+    # checkout answer instead and quietly unfalsify them.
+    path = [p for p in (env.get("PYTHONPATH"), str(CHECKOUT)) if p]
+    env["PYTHONPATH"] = os.pathsep.join(path)
     return env
 
 
 def pytest_configure(config):
+    # First, before anything else in this file has a chance to report on a
+    # source tree nobody is editing.
+    note = foreign_stencil_note(CHECKOUT, stencil_location(), config.rootpath)
+    if note:
+        # Exactly "1", not merely non-empty. `STENCIL_ALLOW_FOREIGN_STENCIL=0`
+        # reading as "yes, allow it" is the kind of surprise that gets a guard
+        # blamed for the thing it was trying to prevent, and the message tells
+        # people to set it to 1.
+        if os.environ.get(FOREIGN_OK_ENV) != "1":
+            raise pytest.UsageError(note)
+        # Not `pytest_report_header`, which was the obvious channel and is
+        # the wrong one: `-q` suppresses the header, and `-q` is exactly how
+        # somebody who has set the override day to day would be running.
+        # Measured. A config-time warning survives it and gets counted in the
+        # summary line.
+        config.issue_config_time_warning(
+            UserWarning(f"{FOREIGN_OK_ENV} is set; {note}"), stacklevel=2
+        )
+
     if not os.environ.get(pipeline.BROWSER_IMAGE_TAG_ENV):
         # An explicit tag wins: a CI job that builds the image once and reuses
         # it across invocations should be able to say so.

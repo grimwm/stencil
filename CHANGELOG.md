@@ -11,6 +11,63 @@ How the version gets bumped is written down in
 
 ## 0.39.0
 
+- **pytest in a git worktree now tests that worktree** (`stn-2et`). A run
+  started inside a worktree, using a venv whose `pip install -e .` points at
+  another checkout, imported THAT checkout's `stencil` while running the
+  worktree's tests — and said nothing. Measured: the console script imported
+  `<main>/stencil/__init__.py` from a `<worktree>` whose own version was a
+  minor ahead, and the same suite differed by two tests depending only on
+  `PYTHONPATH`.
+
+  `pythonpath = ["."]` in `[tool.pytest.ini_options]` fixes it by putting the
+  rootdir on `sys.path` before `tests/conftest.py` is imported. Resolved
+  relative to rootdir rather than the cwd, and it reaches xdist workers — both
+  verified rather than assumed.
+
+  Why it stayed hidden: `python -m pytest` was always right, because `-m`
+  puts the cwd on `sys.path` first, so the obvious sanity check passed. And
+  stn-12v's CLI guard passes either way — it derives `REPO_ROOT` from the
+  imported module, so it pins the subprocess to whatever the in-process import
+  chose. That is consistency, not correctness; under this bug both halves
+  agreed on the wrong tree. Fixing the in-process import is what makes
+  stn-12v's guarantee point somewhere useful.
+
+  `tests/conftest.py` now refuses a run whose `stencil` belongs to a different
+  checkout, naming both trees and the two ways out, because a setting can be
+  deleted in a merge and every failure here is silent — the lesson this
+  repository already paid for with a pre-push hook that failed open. It
+  compares against the conftest's own checkout rather than `config.rootpath`,
+  which would have refused the inner pytest runs `test_parallel_harness.py`
+  and `test_tmp_footprint.py` legitimately make against a throwaway rootdir.
+  AGENTS.md records what a contributor in a worktree should expect, including
+  where the fix stops: `pythonpath` decides which `stencil/` is imported and
+  nothing about what is installed, so a worktree that adds a dependency, a
+  pytest plugin or an entry point still needs its own venv. That one fails as
+  an honest `ModuleNotFoundError` rather than a silent wrong answer.
+
+  The same bug existed one level down, and the guard is what found it: the
+  inner pytest runs `test_parallel_harness.py` and `test_tmp_footprint.py`
+  spawn get no ini file, so `pythonpath` never reached them and they resolved
+  `stencil` through the interpreter's install — another checkout, under the
+  borrowed venv the docs had just called safe. That surfaced as `UsageError`
+  and exit 4 on two harness tests with nothing to do with this change, which
+  was the refusal being right and the harness being wrong.
+  `conftest.inner_pytest_env()` now appends this checkout to their
+  `PYTHONPATH`. The regression test models the competing install as an
+  appended `sys.meta_path` finder rather than a path entry, because that is
+  what an editable install is — a first draft using `PYTHONPATH` made the
+  competitor stronger than the real one and failed a correct fix, and a second
+  draft forgot to remove the venv's own finder and passed against a build with
+  the fix taken out.
+
+  Two costs are accepted rather than left to be discovered. The guard has a
+  loud door — `STENCIL_ALLOW_FOREIGN_STENCIL=1` proceeds and warns on every
+  run, including under `-q`, since a guard with no way past it gets deleted
+  whole and one that can be silenced is not a guard. And the repository root
+  now precedes site-packages on `sys.path`, so a top-level `yaml.py` would
+  become the one the suite imports; a new test fails if any git-tracked name
+  at the root starts shadowing an installed module.
+
 - **`format-md` installs only the lockfile stencil generated** (`stn-qge`). The
   service copied `format-package-lock.json` out of the mount — the consumer's
   own package directory — and ran `npm ci` from it. `npm ci` fetches whatever
