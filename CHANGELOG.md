@@ -11,6 +11,105 @@ How the version gets bumped is written down in
 
 ## 0.39.0
 
+- **The browser-backed services no longer take their configuration, or their
+  driver script, from the consumer's package directory** (`stn-jeq`, `stn-7ki`,
+  `stn-ao5`). Three defects, one cause: `make pdf` and `make check-access` both
+  ran with the mounted package directory as `process.cwd()`, and
+  `html-to-pdf.js` was rendered into that directory and run from there.
+
+  `stn-jeq` (P1) is what that cost. puppeteer's `getConfiguration()` searches
+  upward from `process.cwd()` for `.puppeteerrc.cjs` and twelve siblings and
+  `require`s the JavaScript ones, so a one-line file dropped into a package ran
+  as uid 0, over the read-write mount, with the network up — on **both**
+  services, and the build printed its usual success output afterwards. It is
+  reachable in a course repository because markdown and assets arrive in pull
+  requests. There is no switch for it: measured against the pinned puppeteer,
+  `getConfiguration()` is unconditional and calls `lilconfig(...).search()` with
+  no argument, so `searchFrom` is the working directory and no environment
+  variable or launch option turns discovery off. `check-access` could not be
+  fixed by resolving a different module either — pa11y requires the puppeteer
+  wrapper itself and calls `launch()` inside it.
+
+  So both services now run from the tools directory inside the image, and
+  `html-to-pdf.js` is baked into that image by `Dockerfile.browser` rather than
+  read out of the mount. The search then walks only image-owned directories.
+  Baking it also fixes `stn-7ki` (P3): Node decides CommonJS-vs-ESM from the
+  nearest `package.json` **to the file**, so a package declaring
+  `"type": "module"` — which a course package legitimately may — turned the
+  script into a parse error before any of its guards could speak, and `make pdf`
+  could not run at all.
+
+  `stn-ao5` (P2) was found while measuring the other two, and is the same defect
+  `check-access` had in 0.30.0, still live in its sibling: the page URL was built
+  by joining the argument onto a hard-coded `/workspace`, so a package with a
+  package-level `output_dir` — whose products are on a **separate** mount — got
+  `net::ERR_FILE_NOT_FOUND at file:///workspace//out/document.html` and could not
+  build a PDF at all. Both arguments are resolved against the mount before the
+  service moves out of it, and the URL is built from the result.
+
+  `working_dir` stays `/workspace` for both services, so a relative path from the
+  generated Makefile still resolves. Overriding `html-to-pdf.js.j2` from a
+  `templates_dir` still works and is now covered end to end; if you also override
+  `Dockerfile.browser.j2`, keep its `COPY` line — see STENCIL.md. No pin moved
+  and no lockfile was re-vendored.
+
+- **pytest in a git worktree now tests that worktree** (`stn-2et`). A run
+  started inside a worktree, using a venv whose `pip install -e .` points at
+  another checkout, imported THAT checkout's `stencil` while running the
+  worktree's tests — and said nothing. Measured: the console script imported
+  `<main>/stencil/__init__.py` from a `<worktree>` whose own version was a
+  minor ahead, and the same suite differed by two tests depending only on
+  `PYTHONPATH`.
+
+  `pythonpath = ["."]` in `[tool.pytest.ini_options]` fixes it by putting the
+  rootdir on `sys.path` before `tests/conftest.py` is imported. Resolved
+  relative to rootdir rather than the cwd, and it reaches xdist workers — both
+  verified rather than assumed.
+
+  Why it stayed hidden: `python -m pytest` was always right, because `-m`
+  puts the cwd on `sys.path` first, so the obvious sanity check passed. And
+  stn-12v's CLI guard passes either way — it derives `REPO_ROOT` from the
+  imported module, so it pins the subprocess to whatever the in-process import
+  chose. That is consistency, not correctness; under this bug both halves
+  agreed on the wrong tree. Fixing the in-process import is what makes
+  stn-12v's guarantee point somewhere useful.
+
+  `tests/conftest.py` now refuses a run whose `stencil` belongs to a different
+  checkout, naming both trees and the two ways out, because a setting can be
+  deleted in a merge and every failure here is silent — the lesson this
+  repository already paid for with a pre-push hook that failed open. It
+  compares against the conftest's own checkout rather than `config.rootpath`,
+  which would have refused the inner pytest runs `test_parallel_harness.py`
+  and `test_tmp_footprint.py` legitimately make against a throwaway rootdir.
+  AGENTS.md records what a contributor in a worktree should expect, including
+  where the fix stops: `pythonpath` decides which `stencil/` is imported and
+  nothing about what is installed, so a worktree that adds a dependency, a
+  pytest plugin or an entry point still needs its own venv. That one fails as
+  an honest `ModuleNotFoundError` rather than a silent wrong answer.
+
+  The same bug existed one level down, and the guard is what found it: the
+  inner pytest runs `test_parallel_harness.py` and `test_tmp_footprint.py`
+  spawn get no ini file, so `pythonpath` never reached them and they resolved
+  `stencil` through the interpreter's install — another checkout, under the
+  borrowed venv the docs had just called safe. That surfaced as `UsageError`
+  and exit 4 on two harness tests with nothing to do with this change, which
+  was the refusal being right and the harness being wrong.
+  `conftest.inner_pytest_env()` now appends this checkout to their
+  `PYTHONPATH`. The regression test models the competing install as an
+  appended `sys.meta_path` finder rather than a path entry, because that is
+  what an editable install is — a first draft using `PYTHONPATH` made the
+  competitor stronger than the real one and failed a correct fix, and a second
+  draft forgot to remove the venv's own finder and passed against a build with
+  the fix taken out.
+
+  Two costs are accepted rather than left to be discovered. The guard has a
+  loud door — `STENCIL_ALLOW_FOREIGN_STENCIL=1` proceeds and warns on every
+  run, including under `-q`, since a guard with no way past it gets deleted
+  whole and one that can be silenced is not a guard. And the repository root
+  now precedes site-packages on `sys.path`, so a top-level `yaml.py` would
+  become the one the suite imports; a new test fails if any git-tracked name
+  at the root starts shadowing an installed module.
+
 - **`format-md` installs only the lockfile stencil generated** (`stn-qge`). The
   service copied `format-package-lock.json` out of the mount — the consumer's
   own package directory — and ran `npm ci` from it. `npm ci` fetches whatever

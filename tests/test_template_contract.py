@@ -104,6 +104,15 @@ CONTRACT = {
     # StrictUndefined cannot tell them so, for the reason above: a copy reads
     # none of these keys.
     "docker-compose-html.yml.j2": {
+        # Added deliberately by stn-jeq/stn-7ki, and it is a real new
+        # requirement on a consumer's composition rather than churn. The pdf
+        # service's entrypoint is now an absolute path INSIDE the image --
+        # `node {{ browser_tools_dir }}/html-to-pdf.js` -- because Node decides
+        # CommonJS-vs-ESM from the nearest package.json to the file and, run
+        # from the mount, that was the consumer's own. A composition that
+        # provides every other key here and not this one renders a pdf service
+        # that cannot start.
+        "browser_tools_dir",
         "check_access_script",
         "format_lockfile_digest",
         "format_lockfile_name",
