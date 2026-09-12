@@ -50,8 +50,10 @@ How the version gets bumped is written down in
   convention, whose `Z` is out of class — so a parse-time check would abort `make help` and
   `make clean` for anyone who exported it once for something unrelated. That is the same call
   `stn-3y8` made in leaving a stray `CONTAINER` inert rather than fatal. The class is enforced on
-  `doc`, `slide`, `pdf`, `check-pdf` and `pkg`; `make doc BUILD_DATE=` still builds, with the
-  container's own date.
+  `doc` and `slide`, and on `pdf` and `check-pdf` which reach them as prerequisites;
+  `make doc BUILD_DATE=` still builds, with the container's own date. `pkg` is deliberately not
+  among them — `pkg: format-md` never reaches `doc` and its recipe interpolates no date, so it
+  is checked for `WITH` alone rather than stopped by a value it never reads.
 
   **`MAKEFLAGS=--eval` remains open, and `stn-2je` is closed saying so.** Two defences were built
   and measured on GNU Make 4.4.1 — requiring `$(origin STENCIL_CONTAINER)` to be `override`, and

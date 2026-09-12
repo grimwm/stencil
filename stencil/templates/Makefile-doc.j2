@@ -149,7 +149,20 @@ BUILD_DATE := $(BUILD_DATE)
 # It expands to nothing when both values are in class, so it costs a generated
 # package only the check. A consumer's own in-class target-specific value --
 # `doc: BUILD_DATE = 2026-09-01` -- still passes.
-_stencil_late_check = $(call _stencil_check_class,BUILD_DATE,$(_stencil_chars_date),digits and - T :)$(call _stencil_check_class,WITH,$(_stencil_chars_with),letters digits - _ and commas)
+_stencil_late_check_with = $(call _stencil_check_class,WITH,$(_stencil_chars_with),letters digits - _ and commas)
+_stencil_late_check = $(call _stencil_check_class,BUILD_DATE,$(_stencil_chars_date),digits and - T :)$(_stencil_late_check_with)
+
+# TWO OF THEM, because a target must not be stopped by a value it never uses,
+# and that is the same rule that put the BUILD_DATE class here instead of at
+# the top of the file. Only `doc` and `slide` interpolate
+# `--metadata build-date=`; `pdf` and `check-pdf` reach them through their
+# prerequisites (`pdf: doc`, `check-pdf: pdf`), so all four are targets that
+# stamp a date and all four want the full check. Makefile-pkg.j2's `pkg` is
+# `pkg: format-md` -- it never reaches `doc`, and its recipe interpolates
+# METADATA_FLAGS and OUTPUT_SUFFIX but no date at all -- so it takes the
+# WITH-only check. MEASURED: with the full check on `pkg`, an ordinary
+# `BUILD_DATE=2026-09-12T14:30:00Z` from a CI environment stopped `make pkg`
+# over a value that target never reads. Found in review of this change.
 
 {% if has_package_output_dir %}
 # Build products go somewhere other than beside the sources.

@@ -458,15 +458,27 @@ make doc COMPOSE_FILES="docker-compose.yml docker-compose.override.yml"
 
   The `override` is required — a plain assignment there loses to the Makefile's own.
 
+- **What none of these checks close, said plainly.** They are honest-mistake protection, not a
+  boundary against a hostile environment — anyone who can set `DC` or `MAKEFLAGS` can already
+  run commands. Two routes get a value past them and are accepted rather than guarded
+  (`stn-2je`): `MAKEFLAGS=--eval` on GNU Make 4.0+, which injects makefile text from the
+  environment alone, and a target- or pattern-specific assignment in a makefile that includes
+  stencil's partials. Two defences against the first were built and measured; both were
+  defeated by a one-clause change to the same string and each refused something legitimate, so
+  neither shipped. `MAKEFILES` — an environment variable naming makefile text to read first —
+  *is* closed, by the point-of-use half of the checks above. The reasoning and the measurements
+  are in `Makefile-base.j2`'s own comment.
+
 - **`BUILD_DATE` may contain only digits, `-`, `T` and `:`.** It is how the build host's day
   reaches a document carrying `show_date:` — `make doc BUILD_DATE=2026-09-01` — and the
   accepted characters are exactly those of the date shapes the frontmatter filter honours,
   `yyyy-mm-dd` and `yyyy-mm-ddThh:mm`. It is a *character* class and not a date check:
   `2026-13-45` passes here and is refused later, by the filter, with a message about months.
 
-  The check runs on the targets that actually stamp a date — `doc`, `slide`, `pdf`,
-  `check-pdf`, and `pkg` for a `doc` package built from `package_sources` — and nowhere else,
-  so an unrelated `BUILD_DATE` in your environment (the OCI
+  The check runs on the targets that actually stamp a date — `doc` and `slide`, and `pdf` and
+  `check-pdf`, which reach them as prerequisites — and nowhere else. `pkg` is deliberately not
+  among them: it never reaches `doc`, so it reads `WITH` but no date, and it is checked for
+  `WITH` alone. So an unrelated `BUILD_DATE` in your environment (the OCI
   `org.opencontainers.image.created` convention uses that name, and its `Z` is out of class)
   leaves `make help`, `make clean` and `make format-md` working. On a stamping target it is a
   hard error naming the variable; `make doc BUILD_DATE=` builds with the container's own date

@@ -1600,41 +1600,59 @@ def test_an_out_of_class_build_date_is_refused_by_every_target_that_stamps_it(
     assert "BUILD_DATE" in combined, f"the failure does not name BUILD_DATE:\n{combined}"
 
 
-def test_the_pkg_target_stamps_and_so_it_checks_too(require_make, pkg_sources_package):
-    """Makefile-pkg.j2's `pkg` interpolates METADATA_FLAGS, so it validates too.
+def test_pkg_checks_what_it_interpolates_and_nothing_else(
+    require_make, pkg_sources_package, tmp_path
+):
+    """`pkg` reads WITH and no date, so it checks WITH and no date.
 
     The package shape matters: `pkg` only drives compose in the
     has_package_sources arm (the zip arm archives with tar or zip, and
     package_type "none" renders nothing but clean-pkg), which is why this uses
-    pkg_sources_package rather than the pages fixture every other test in this
-    tier uses -- the target does not exist in the other shape.
+    pkg_sources_package rather than the pages fixture the rest of this tier
+    uses -- the target does not exist in the other shape.
 
-    FOUND BY REVIEW, not by design: the first version of this change wired the
-    check into `pkg` and then documented the validating targets as "doc, slide,
-    pdf, check-pdf -- and nowhere else", which was wrong in the direction that
-    matters, and no test covered the fifth one.
+    BOTH HALVES WERE WRONG ONCE, IN OPPOSITE DIRECTIONS, AND REVIEW CAUGHT
+    EACH. First `pkg` carried no check at all while the docs said it did.
+    Then it carried the FULL check, which stopped `make pkg` on an ordinary
+    `BUILD_DATE=2026-09-12T14:30:00Z` from a CI environment -- a value that
+    target never reads, since `pkg: format-md` never reaches `doc` and its
+    recipe interpolates no date. That is the same mistake as putting the
+    BUILD_DATE class at the top of the file, one target down.
 
-    THE PROBE IS BUILD_DATE, NOT WITH, AND THAT IS THE WHOLE POINT. WITH is
-    checked at PARSE time, so a hostile WITH never reaches any target and this
-    test passed with the prefix deleted -- measured, on the first draft, which
-    is exactly the decoration this module refuses to keep. BUILD_DATE is
-    checked ONLY at the point of use, so it is the only value that can tell
-    whether `pkg` carries the check. Goes red when the prefix is dropped from
-    Makefile-pkg.j2: measured, `make pkg` then exits 0 with the out-of-class
-    date interpolated into the recipe.
+    THE PROBE FOR THE WITH HALF ARRIVES VIA MAKEFILES, deliberately. WITH is
+    also checked at PARSE time, so an ordinary hostile WITH never reaches any
+    target and an assertion built on one passes with the recipe's prefix
+    deleted -- measured, on an earlier draft of this test. A pattern-specific
+    assignment is invisible at parse time, so it is the only thing that can
+    tell whether `pkg` itself carries the check.
     """
-    out_of_class = "2026-09-12T14:30:00Z"
+    # The half that must NOT fire: a date `pkg` never interpolates.
     env_vars = clean_env()
-    env_vars["BUILD_DATE"] = out_of_class
-    result = subprocess.run(
+    env_vars["BUILD_DATE"] = "2026-09-12T14:30:00Z"
+    unrelated = subprocess.run(
         ["make", "--no-print-directory", "-n", "pkg", "DC=true"],
         cwd=pkg_sources_package, capture_output=True, text=True, env=env_vars,
     )
-    combined = result.stdout + result.stderr
-    assert result.returncode != 0, outcome(
-        "`make pkg` accepted an out-of-class BUILD_DATE", result
+    assert unrelated.returncode == 0, outcome(
+        "an out-of-class BUILD_DATE stopped `make pkg`, which never "
+        "interpolates a date -- the check is wider than the target's reads",
+        unrelated,
     )
-    assert "BUILD_DATE" in combined, f"the failure does not name BUILD_DATE:\n{combined}"
+
+    # The half that must: a late WITH, past the parse-time check.
+    evil = tmp_path / "evil.mk"
+    evil.write_text("%: WITH = a;touch /dev/null;b\n")
+    env_vars = clean_env()
+    env_vars["MAKEFILES"] = str(evil)
+    hostile = subprocess.run(
+        ["make", "--no-print-directory", "-n", "pkg", "DC=true"],
+        cwd=pkg_sources_package, capture_output=True, text=True, env=env_vars,
+    )
+    combined = hostile.stdout + hostile.stderr
+    assert hostile.returncode != 0, outcome(
+        "`make pkg` accepted a pattern-specific hostile WITH", hostile
+    )
+    assert "WITH" in combined, f"the failure does not name WITH:\n{combined}"
 
     control = make_n(pkg_sources_package, "pkg", "WITH=solutions", dc="true")
     assert control.returncode == 0, outcome(
