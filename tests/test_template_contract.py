@@ -19,6 +19,8 @@ string, so a consumer's stale composition fails loudly in its own build too.
 
 from __future__ import annotations
 
+import re
+
 import pytest
 from jinja2 import UndefinedError
 
@@ -124,6 +126,56 @@ CONTRACT = {
     "_slide-body.html.j2": set(),
     "_slide-scripts.html.j2": set(),
     "_slide-style.css.j2": set(),
+}
+
+
+# What each Makefile partial requires its INCLUDER to have already defined,
+# as a plain make variable -- not a Jinja context key, so CONTRACT above and
+# StrictUndefined cannot see it. This is how STENCIL_COMPOSE could have been
+# added to Makefile-doc.j2 and Makefile-pkg.j2 invisibly (stn-qli): both used
+# to read $(DC) the same way, undeclared anywhere.
+#
+# THE CEILING: this table documents the requirement, it does not detect it.
+# A consumer who COPIED a partial's text into their own Makefile.j2 instead of
+# `{% include %}`-ing it still reads $(STENCIL_COMPOSE) -- that copy is
+# unpinned forever, because StrictUndefined guards Jinja context keys, and a
+# copied partial has none left to guard. Nothing below closes that gap;
+# claiming otherwise would be worse than leaving it open.
+MAKE_CONTRACT = {
+    "Makefile-base.j2": set(),
+    "Makefile-doc.j2": {
+        # STENCIL_COMPOSE and ensure_image are Makefile-base.j2's: format-md
+        # (and, when has_pages, doc/slide/pdf/check-access/check-pdf) call
+        # both. A composition that includes this partial without
+        # Makefile-base.j2 first gets Makefile-doc.j2's own $(error ...)
+        # guard rather than "run: No such file or directory" -- but only
+        # because that guard exists; nothing about StrictUndefined catches a
+        # missing MAKE variable the way it catches a missing context key.
+        "STENCIL_COMPOSE",
+        "ensure_image",
+        # `with` is never defined by any bundled partial -- it is the
+        # command-line variable a user sets with `make with=hidden`, read
+        # once into WITH ?= $(with). Recorded here with this comment rather
+        # than special-cased out of the extraction, so a future rename of the
+        # user-facing spelling is a visible diff line too.
+        "with",
+    },
+    "Makefile-pkg.j2": {
+        "STENCIL_COMPOSE",
+        "ensure_image",
+        # METADATA_FLAGS, OUTPUT_SUFFIX and OUT_HOST are Makefile-doc.j2's:
+        # the has_package_sources arm's `pkg` recipe reads the first two, and
+        # clean-pkg's product list reads OUT_HOST whenever docs or slides is
+        # non-empty. A composition that includes Makefile-pkg.j2 without
+        # Makefile-doc.j2 renders a `pkg`/`clean-pkg` recipe referencing
+        # variables nothing defined -- make treats an undefined variable as
+        # empty rather than failing, so this is silent breakage, not a make
+        # error, which is exactly what this table exists to make visible
+        # instead.
+        "METADATA_FLAGS",
+        "OUTPUT_SUFFIX",
+        "OUT_HOST",
+    },
 }
 
 
@@ -394,3 +446,130 @@ def test_a_line_written_after_the_include_is_its_own_line(generate_package, tmp_
     config = {"templates_dir": "templates", "templates": [{"src": "Makefile.j2"}], **ZIP_WITH_DOCS}
     lines = (generate_package(config) / "Makefile").read_text().splitlines()
     assert "pkg: fix lint" in lines, [line for line in lines if "pkg: fix lint" in line]
+
+
+# ---------------------------------------------------------------------------
+# MAKE_CONTRACT extraction (stn-144.3).
+#
+# CONTRACT records Jinja context keys; a rendered Makefile partial can also
+# read plain make variables that some OTHER bundled partial defines, and
+# neither CONTRACT nor StrictUndefined has anything to say about those --
+# make treats an unset variable as empty rather than raising. Extraction,
+# prototyped and measured against the real templates:
+#
+#   collect $(NAME) and $(call NAME,...) where NAME is [A-Za-z_][A-Za-z0-9_-]*
+#   subtract names defined in the same rendering  (^NAME := | ?= | += | =)
+#   subtract make's builtin functions and its specials
+#   subtract $(foreach NAME,...) loop variables
+#
+# Verified against the real text: $(1)/$(2) never match (NAME must start
+# [A-Za-z_]); $$LASTEXITCODE and $$matches have no parens to match at all;
+# `comma := ,` satisfies the definition pattern and so does `PKG ?= ...`.
+MAKE_BUILTIN_FUNCTIONS = {
+    "call", "foreach", "if", "shell", "error", "warning", "strip", "subst",
+    "patsubst", "filter", "filter-out", "findstring", "sort", "word", "words",
+    "wordlist", "firstword", "lastword", "dir", "notdir", "suffix", "basename",
+    "addsuffix", "addprefix", "join", "wildcard", "realpath", "abspath",
+    "origin", "flavor", "value", "eval", "file", "guile", "info", "or", "and",
+    "intcmp",
+}
+MAKE_SPECIALS = {"OS", "MAKEFILE_LIST", "MAKE", "CURDIR", "SHELL", "MAKEFLAGS"}
+
+# make with=hidden: read by Makefile-doc.j2 but defined by no bundled
+# partial -- it is the caller's, not a cross-partial requirement, so a name
+# recorded in MAKE_CONTRACT under this allowance does not have to turn up in
+# _make_variables_defined_by_bundled_partials below.
+USER_SUPPLIED_MAKE_VARIABLES = {"with"}
+
+_MAKE_PLAIN_REF_RE = re.compile(r"\$\(([A-Za-z_][A-Za-z0-9_-]*)")
+_MAKE_CALL_TARGET_RE = re.compile(r"\$\(call\s+([A-Za-z_][A-Za-z0-9_-]*)")
+_MAKE_DEFINITION_RE = re.compile(
+    r"^[ \t]*([A-Za-z_][A-Za-z0-9_-]*)[ \t]*(?::=|\?=|\+=|=)", re.MULTILINE
+)
+_MAKE_FOREACH_LOOP_VAR_RE = re.compile(r"\$\(foreach\s+([A-Za-z_][A-Za-z0-9_-]*)\s*,")
+
+
+def make_variables_required(text: str) -> set[str]:
+    """Make variables `text` reads but does not itself define -- the residual
+    left over after subtracting definitions, builtins, specials and foreach
+    loop variables. See the extraction rules above."""
+    referenced = set(_MAKE_PLAIN_REF_RE.findall(text)) | set(
+        _MAKE_CALL_TARGET_RE.findall(text)
+    )
+    defined = set(_MAKE_DEFINITION_RE.findall(text))
+    loop_vars = set(_MAKE_FOREACH_LOOP_VAR_RE.findall(text))
+    return referenced - defined - MAKE_BUILTIN_FUNCTIONS - MAKE_SPECIALS - loop_vars
+
+
+# UNION THE RESIDUALS OVER CONFIG SHAPES, rather than trust one config's
+# answer. A variable used only in a branch one shape does not render would
+# otherwise escape the guard silently -- the same blindness this whole epic
+# is about. These are the two shapes test_a_partial_ends_with_a_newline
+# already renders, plus a pre_build shape: has_package_output_dir and
+# has_pre_build each gate their own branch in Makefile-doc.j2, and
+# package_type "zip" takes Makefile-pkg.j2 down a path that calls neither
+# STENCIL_COMPOSE nor ensure_image at all -- measured: the zip shape's own
+# residual is empty, which is why unioning matters rather than picking
+# whichever shape looks richest.
+MAKE_CONTRACT_CONFIGS = (
+    ZIP_WITH_DOCS,
+    {
+        "packages": {
+            "demo": {
+                "name": "Demo",
+                "package_type": "doc",
+                "package_name": "hs2.pdf",
+                "package_sources": ["md/*.md"],
+                "docs": ["README.md"],
+                "slides": ["Deck.md"],
+            }
+        }
+    },
+    {
+        "packages": {
+            "demo": {
+                "name": "Demo",
+                "package_type": "doc",
+                "docs": ["README.md"],
+                "pre_build": [
+                    {
+                        "run": "python3 gen_figures.py",
+                        "outputs": "figures/*.svg",
+                        "inputs": "gen_figures.py",
+                    }
+                ],
+            }
+        }
+    },
+)
+
+MAKE_PARTIALS = tuple(sorted(MAKE_CONTRACT))
+
+
+@pytest.mark.parametrize("partial", MAKE_PARTIALS)
+def test_a_makefile_partial_requires_only_the_recorded_make_variables(env, partial):
+    """Fails when a partial starts reading a cross-partial make variable, or
+    stops reading one -- the union over every config shape below, so a
+    variable used only in one shape's branch cannot escape unnoticed."""
+    residual: set[str] = set()
+    for config in MAKE_CONTRACT_CONFIGS:
+        text = env.get_template(partial).render(get_template_context("demo", config))
+        residual |= make_variables_required(text)
+    assert residual == MAKE_CONTRACT[partial]
+
+
+@pytest.mark.parametrize("partial", MAKE_PARTIALS)
+def test_every_recorded_make_variable_is_defined_somewhere(env, partial):
+    """The other direction: a typo sitting in MAKE_CONTRACT must not look
+    satisfied. Every recorded name has to be either defined by some bundled
+    Makefile partial (in at least one of the shapes above) or explicitly
+    allowed as user-supplied."""
+    defined: set[str] = set()
+    for config in MAKE_CONTRACT_CONFIGS:
+        context = get_template_context("demo", config)
+        for other in MAKE_PARTIALS:
+            text = env.get_template(other).render(context)
+            defined |= set(_MAKE_DEFINITION_RE.findall(text))
+    known = defined | USER_SUPPLIED_MAKE_VARIABLES
+    unknown = MAKE_CONTRACT[partial] - known
+    assert not unknown, f"{partial} records {sorted(unknown)}, which nothing defines"
