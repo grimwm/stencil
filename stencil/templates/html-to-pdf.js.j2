@@ -8,8 +8,121 @@
 // building itself, and did every asset it depends on actually arrive. It
 // captures whatever is on screen at an arbitrary moment and exits 0 either
 // way. Puppeteer can wait for the first and detect the second.
-const puppeteer = require("puppeteer");
-const fs = require("fs");
+const { createRequire } = require("node:module");
+const fs = require("node:fs");
+
+const [input, output] = process.argv.slice(2);
+
+if (!input || !output) {
+  console.error("usage: html-to-pdf.js <input.html> <output.pdf>");
+  process.exit(2);
+}
+
+// puppeteer and pdf-lib are resolved from the image's PINNED install root
+// ({{ browser_tools_dir }}, the root `npm ci` installs into) rather than by a
+// bare require("puppeteer") / require("pdf-lib"). This script is itself
+// INSIDE /workspace -- the consumer's own mounted package directory -- so a
+// bare require here walks up from /workspace and can reach an incidental
+// node_modules there (someone, or some tool, once ran `npm install` in the
+// package directory) before resolution ever falls through to
+// {{ browser_node_modules }} on NODE_PATH. That would silently outrank the
+// pinned tree with no trace -- html-to-pdf.js prints the repairs it applied
+// either way. NODE_PATH still makes a bare require WORK for anyone testing
+// outside a polluted workspace, which is exactly how a bare require would
+// come back if a future edit reintroduced one here -- do not.
+//
+// module.createRequire, rather than a literal
+// require("{{ browser_node_modules }}/puppeteer"), because requiring an
+// absolute DIRECTORY goes through Node's LOAD_AS_DIRECTORY resolution, which
+// reads package.json "main" and IGNORES the "exports" field; a bare
+// specifier resolved from a createRequire() base goes through the full
+// package resolution algorithm and honours "exports". Measured at 8e17d65:
+// the two agree today for both packages (puppeteer's exports["."].require
+// and its "main" are the same file; pdf-lib declares no "exports"), so this
+// is entry-point neutral right now. They stop agreeing the first time a
+// version bump ships an "exports" map that diverges from "main", and that
+// divergence would otherwise be silent.
+//
+// The live future risk: a puppeteer bump that drops the CJS "require"
+// condition from its exports map. On Node 24.20, require(esm) SUCCEEDS but
+// hands back a module namespace object instead of the module itself, so the
+// `puppeteer` binding below would silently become a namespace object rather
+// than fail loudly. AGENTS.md already requires a container-tier run whenever
+// a pin in stencil/pipeline.py moves, and that is what
+// test_html_to_pdf_ignores_a_decoy_in_the_workspace (stn-cnm.1) is for.
+const fromTools = createRequire("{{ browser_tools_dir }}/package.json");
+
+// GUARD: check RESOLUTION, not existence. fs.existsSync on the tools
+// node_modules would pass against an EMPTY or half-installed directory;
+// fromTools.resolve() actually runs package resolution, which is the
+// assertion this needs, at the same line cost -- and it honours "exports",
+// which is the whole reason createRequire was chosen above instead of a
+// literal path.
+//
+// WHAT IT DOES NOT BEAT, stated so nobody reads more into it than is here:
+// resolve() proves LOCATION, not identity or provenance. A tree mounted over
+// {{ browser_tools_dir }} carrying a hostile puppeteer resolves inside the
+// prefix and passes -- measured. That is out of the threat model for the same
+// reason a hostile /workspace is, and no check on this side of the mount
+// closes it.
+//
+// This closes an INCIDENTAL node_modules outranking the pinned tree (the
+// real, common, traceless case), and a malicious package that arrived via an
+// unrelated npm install in /workspace. It does NOT close a hostile
+// /workspace, and cannot from inside the mount: html-to-pdf.js is itself
+// part of that mount, as are the Makefile, docker-compose.yml,
+// Dockerfile.browser and the Lua filters, and `make pkg` has no `gen`
+// prerequisite -- anyone who can write /workspace/node_modules can equally
+// write /workspace/html-to-pdf.js.
+//
+// The message below covers both reachable failure cases, because a
+// MODULE_NOT_FOUND from resolve() is folded into it rather than left to
+// surface as a raw stack: (a) this script is not running inside the
+// generated browser image at all (someone ran `node html-to-pdf.js` on a
+// laptop); (b) it IS running inside a browser image, but Dockerfile.browser
+// -- itself on the template search path and overridable independently of
+// this file, per AGENTS.md -- installed the tools somewhere other than
+// {{ browser_node_modules }}. A package missing INSIDE a tools tree that
+// otherwise resolves is left to surface its raw MODULE_NOT_FOUND at the
+// requires below: that is a broken image, and the raw error already names
+// the package.
+// BOTH packages, rather than checking puppeteer and taking pdf-lib on
+// symmetry. One require base does imply one search path, so in practice they
+// cannot diverge -- but pdf-lib is the package that writes the PDF/UA role
+// map `make check-pdf` exists to require, and an unchecked require is how it
+// would come to fail with a raw stack while puppeteer failed with the message
+// below. The test beside this refuses the same symmetry, for the same reason.
+for (const name of ["puppeteer", "pdf-lib"]) {
+  let resolved;
+  try {
+    resolved = fromTools.resolve(name);
+  } catch (error) {
+    // ONLY a genuinely missing module means "this is not the image".
+    // ERR_PACKAGE_PATH_NOT_EXPORTED (an exports map that no longer offers a
+    // CJS entry -- the exact bump predicted above) and
+    // ERR_INVALID_PACKAGE_CONFIG (a corrupt manifest) are a broken PIN, not a
+    // broken mount, and Node's own message already names the offending file.
+    // Folding those into the message below would send whoever bumped
+    // stencil/pipeline.py off to inspect Docker mounts instead.
+    if (error.code !== "MODULE_NOT_FOUND") {
+      throw error;
+    }
+    resolved = null;
+  }
+  // The trailing separator matters: without it a sibling directory whose name
+  // merely STARTS with the tools path would satisfy the check.
+  if (!resolved || !resolved.startsWith("{{ browser_node_modules }}/")) {
+    console.error(
+      `Failed to convert ${input}: ${name} did not resolve inside the ` +
+        "image's pinned tools tree. Either this is not running inside the " +
+        "generated browser image, or Dockerfile.browser installed the tools " +
+        "somewhere other than {{ browser_node_modules }}."
+    );
+    process.exit(2);
+  }
+}
+
+const puppeteer = fromTools("puppeteer");
 const {
   PDFDocument,
   PDFName,
@@ -18,14 +131,7 @@ const {
   PDFHexString,
   PDFRawStream,
   decodePDFRawStream,
-} = require("pdf-lib");
-
-const [input, output] = process.argv.slice(2);
-
-if (!input || !output) {
-  console.error("usage: html-to-pdf.js <input.html> <output.pdf>");
-  process.exit(2);
-}
+} = fromTools("pdf-lib");
 
 // Generated pages are self-contained: embed-images.lua inlines local images,
 // and stencil gen inlines Bootstrap, highlight.js, Mermaid and the webfonts.
