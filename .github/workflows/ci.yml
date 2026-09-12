@@ -90,7 +90,27 @@ jobs:
           print("compose:", " ".join(command))
           EOF
 
-      - run: pytest -v
+      # `--dist loadfile`, not xdist's default `load`. Nine test files carry
+      # module- or file-scoped fixtures that each pay one container run to
+      # answer many assertions -- `accessibility` in test_check_access.py at
+      # 44s, `installed` in test_pins.py, and the module-scoped fixtures in
+      # test_pdf_ua, test_pdf, test_columns, test_painted_gaps and
+      # test_download. Under `load` a file's tests scatter across workers and
+      # each worker rebuilds that fixture, up to four times: a regression
+      # dressed as parallelism. `loadfile` sends a file to one worker, so every
+      # one of those is built exactly once, precisely as it is today.
+      #
+      # Here rather than in [tool.pytest.ini_options] addopts on purpose. In
+      # addopts it would change what plain `pytest` does for every contributor
+      # and break `-x` and `--pdb` by default. Not because the fast tier has
+      # nothing to gain -- measured, it goes 18.18s -> 5.24s under these same
+      # flags -- but because a predictable plain `pytest` is worth more than
+      # 13 seconds, and anyone who wants them can pass them.
+      # The risk of a CI-only flag --
+      # a code path exercised only in CI can silently stop working -- is
+      # answered by tests/test_parallel_harness.py, which pins the two harness
+      # behaviours this depends on in the fast tier.
+      - run: pytest -v -n auto --dist loadfile
 
   lint:
     name: pre-commit

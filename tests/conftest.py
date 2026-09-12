@@ -10,14 +10,17 @@ contributor without docker still gets a useful run.
 from __future__ import annotations
 
 import copy
+import hashlib
 import os
 import shutil
+import tempfile
 import time
 from pathlib import Path
 
 import pytest
 import yaml
 from bs4 import BeautifulSoup
+from filelock import FileLock
 
 from stencil import generate, pipeline
 
@@ -155,6 +158,19 @@ def _run_id() -> str:
     return f"{os.getpid()}-{int(time.time())}"
 
 
+def _is_xdist_worker() -> bool:
+    """Whether this process is an xdist worker rather than the controller.
+
+    xdist sets this in every worker and never in the controller, which is the
+    distinction the guard below needs. Nothing coarser will do: keying on the
+    xdist plugin being loaded, or on `-n` appearing in the command line, would
+    switch the guard off for the whole of a parallel run -- and a parallel run
+    is exactly as capable of being pointed at another worktree's basetemp as a
+    serial one.
+    """
+    return bool(os.environ.get("PYTEST_XDIST_WORKER"))
+
+
 def _pid_alive(pid: int) -> bool:
     """Whether a process with this pid exists.
 
@@ -178,6 +194,99 @@ def _pid_alive(pid: int) -> bool:
     return True
 
 
+def _claim_lock(basetemp: Path) -> FileLock:
+    """The lock that makes claiming a basetemp atomic.
+
+    It has to live OUTSIDE the basetemp, because the whole difficulty here is
+    that pytest rmtree()s that directory -- a lock file inside it would be
+    deleted by the very rotation it exists to cover. Keyed on the resolved
+    path so two runs naming the same directory differently still meet on the
+    same lock.
+
+    Held only across the two transitions below, never for the length of the
+    session. The MARKER is the long-lived claim; a lock held for a ten-minute
+    run would add nothing to it and would turn a killed run into a puzzle.
+
+    The lock file is left behind on release, which is filelock's behaviour and
+    not an oversight: unlinking it would race another process that has it
+    open. It is zero bytes, and normal use leaves exactly one per distinct
+    `--basetemp` path -- so, for someone following this file's own advice and
+    passing the same directory every time, one file forever. Worth saying out
+    loud only because stn-7im was about this suite's temp footprint; this is
+    the opposite end of that scale.
+    """
+    key = hashlib.sha256(str(basetemp.resolve()).encode()).hexdigest()[:16]
+    return FileLock(str(Path(tempfile.gettempdir()) / f".stencil-basetemp-{key}.lock"))
+
+
+def _claim_basetemp(basetemp: Path) -> None:
+    """Refuse a basetemp a live pytest already owns, then claim it.
+
+    Called twice per run, which is the fix for stn-6fs and not belt-and-
+    braces. See the two hooks below.
+    """
+    marker = basetemp / RUN_OWNER
+    if marker.exists():
+        pid = marker.read_text().strip().partition("-")[0]
+        # A run that crashed leaves its marker behind, and refusing forever
+        # afterwards would teach people to delete the guard rather than the
+        # file. Only a LIVE owner blocks.
+        #
+        # And never our own: the second call below can find the marker the
+        # first one wrote, and a run that refuses itself is a worse failure
+        # than the one being guarded against.
+        if pid.isdigit() and int(pid) != os.getpid() and _pid_alive(int(pid)):
+            raise pytest.UsageError(
+                f"--basetemp {basetemp} is in use by a running pytest "
+                f"(pid {pid}). Two runs sharing one basetemp delete each "
+                f"other's fixture trees at startup, and the failures do not "
+                f"name the cause. Pass a different --basetemp."
+            )
+    basetemp.mkdir(parents=True, exist_ok=True)
+    marker.write_text(_run_id())
+
+
+INNER_RUN_STRIPPED_ENV = (
+    # xdist's worker identity. Inherited, an inner run calls itself a worker.
+    "PYTEST_XDIST_WORKER",
+    "PYTEST_XDIST_WORKER_COUNT",
+    "PYTEST_XDIST_TESTRUNUID",
+    # The image tag. `pytest_configure` only mints one when this is unset, so
+    # an inner run that inherits it takes the "an explicit tag wins" branch and
+    # mints nothing -- which made the test for per-run minting pass while
+    # reporting its GRANDPARENT's tag. Verified: that test passed with this
+    # variable pre-set to `run-BOGUS-NOT-THIS-RUN`.
+    "STENCIL_BROWSER_IMAGE_TAG",
+    # A contributor with PYTEST_ADDOPTS="-n 4" would otherwise make every inner
+    # run parallel, and the retention tests look for `test_fails0` directly
+    # under the basetemp where xdist would have put it in `popen-gw0/`.
+    "PYTEST_ADDOPTS",
+    # Inner runs pass `-n`, which needs the xdist plugin to be loadable.
+    "PYTEST_DISABLE_PLUGIN_AUTOLOAD",
+)
+
+
+def inner_pytest_env(**overrides) -> dict[str, str]:
+    """The environment for a pytest this suite runs as a SUBPROCESS.
+
+    Several tests answer questions that can only be answered from outside the
+    process, by running an inner pytest. Those inner runs must not inherit
+    this one's state: under `-n auto` every test executes inside a worker with
+    `$PYTEST_XDIST_WORKER` set, a subprocess inherits the whole environment,
+    and the inner run would then announce itself as somebody else's worker --
+    exempt itself from the basetemp guard above, and quietly stop testing the
+    thing it was written to test. `$STENCIL_BROWSER_IMAGE_TAG` is the same
+    mistake wearing a different hat, and it had already been made.
+
+    Found the first time the fast tier was run under `-n auto --dist
+    loadfile`: four guard tests failed at once, all of them inner runs that
+    had been handed a worker identity belonging to their own parent.
+    """
+    env = {k: v for k, v in os.environ.items() if k not in INNER_RUN_STRIPPED_ENV}
+    env.update(overrides)
+    return env
+
+
 def pytest_configure(config):
     if not os.environ.get(pipeline.BROWSER_IMAGE_TAG_ENV):
         # An explicit tag wins: a CI job that builds the image once and reuses
@@ -187,25 +296,121 @@ def pytest_configure(config):
         )
 
     basetemp = config.getoption("basetemp")
-    if not basetemp:
+    if not basetemp or _is_xdist_worker():
         # pytest's own default is already per-run.
+        #
+        # And a worker has nothing to claim. xdist invents a --basetemp for
+        # every worker -- `<run-dir>/popen-gwN` -- even when the top-level run
+        # passed none, so without this a plain `pytest -n auto` would write
+        # owner markers where a plain `pytest` writes none. The question this
+        # guard answers is whether a PERSON pointed two runs at one directory,
+        # and that cannot be asked of a path xdist made up and nothing else can
+        # be aimed at. Measured, in case the obvious reason is assumed instead:
+        # a worker never sees its controller's marker, because the controller's
+        # basetemp is the parent directory rather than the worker's own.
         return
 
-    marker = Path(basetemp) / RUN_OWNER
-    if marker.exists():
-        pid = marker.read_text().strip().partition("-")[0]
-        # A run that crashed leaves its marker behind, and refusing forever
-        # afterwards would teach people to delete the guard rather than the
-        # file. Only a LIVE owner blocks.
-        if pid.isdigit() and _pid_alive(int(pid)):
-            raise pytest.UsageError(
-                f"--basetemp {basetemp} is in use by a running pytest "
-                f"(pid {pid}). Two runs sharing one basetemp delete each "
-                f"other's fixture trees at startup, and the failures do not "
-                f"name the cause. Pass a different --basetemp."
-            )
-    Path(basetemp).mkdir(parents=True, exist_ok=True)
-    marker.write_text(_run_id())
+    # The CHECK belongs here and nowhere later, because the thing that makes
+    # a shared basetemp catastrophic is pytest's own rotation: the first call
+    # to `TempPathFactory.getbasetemp()` rmtree()s the directory. A guard that
+    # refused AFTER that point would have already destroyed the run it was
+    # about to protect.
+    #
+    # Under the lock so that check-then-write is one step. Two runs starting
+    # together would otherwise both read an empty directory and both claim it.
+    basetemp = Path(basetemp)
+    with _claim_lock(basetemp):
+        _claim_basetemp(basetemp)
+
+
+def _rotate(factory, basetemp: Path) -> None:
+    """Force pytest's basetemp rotation, refusing rather than crashing.
+
+    `TempPathFactory.getbasetemp()` does `rm_rf(basetemp)` and then
+    `basetemp.mkdir(mode=0o700)` with no `exist_ok`. Anything that recreates
+    the directory in between raises `FileExistsError` -- and because this is
+    called from a session hook, that surfaces as an INTERNALERROR with a
+    pytest traceback rather than as anything a reader can act on.
+
+    Two things get there: another run claiming the directory at the same
+    moment, which is precisely the case this guard is about; and an `rm_rf`
+    that quietly gave up, since pytest's `on_rm_rf_error` swallows errors on a
+    tree somebody else is writing into.
+
+    So: one retry, because a transient racer will have finished by then, and
+    otherwise a refusal in the guard's own words. An unattributable
+    INTERNALERROR is the one outcome worse than the corruption this guard
+    exists to prevent, and it would be a poor joke to introduce it here of all
+    places.
+    """
+    try:
+        factory.getbasetemp()
+        return
+    except FileExistsError:
+        pass
+    try:
+        factory.getbasetemp()
+    except FileExistsError:
+        raise pytest.UsageError(
+            f"--basetemp {basetemp} is in use by a running pytest: something "
+            f"else keeps recreating it while this run tries to rotate it. Two "
+            f"runs sharing one basetemp delete each other's fixture trees at "
+            f"startup, and the failures do not name the cause. Pass a "
+            f"different --basetemp."
+        ) from None
+
+
+def pytest_sessionstart(session):
+    """Claim the basetemp again, on the far side of pytest's own rotation.
+
+    stn-6fs: the claim in `pytest_configure` cannot survive. `getbasetemp()`
+    rmtree()s the given basetemp on FIRST use and recreates it, and
+    `pytest_configure` runs strictly before that -- so a run deleted its own
+    marker the moment any test asked for `tmp_path`, and the window in which
+    the guard could fire was milliseconds. It was dead rather than racy: two
+    concurrent runs on one --basetemp both passed, with no marker on disk
+    while the first was mid-test.
+
+    Touching `getbasetemp()` here forces the rotation to happen now, while
+    the run is still starting and nothing has been written that could be
+    lost, so the marker written after it is the one a second run reads. The
+    configure-time claim is kept because it closes the gap between the two:
+    for those few milliseconds a marker that will shortly be deleted is
+    still better than no marker at all.
+
+    tests/test_tmp_footprint.py proves this with two real overlapping runs.
+    The older hand-written-marker test cannot: it plants the marker in a
+    directory no pytest rotates, so it passed throughout the years this guard
+    did nothing.
+    """
+    basetemp = session.config.getoption("basetemp")
+    if not basetemp or _is_xdist_worker():
+        return
+
+    if session.config.option.collectonly:
+        # `--collect-only` writes no temp trees, so it has nothing to claim --
+        # and forcing the rotation would DELETE the directory it was pointed
+        # at. This file's own low-space advice is `pytest
+        # --basetemp=~/.cache/stencil-pytest`, so without this a
+        # `--collect-only` against that path wipes it. Same for `--fixtures`.
+        return
+
+    factory = getattr(session.config, "_tmp_path_factory", None)
+    if factory is None:
+        # The same guard `pytest_report_header` already uses ten lines up.
+        # This is a private pytest attribute and `-p no:tmpdir` removes it; an
+        # AttributeError out of a session hook is an INTERNALERROR, which is a
+        # worse answer than not claiming.
+        return
+
+    # Rotation and re-claim under one lock. Between the rmtree inside
+    # getbasetemp() and the marker being written again, the directory is
+    # unclaimed -- microseconds, but a second run reading in that instant
+    # would be told the basetemp was free while this one was mid-rotation.
+    basetemp = Path(basetemp)
+    with _claim_lock(basetemp):
+        _rotate(factory, basetemp)
+        _claim_basetemp(basetemp)
 
 
 def pytest_collection_modifyitems(config, items):
@@ -332,12 +537,141 @@ def render_soup(render):
     return _render_soup
 
 
+class BuildFailed(RuntimeError):
+    """A build that failed, reported identically to everyone who waited on it."""
+
+
+def _write_outcome(sentinel: Path, text: str) -> None:
+    """Record an outcome so that no reader can ever see half of one.
+
+    `Path.write_text` truncates and then writes, so a process killed in that
+    window leaves a ZERO-BYTE sentinel -- which every later caller reads as a
+    recorded failure with an empty reason, skips the build on, and fails the
+    whole container tier with a blank message that nothing clears. Write
+    beside it and rename: `os.replace` is atomic within a directory.
+    """
+    staging = sentinel.with_name(f"{sentinel.name}.{os.getpid()}.tmp")
+    staging.write_text(text)
+    os.replace(staging, sentinel)
+
+
+def _read_outcome(sentinel: Path) -> str | None:
+    """The recorded outcome, or None when there is nothing trustworthy there.
+
+    An unrecognised body means REBUILD, never "it failed and nobody can say
+    why": a sentinel that cannot be explained is indistinguishable from no
+    sentinel, and treating it as a failure is what makes it permanent.
+    """
+    try:
+        recorded = sentinel.read_text()
+    except FileNotFoundError:
+        return None
+    return recorded if recorded.startswith(("ok", "failed\n")) else None
+
+
+def build_once(shared_dir: Path, key: str, build) -> str:
+    """Run `build` once across every process sharing `shared_dir`.
+
+    The problem it solves: `pdf_workspace` below is session-scoped, and under
+    xdist "session" means per WORKER PROCESS. Building the browser image
+    installs Chromium, puppeteer and pa11y -- minutes -- so four workers would
+    start four cold builds simultaneously, with no layer cache to share
+    because none of them has finished yet. The image TAG is already common to
+    the whole run, so the work is genuinely redundant rather than merely
+    duplicated.
+
+    A failure is recorded and re-raised to every caller, which is the half
+    that matters. If only the worker that attempted the build learned it
+    failed, the other three would carry on against an image that is not there
+    and bury the real reason under a wall of container errors.
+    """
+    shared_dir = Path(shared_dir)
+    shared_dir.mkdir(parents=True, exist_ok=True)
+    sentinel = shared_dir / f".{key}.outcome"
+
+    # A generous timeout rather than filelock's default of blocking forever.
+    # The build is minutes, so this is not a deadline on the work; it is a
+    # promise that a worker whose lock-holder has wedged fails with a sentence
+    # rather than sitting there until the CI job's own timeout kills everything
+    # with nothing in the log to say which worker was holding what.
+    with FileLock(str(shared_dir / f".{key}.lock"), timeout=1800):
+        recorded = _read_outcome(sentinel)
+        if recorded is None:
+            try:
+                build()
+            except Exception as exc:
+                # Recorded before it is raised, so the callers still blocked on
+                # the lock get the same answer rather than each retrying a
+                # build that has already been shown not to work.
+                _write_outcome(sentinel, f"failed\n{exc}")
+                raise BuildFailed(str(exc)) from exc
+            # Recording SUCCESS is inside the try as well. A full disk is the
+            # obvious way for it to fail, and stn-7im is this suite hitting
+            # one; without this the OSError escapes as neither an outcome nor
+            # a BuildFailed, `pdf_workspace` errors instead of failing with a
+            # reason, and the other workers each rebuild.
+            try:
+                _write_outcome(sentinel, "ok")
+            except OSError as exc:
+                raise BuildFailed(
+                    f"the build succeeded but its outcome could not be "
+                    f"recorded: {exc}"
+                ) from exc
+            recorded = "ok"
+
+    status, _, detail = recorded.partition("\n")
+    if status != "ok":
+        raise BuildFailed(detail)
+    return status
+
+
+def _shared_run_dir(tmp_path_factory) -> Path:
+    """A directory every process in THIS run shares, and no other run does.
+
+    In a worker that is `getbasetemp().parent`: worker basetemps are
+    `<run-dir>/popen-gwN`, so the parent is the run-scoped directory the
+    controller owns -- true both with an explicit `--basetemp` and with
+    pytest's own default.
+
+    In a serial run it is `getbasetemp()` itself, and the difference is not
+    cosmetic. A serial run's parent is the system temp root
+    (`/tmp/pytest-of-<user>`), shared by every run that user has ever made, so
+    locking there would make one run's recorded build outcome answer for the
+    next one's -- against an image tag that no longer exists.
+    """
+    basetemp = Path(tmp_path_factory.getbasetemp())
+    if not _is_xdist_worker():
+        return basetemp
+
+    # Refuse rather than guess. This encodes xdist's private directory layout,
+    # and if that ever moves -- or if some pytest subprocess inherits
+    # PYTEST_XDIST_WORKER without going through `inner_pytest_env` -- the
+    # parent is the system temp root, where a sentinel from a run that ended
+    # days ago makes a later run skip a build it needs, against an image tag
+    # that no longer exists. Silent, permanent, and exactly what the paragraph
+    # above claims this avoids.
+    if not basetemp.name.startswith("popen-gw"):
+        raise RuntimeError(
+            f"expected an xdist worker basetemp of the form popen-gwN, got "
+            f"{basetemp}. The build-once lock needs a directory scoped to this "
+            f"RUN, and the cost of guessing one wrong is sharing it with every "
+            f"run on the machine."
+        )
+    return basetemp.parent
+
+
 @pytest.fixture(scope="session")
 def pdf_workspace(tmp_path_factory):
     """A generated package with the browser image built, shared session-wide.
 
     Building it installs Chromium, puppeteer and pa11y, which takes minutes.
-    Once per session rather than once per test.
+    Once per session rather than once per test -- and, under xdist, once per
+    RUN rather than once per worker.
+
+    The workspace directory stays per-worker: `to_pdf` writes source files
+    into it, and it costs 32ms to make. Only the image build is shared. The
+    worker that wins the lock builds from its own copy, which is the same
+    package every other worker generated from the same DEMO_CONFIG.
     """
     if pipeline.container_runtime() is None:
         pytest.skip("no container runtime found (docker, podman)")
@@ -346,9 +680,17 @@ def pdf_workspace(tmp_path_factory):
     package = make_package(base, DEMO_CONFIG)
     install_fixtures(package)
 
-    result = pipeline.build_browser_image(package)
-    if result.returncode != 0:
-        pytest.fail(f"could not build the browser image:\n{result.stderr[-3000:]}")
+    def _build():
+        result = pipeline.build_browser_image(package)
+        if result.returncode != 0:
+            raise RuntimeError(
+                f"could not build the browser image:\n{result.stderr[-3000:]}"
+            )
+
+    try:
+        build_once(_shared_run_dir(tmp_path_factory), "browser-image", _build)
+    except BuildFailed as exc:
+        pytest.fail(str(exc))
 
     return package
 
