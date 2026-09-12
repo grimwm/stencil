@@ -167,6 +167,21 @@ the pipeline reads, and what each one does on each side:
 | `dir`           | `<html dir>`, only when set                     | Same                                                        |
 | `slide-level`   | Ignored                                         | Heading level that starts a slide (default `2`)             |
 
+Every one of these is parsed as **inline markdown**, not as plain text. Backticks in `title`,
+`subtitle`, `brand`, `program`, `section`, `term` or `author` render as inline code on the title
+slide, and they are legible there — the code inherits the slide's own ink rather than the pink
+`code` colour, which measures 1.06:1 against the pale end of the title gradient and is not
+readable at all:
+
+```markdown
+---
+title: "Flow, Limits, and `WIP` Specifications"
+---
+```
+
+A **link** in front matter is not covered by that. It keeps the link colour, which fails contrast
+on the title fill; write the URL as text if you need one there.
+
 `author` takes one name or a list of them:
 
 ```markdown

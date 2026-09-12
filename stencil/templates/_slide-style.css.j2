@@ -71,6 +71,18 @@
       color: var(--on-accent);
     }
 
+    /* Every line on the title slide is front matter, and
+       frontmatter-filter.lua builds each field as pandoc.Inlines -- so a
+       backticked `title:` puts a <code> on the gradient. Without this it takes
+       --code-inline and lands at 1.47:1 on --deck-accent-from and 1.06:1 on
+       --deck-accent-to; inheriting instead gives it the --on-accent ink the
+       fill already carries, 9.85:1 and 6.32:1, and 9.85:1 on --print-deck-bg.
+       No value of --code-inline fixes both a light prose surface and a dark
+       fill, which is why this is scoped rather than a palette change. */
+    .slide--title code {
+      color: inherit;
+    }
+
     /* Brand above the context line on a title slide, the same order a
        document's header uses. White-on-gradient, so a logo with its own
        background is the author's to supply appropriately. */

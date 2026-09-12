@@ -11,6 +11,48 @@ How the version gets bumped is written down in
 
 ## 0.38.0
 
+- **Inline code on an accent fill takes the fill's own ink, so a backticked
+  front-matter title is legible on a deck's title slide** (`stn-7i8`). Every
+  field the title slide renders is parsed as inline markdown — measured, all
+  seven of `title`, `subtitle`, `brand`, `program`, `section`, `term` and
+  `author` — so a title like `` "Flow, Limits, and `WIP` Specifications" ``
+  puts a `<code>` on the accent gradient. It took `--code-inline`, which is
+  ink meant for pale prose surfaces: **1.47:1** against `--deck-accent-from`
+  and **1.06:1** against `--deck-accent-to`, in both themes and in print.
+  A scoped `.slide--title code { color: inherit }` hands it the `--on-accent`
+  ink the slide already carries instead, which measures 9.85:1 and 6.32:1,
+  and 9.85:1 on `--print-deck-bg`.
+
+  No value of `--code-inline` could have fixed this, which is why it is a
+  scoped rule rather than another palette change: the token has to work on
+  pale prose surfaces *and* on a dark fill, and those pull in opposite
+  directions. `stn-1y7` moved it from #c7254e to #b01f45 to fix a real
+  failure on a table header, and in doing so took the title slide from
+  1.78:1 to 1.47:1. `tests/test_theme.py` now asserts the token **fails**
+  here, so the next person to try tuning the palette reds a test that
+  explains why.
+
+- **A matching rule for inline code in the tab strip**, which is defence in
+  depth rather than a live fix, and the comment says so. The vendored
+  Bootstrap carries `a>code{color:inherit}` at (0,0,2), which already beats
+  its own `code{color:var(--bs-code-color)}` at (0,0,1), and
+  `_page-scripts.html.j2` adds `.nav-link` to the author's own `<a>` rather
+  than rebuilding it — so a `code` written as a direct child of a tab link is
+  legible today. The new rule covers the nested case (`<a><strong><code>`)
+  and stops the pairing resting on a reboot rule inside a vendored blob that
+  a Bootstrap bump could drop.
+
+- **The deck fixture now carries a backticked title and subtitle**, so a
+  rendered page in the suite actually produces the pairing. What that
+  measured is worth recording: **`make check-access` cannot see this defect.**
+  With the rule reverted, pa11y passed all eight page/theme combinations over
+  a deck proven to contain `<code>WIP</code>` in `.deck-title`. `.slide--title`
+  is painted with `background: linear-gradient(...)`, whose shorthand resets
+  `background-color` to transparent, so the checker finds no colour to
+  composite against and skips the element rather than failing it — the same
+  blind spot `_page-style.css.j2` already records for the deck toolbar. The
+  unit measurement in `tests/test_theme.py` is therefore the whole guard.
+
 - **A guard keeps developer home paths out of the published issue export**
   (`stn-zcw`). `.beads/issues.jsonl` is committed and this repository is
   public, and issue notes are written by agents that paste absolute paths — so

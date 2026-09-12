@@ -627,6 +627,184 @@ def test_inline_code_is_legible_on_every_printed_surface(surface):
     )
 
 
+# --- inline code on an accent fill (stn-7i8 / stn-cwt) ---------------------
+#
+# The three surfaces above are prose surfaces: light fills that ink sits on.
+# An accent fill is the opposite -- a dark fill whose text is white -- and no
+# value of --code-inline works on both. So the fix is not a token, it is a
+# scoped `color: inherit` that lets a `code` take the on-accent ink already
+# set on its container.
+#
+# The on-accent inks are white at an alpha, so measuring them means
+# compositing first. --on-accent-faint is deliberately absent: at 0.5 and 0.55
+# it is separator ink, nothing inherits it, and it would fail.
+
+ON_ACCENT_INKS = ["--on-accent", "--on-accent-bright", "--on-accent-muted"]
+
+# --accent-fill is the tab strip; the other two are the title slide's gradient
+# stops, and a gradient puts the ink on every colour between them -- so both
+# ends have to clear, not the average.
+ACCENT_FILLS = ["--deck-accent-from", "--deck-accent-to", "--accent-fill"]
+
+RGBA = re.compile(
+    r"rgba\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*,\s*([\d.]+)\s*\)"
+)
+
+
+def composite(colour: str, backdrop: str) -> str:
+    """`colour` painted over an opaque `backdrop`, as a #rrggbb string.
+
+    WCAG's ratio is defined on opaque colours. Every on-accent ink is white at
+    an alpha, so comparing one against a fill without flattening it first
+    measures a colour nobody can see -- and flatters it, since pure white beats
+    the same white at 0.85.
+    """
+    m = RGBA.fullmatch(colour.strip())
+    if not m:
+        return colour.strip()
+    r, g, b, alpha = int(m[1]), int(m[2]), int(m[3]), float(m[4])
+    base = backdrop.strip().lstrip("#")
+    if len(base) == 3:
+        base = "".join(d * 2 for d in base)
+    under = [int(base[i : i + 2], 16) for i in (0, 2, 4)]
+    out = [round(c * alpha + u * (1 - alpha)) for c, u in zip((r, g, b), under)]
+    return "#%02x%02x%02x" % tuple(out)
+
+
+def flatten(table: dict[str, str], token: str, backdrop: str) -> str:
+    """Resolve a token to a literal and composite it over `backdrop`."""
+    return composite(resolve(table[token], table), backdrop)
+
+
+def theme_table(css: str, theme: str) -> dict[str, str]:
+    table = dict(tokens(css))
+    if theme == "dark":
+        table.update(
+            dict(re.findall(r"(--[a-z0-9-]+)\s*:\s*([^;]+);", dark_block(css)))
+        )
+    return table
+
+
+@pytest.mark.parametrize("theme", ["light", "dark"])
+@pytest.mark.parametrize("fill", ACCENT_FILLS)
+@pytest.mark.parametrize("ink", ON_ACCENT_INKS)
+def test_code_inheriting_an_on_accent_ink_is_legible_on_its_fill(theme, fill, ink):
+    """Every ink a `code` can inherit on an accent fill, on every such fill.
+
+    This is what makes `color: inherit` a fix rather than a hope: the rule
+    hands the code whatever ink its container carries, so the guarantee has to
+    hold for each of them. The worst pairing is --on-accent-muted on
+    --deck-accent-to in light at 5.10:1 -- the gradient's pale end, which is
+    also the one --code-inline scores 1.06:1 against.
+
+    The tab strip's :hover state is a real pairing that is NOT asserted here:
+    it puts the ink on --on-accent-fill composited over --accent-fill, which
+    measures 6.41:1 light and 5.58:1 dark for --on-accent, and 5.18:1 and
+    4.55:1 for --on-accent-muted. All four pass, and asserting them would need
+    composite() to nest for numbers with no failure behind them.
+    """
+    css = strip_comments(source("_page-style.css.j2"))
+    table = theme_table(css, theme)
+    bg = resolve(table[fill], table)
+    fg = flatten(table, ink, bg)
+    ratio = contrast(fg, bg)
+    assert ratio >= 4.5, (
+        f"{theme}: {ink} ({fg}) on {fill} ({bg}) is {ratio:.2f}:1, under 4.5:1"
+    )
+
+
+@pytest.mark.parametrize("ink", ON_ACCENT_INKS)
+def test_code_inheriting_an_on_accent_ink_is_legible_in_print(ink):
+    """The same question for the printed deck, whose title slide is a flat
+    --print-deck-bg rather than a gradient. Print never matches @media screen,
+    so these are the light values whatever the reader chose on screen."""
+    css = strip_comments(source("_page-style.css.j2"))
+    table = dict(tokens(css))
+    bg = resolve(table["--print-deck-bg"], table)
+    fg = flatten(table, ink, bg)
+    ratio = contrast(fg, bg)
+    assert ratio >= 4.5, (
+        f"print: {ink} ({fg}) on --print-deck-bg ({bg}) is "
+        f"{ratio:.2f}:1, under 4.5:1"
+    )
+
+
+# Whitespace-tolerant: these assert that a rule EXISTS, and a reformat that
+# moved the brace or the space after the colon would otherwise red them for a
+# change that altered nothing.
+TITLE_SLIDE_CODE_RULE = re.compile(
+    r"\.slide--title\s+code\s*\{[^}]*color\s*:\s*inherit", re.S
+)
+TAB_LINK_CODE_RULE = re.compile(
+    r"\.nav-tabs\.problem-tabs\s+\.nav-link\s+code\s*\{[^}]*"
+    r"color\s*:\s*inherit",
+    re.S,
+)
+
+
+def test_title_slide_code_inherits_the_on_accent_ink():
+    """The rule the measurements above are only meaningful with.
+
+    Delete it and a backticked `title:` goes back to --code-inline on the
+    gradient at 1.47:1 and 1.06:1. This one IS load-bearing: nothing else in
+    either stylesheet or in the vendored Bootstrap scopes a bare `code` inside
+    .slide--title.
+    """
+    css = source("_slide-style.css.j2")
+    assert TITLE_SLIDE_CODE_RULE.search(css), (
+        "_slide-style.css.j2 has no `.slide--title code { color: inherit }`; "
+        "inline code on the title slide falls back to --code-inline"
+    )
+
+
+def test_tab_link_code_inherits_the_on_accent_ink():
+    """Defence in depth rather than a live failure, and worth saying so.
+
+    The vendored stencil/assets/bootstrap.min.css carries `a>code{color:
+    inherit}` at (0,0,2), which already beats its own `code{color:var(
+    --bs-code-color)}` at (0,0,1) -- and _page-scripts.html.j2 puts .nav-link
+    on the AUTHOR'S OWN <a> rather than rebuilding the element, so a `code`
+    written as a direct child of a tab link is legible today. Reverting this
+    rule regresses nothing that ships.
+
+    What it covers is a NESTED code -- `<a><strong><code>` -- which the child
+    combinator misses, and it stops the pairing depending on a reboot rule
+    inside a vendored blob that a Bootstrap bump could quietly drop.
+    """
+    css = source("_page-style.css.j2")
+    assert TAB_LINK_CODE_RULE.search(css), (
+        "_page-style.css.j2 has no `.nav-tabs.problem-tabs .nav-link code "
+        "{ color: inherit }`"
+    )
+
+
+# Light and print only. The dark --code-inline is #ff9ab0, which reaches
+# 4.55:1 on --deck-accent-to and would make this parametrisation lie about
+# what is wrong -- the token is unusable on the fills a reader in the DEFAULT
+# theme, and every printed handout, actually gets.
+@pytest.mark.parametrize("fill", ACCENT_FILLS + ["--print-deck-bg"])
+def test_the_code_token_cannot_be_made_to_work_on_an_accent_fill(fill):
+    """The negative half, and the reason the fix is a scoped rule.
+
+    stn-1y7 raised --code-inline from #c7254e to #b01f45 to fix a real failure
+    on a table header. That is ink getting darker, and an accent fill is dark
+    already -- so the change moved the title slide from 1.78:1 to 1.47:1. No
+    third value fixes both: this asserts the token FAILS here, so anyone who
+    tries to solve it by tuning the palette again reds a test that explains
+    why.
+    """
+    css = strip_comments(source("_page-style.css.j2"))
+    table = dict(tokens(css))
+    fg = resolve(table["--code-inline"], table)
+    bg = resolve(table[fill], table)
+    ratio = contrast(fg, bg)
+    assert ratio < 4.5, (
+        f"--code-inline ({fg}) now reaches {ratio:.2f}:1 on {fill} ({bg}). "
+        f"If the palette really did solve this, delete the scoped rules and "
+        f"this test together -- do not leave both."
+    )
+
+
 def test_nothing_fills_with_the_ink_token():
     """A background painted with --accent is the bug above, reintroduced."""
     for template in STYLESHEETS:
