@@ -75,6 +75,40 @@ read it, the service would fail trying to resolve
 ``this-package-does-not-exist-9x7``. It has to keep succeeding, which is the
 only way to show ``npm ci`` never looked.
 
+WHY THE TWO HOSTILE-CONFIG TESTS EXIST -- A CONFIG FILE IS CODE (stn-20h).
+The decoy above closes the question of which MANIFEST npm resolves. It stops
+one loader short. Prettier's own configuration discovery is still rooted in the
+mount: it searches upward from each formatted file for ``.prettierrc``,
+``.prettierrc.json``, ``.prettierrc.cjs``, ``prettier.config.js`` and
+``package.json#prettier``. Two of those are JavaScript, evaluated at load; and
+ANY of them, including the ones that are only data, may name a ``plugins``
+entry, which prettier then ``require``s out of the consumer's own
+``node_modules``. The service runs as uid 0 over a read-write bind mount with
+the network up, and ``make pkg`` runs it on every build -- so a course
+repository that carries a ``.prettierrc.json`` for reasons of its own was
+handing the formatter a choice of what code to be.
+
+``test_a_consumers_js_prettier_config_is_not_executed`` and
+``test_a_plugin_named_by_a_json_prettier_config_is_not_loaded`` plant each of
+those two shapes and assert the consumer's JavaScript did not run. The fix they
+pin is one flag, ``--no-config``.
+
+THEY NEED TWO PACKAGES, NOT TWO FILES IN ONE. Prettier stops at the first
+config file it finds, and ``.prettierrc.json`` outranks ``.prettierrc.cjs`` in
+that search order. Planting both in one directory would silently exercise only
+the JSON case and report it as two passing tests.
+
+WHY EACH ONE ALSO SETS ``endOfLine: crlf`` -- THE POSITIVE CONTROL. Three
+absence-assertions (no sentinel, no marker, still reformatted) prove "the flag
+is on and prettier ran". They do NOT prove prettier's config search would ever
+have reached that directory, so any later change to ``working_dir`` or to where
+the fixture markdown is written would keep them green while testing nothing at
+all. ``endOfLine`` is an option the service's argv does not override, unlike
+``proseWrap`` and ``printWidth``, so its effect is visible in the output bytes:
+honour the config and the file comes back CRLF, ignore it and the file stays
+LF. Asserting no ``\r`` survived is what makes these tests fail if the config
+was never in the search path to begin with.
+
 WHY NO PORT IS BOUND, AND WHY THAT IS ASSERTED ELSEWHERE.
 ``test_no_generated_service_binds_a_host_port`` in
 tests/test_compose_check_access.py already covers every service the compose
@@ -103,6 +137,7 @@ import warnings
 from pathlib import Path
 
 import pytest
+import yaml
 
 from stencil import pipeline
 
@@ -129,6 +164,63 @@ UNWRAPPED_PARAGRAPH = (
 LOOSE_BULLETS = "*  loose  bullets\n*  another   item\n"
 
 BADLY_FORMATTED_MARKDOWN = f"# Report\n\n{UNWRAPPED_PARAGRAPH}\n\n{LOOSE_BULLETS}"
+
+# The two stn-20h fixtures. Each writes a sentinel into the mount and prints a
+# marker, so "this did not execute" is checked on the host's own filesystem as
+# well as in the service's output -- compose interleaves stdout and stderr and
+# a later change to -T or to logging could swallow a line, but it cannot
+# swallow a file. The sentinel is the load-bearing assertion; the marker is
+# corroboration.
+#
+# Neither sentinel ends in .md, so neither is a file prettier would format.
+CONFIG_SENTINEL = "prettier-config-executed"
+PLUGIN_SENTINEL = "prettier-plugin-executed"
+
+# `endOfLine: crlf` is the positive control, and it is why both fixtures carry
+# a real setting rather than an empty object. The service's argv already
+# dictates --prose-wrap and --print-width, so a config naming those proves
+# nothing either way; endOfLine is one prettier honours and the argv does not
+# mention, so it is visible in the output bytes. See the module docstring.
+HOSTILE_JSON_CONFIG = json.dumps(
+    {"plugins": ["./node_modules/hostile-plugin/index.js"], "endOfLine": "crlf"}
+)
+
+
+def hostile_cjs_config(marker: str) -> str:
+    """A .prettierrc.cjs that announces itself and then behaves.
+
+    It MUST return a valid config after its side effect. A config file that
+    throws makes prettier fail the file, which would leave the RED run failing
+    on "the markdown was not reformatted" instead of on the sentinel -- two
+    failures that read identically in a log, where the second invites someone
+    to "fix" the fixture into something inert that never proved anything.
+    """
+    return (
+        'const fs = require("fs");\n'
+        f'fs.writeFileSync("/workspace/{CONFIG_SENTINEL}", '
+        '"uid=" + process.getuid() + "\\n");\n'
+        f'console.log("{marker}: .prettierrc.cjs evaluated as uid=" '
+        "+ process.getuid());\n"
+        'module.exports = { endOfLine: "crlf" };\n'
+    )
+
+
+def hostile_plugin(marker: str) -> str:
+    """A prettier plugin that announces itself at require time.
+
+    Exports the empty shape of a real plugin so that, in the RED run, prettier
+    loads it and carries on formatting rather than erroring out -- again so the
+    failure that fires is the sentinel and not a collapsed build.
+    """
+    return (
+        'const fs = require("fs");\n'
+        f'fs.writeFileSync("/workspace/{PLUGIN_SENTINEL}", '
+        '"uid=" + process.getuid() + "\\n");\n'
+        f'console.log("{marker}: plugin named by .prettierrc.json required '
+        'as uid=" + process.getuid());\n'
+        "module.exports = { languages: [], parsers: {}, printers: {} };\n"
+    )
+
 
 DECOY_PACKAGE_JSON = json.dumps(
     {
@@ -326,3 +418,170 @@ def test_a_consumers_package_json_does_not_hijack_the_install(
     assert "this-package-does-not-exist-9x7" not in (
         formatted.stdout + formatted.stderr
     ), "the decoy dependency was resolved at all, which it never should be"
+
+
+@pytest.mark.integration
+def test_a_consumers_js_prettier_config_is_not_executed(
+    demo_config, generate_package, compose
+):
+    """A .prettierrc.cjs in the package must never be evaluated (stn-20h).
+
+    The most direct shape of the hole: a configuration file that is JavaScript,
+    sitting in the directory the service mounts read-write and runs as uid 0
+    over. Prettier evaluates it at load, so before ``--no-config`` this was the
+    consumer's code running in stencil's container on every ``make pkg``.
+
+    The fixture writes a sentinel into /workspace and prints a marker, and this
+    test asserts neither arrived. It also asserts the markdown was still
+    reformatted and the service still exited 0 -- without those, a service that
+    failed to start, or a prettier that rejected the flag, would satisfy "the
+    sentinel is absent" while proving nothing.
+
+    WHY THIS CANNOT SHARE A PACKAGE WITH THE JSON TEST BELOW: prettier stops at
+    the first configuration file it finds, and .prettierrc.json outranks
+    .prettierrc.cjs. Planted together, only the JSON one would ever be read.
+
+    WHAT THE RED RUN DEPENDS ON: that ``generate_package`` writes none of the
+    files prettier ranks ABOVE .prettierrc.cjs -- package.json, .prettierrc,
+    .prettierrc.json, .prettierrc.yaml, .prettierrc.json5, .prettierrc.js,
+    .prettierrc.mjs. It writes none of them today. If one is ever added to a
+    generated package, this test goes quietly green and stops meaning anything.
+    """
+    config = demo_config
+    config["packages"] = {"jsconfig": config["packages"].pop("demo")}
+    package = generate_package(config, "jsconfig")
+
+    marker = f"MARKER-CJS-{uuid.uuid4().hex}"
+    (package / ".prettierrc.cjs").write_text(hostile_cjs_config(marker))
+
+    target = package / "scratch.md"
+    target.write_text(BADLY_FORMATTED_MARKDOWN)
+    before = target.read_bytes()
+
+    run = compose(package)
+    formatted = run("run", "--rm", "-T", "format-md", timeout=1800)
+
+    assert formatted.returncode == 0, outcome("compose run format-md", formatted)
+
+    assert not (package / CONFIG_SENTINEL).exists(), (
+        "the .prettierrc.cjs in the package was evaluated: it wrote "
+        f"{CONFIG_SENTINEL} into the mount as uid 0. That is stn-20h, still "
+        f"open:\n{outcome('compose run format-md', formatted)}"
+    )
+    assert marker not in (formatted.stdout + formatted.stderr), (
+        "the .prettierrc.cjs printed its marker, so it ran:\n"
+        f"{outcome('compose run format-md', formatted)}"
+    )
+
+    after = target.read_bytes()
+    assert after != before, (
+        "the service exited 0 but never reformatted the file, so the absence "
+        "of the sentinel proves nothing:\n"
+        f"{outcome('compose run format-md', formatted)}"
+    )
+    assert b"\r" not in after, (
+        "the file came back with CRLF line endings, which only the planted "
+        "config asks for -- so prettier read it. This is the positive control: "
+        "it is what tells the assertions above apart from a config that was "
+        f"never in the search path at all:\n{after.decode()!r}"
+    )
+
+
+@pytest.mark.integration
+def test_a_plugin_named_by_a_json_prettier_config_is_not_loaded(
+    demo_config, generate_package, compose
+):
+    """A plugin named by a JSON config must never be required (stn-20h).
+
+    The case that makes "the package only ships JSON" useless as a defence. The
+    configuration file here contains no JavaScript at all -- it is a
+    .prettierrc.json, a file a course repository plausibly carries for reasons
+    that have nothing to do with stencil -- but its ``plugins`` entry names a
+    path, and prettier ``require``s that path out of the consumer's own
+    node_modules. Same uid, same mount, same build.
+
+    THE PLUGIN PATH RESOLVES RELATIVE TO THE CONFIG FILE, not to the process's
+    working directory. Both are /workspace here, so the distinction does not
+    bite today -- but a later change that moved the fixture markdown into a
+    subdirectory would move the search origin with it, and a ``./node_modules``
+    path that no longer resolves would make this test pass for the wrong
+    reason. If that move ever happens, move the plugin too.
+    """
+    config = demo_config
+    config["packages"] = {"jsonconfig": config["packages"].pop("demo")}
+    package = generate_package(config, "jsonconfig")
+
+    marker = f"MARKER-PLUGIN-{uuid.uuid4().hex}"
+    (package / ".prettierrc.json").write_text(HOSTILE_JSON_CONFIG)
+    plugin = package / "node_modules" / "hostile-plugin"
+    plugin.mkdir(parents=True)
+    (plugin / "index.js").write_text(hostile_plugin(marker))
+
+    target = package / "scratch.md"
+    target.write_text(BADLY_FORMATTED_MARKDOWN)
+    before = target.read_bytes()
+
+    run = compose(package)
+    formatted = run("run", "--rm", "-T", "format-md", timeout=1800)
+
+    assert formatted.returncode == 0, outcome("compose run format-md", formatted)
+
+    assert not (package / PLUGIN_SENTINEL).exists(), (
+        "the plugin named by the package's .prettierrc.json was required: it "
+        f"wrote {PLUGIN_SENTINEL} into the mount as uid 0. A config file that "
+        "is pure data still chose what code the formatter would run -- that is "
+        f"stn-20h's second case, still open:\n"
+        f"{outcome('compose run format-md', formatted)}"
+    )
+    assert marker not in (formatted.stdout + formatted.stderr), (
+        "the plugin printed its marker, so it was loaded:\n"
+        f"{outcome('compose run format-md', formatted)}"
+    )
+
+    after = target.read_bytes()
+    assert after != before, (
+        "the service exited 0 but never reformatted the file, so the absence "
+        "of the sentinel proves nothing:\n"
+        f"{outcome('compose run format-md', formatted)}"
+    )
+    assert b"\r" not in after, (
+        "the file came back with CRLF line endings, which only the planted "
+        "config asks for -- so prettier read it, and would have read its "
+        f"plugins entry too:\n{after.decode()!r}"
+    )
+
+
+def test_the_entrypoint_refuses_a_consumers_prettier_config(doc_package):
+    """--no-config reaches the prettier ARGV, asserted where a comment cannot.
+
+    The two tests above need a container and skip without one, which leaves the
+    machine most likely to be running the fast tier -- a laptop with no compose
+    implementation, CI's unit job -- with no coverage of stn-20h at all. This
+    is that coverage.
+
+    IT PARSES THE YAML RATHER THAN GREPPING THE FILE, and that is the whole
+    design. The same change that adds this flag also adds a comment above the
+    service explaining it, so ``"--no-config" in compose.read_text()`` would be
+    satisfied by the comment forever -- including after someone deleted the
+    flag from the argv it is meant to pin. Comments do not survive
+    ``yaml.safe_load``; the entrypoint's script does.
+    """
+    compose_file = yaml.safe_load((doc_package / "docker-compose.yml").read_text())
+    script = compose_file["services"]["format-md"]["entrypoint"][-1]
+
+    invocation = f"{pipeline.FORMAT_TOOLS_DIR}/node_modules/.bin/prettier"
+    assert invocation in script, (
+        "the format-md entrypoint no longer invokes prettier from the tools "
+        f"directory, so there is nothing here to pin:\n{script}"
+    )
+    argv = script[script.index(invocation) :]
+
+    assert "--no-config" in argv.split(), (
+        "the prettier invocation does not pass --no-config, so prettier will "
+        "discover and honour a configuration file from the mounted package "
+        "directory -- executing it, or executing a plugin it names, as uid 0. "
+        f"That is stn-20h:\n{argv}"
+    )
+    assert argv.index("--no-config") < argv.index("--write"), (
+        f"--no-config must precede --write to apply to the run:\n{argv}"
+    )

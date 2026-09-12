@@ -87,6 +87,39 @@ How the version gets bumped is written down in
   was garbage-collected upstream — re-resolve with
   `python3 scripts/resolve_image_digests.py` and regenerate.
 
+- **`format-md` no longer executes a consumer's prettier config** (`stn-20h`).
+  The service installs prettier into `/tmp/fmt` precisely so npm resolves
+  stencil's manifest and not the package's. That answered which *manifest*, and
+  stopped one loader short: prettier's own config discovery was still rooted in
+  the mount.
+
+  **Measured**, running the generated service the way `make pkg` does, on the
+  pinned node image with the pinned prettier: a `.prettierrc.cjs` in the package
+  was evaluated as uid 0 and wrote to the read-write mount; and a
+  `.prettierrc.json` — a file containing no JavaScript at all — named a
+  `plugins` path that prettier then required out of the package's own
+  `node_modules`, also as uid 0. The second is the one that matters, because
+  "we only ship JSON" was never a defence. Both ran with the network up, on
+  every build, and the build printed its usual success output afterwards.
+
+  `--no-config` closes both. There is deliberately no allowlist of safe config
+  formats: the dangerous file in the second case was the inert-looking one, and
+  a `plugins` entry is available in every format prettier reads.
+
+  **What this costs a consumer, and it is not nothing.** A package's own
+  prettier settings stop applying — so do `.editorconfig`'s, including
+  `end_of_line` and `indent_size`, which is the one most likely to surprise a
+  Windows-authored repository whose markdown will come back LF. Plugins loaded
+  through a config stop loading. Nothing is printed when this happens and
+  `--write` means the reformat is already on disk, so run `make format-md` on a
+  clean tree first and commit the result as its own commit, before anything
+  else. `.prettierignore` and `.gitignore` still apply — they choose which files
+  are formatted rather than what code runs — and they remain the way to keep the
+  formatter away from a directory. If you also run prettier yourself, give it
+  the same flags or exclude the package, or the two will take turns rewriting
+  each other's output. [AUTHORING.md](AUTHORING.md#fenced-divs-and-prettier)
+  says all of this to the person writing the markdown.
+
 ## 0.38.0
 
 - **Two test runs at once no longer corrupt each other** (`stn-zim`). The

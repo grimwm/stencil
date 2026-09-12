@@ -16,6 +16,32 @@
   # resolves; running it from /tmp/fmt is not asking. The subshell keeps the
   # prettier invocation below in /workspace, where the `**/*.md` glob belongs.
   #
+  # --no-config IS THE SAME QUESTION, ONE LOADER FURTHER ON (stn-20h). Putting
+  # the install in /tmp/fmt answers which MANIFEST npm resolves. It leaves
+  # prettier's own config discovery rooted in the mount: prettier searches
+  # upward from each formatted file for .prettierrc, .prettierrc.json,
+  # .prettierrc.cjs, prettier.config.js and package.json#prettier. Two of those
+  # are JavaScript and are evaluated at load -- and ANY of them, the ones that
+  # are pure data included, may carry a `plugins` entry that prettier then
+  # requires out of the consumer's own node_modules. Measured on this image and
+  # this prettier: both ran as uid 0, over the read-write mount, with the
+  # network up, on every `make pkg`, and the build printed its usual success
+  # output afterwards.
+  #
+  # So the service honours no configuration it did not bring with it. stencil
+  # already dictated --prose-wrap and --print-width here and named its one
+  # plugin by absolute path, so a consumer's config was only ever partly in
+  # force; this makes "stencil's settings" true rather than nearly true. There
+  # is deliberately no allowlist of "safe" config formats -- the dangerous file
+  # in the second case above was the inert-looking one, and a `plugins` entry
+  # is available in every format prettier reads.
+  #
+  # --no-editorconfig is NOT passed, and is not an oversight: measured,
+  # --no-config already stops .editorconfig being consulted, so the second flag
+  # would change nothing. Ignore files are untouched -- .prettierignore and
+  # .gitignore still apply, they select which files are formatted rather than
+  # deciding what code runs, and they are the escape hatch a consumer needs.
+  #
   # THE LOCKFILE GUARD SAYS WHAT `cp: can't stat` DOES NOT. generate.py emits
   # the lockfile for every package it generates -- no predicate, because three
   # were tried and each left a case behind -- so a missing one now means a
@@ -53,6 +79,7 @@
         cp {{ format_lockfile_name }} {{ format_tools_dir }}/package-lock.json && \
         (cd {{ format_tools_dir }} && npm ci --ignore-scripts --no-audit --no-fund) && \
         {{ format_tools_dir }}/node_modules/.bin/prettier \
+          --no-config \
           --plugin {{ format_tools_dir }}/node_modules/@awmottaz/prettier-plugin-void-html/prettier-plugin-void-html.js \
           --prose-wrap always --print-width 100 --write "**/*.md"
     restart: "no"
