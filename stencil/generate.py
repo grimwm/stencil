@@ -367,6 +367,31 @@ def check_no_glob(package_id: str, where: str, value: str) -> str:
     return value
 
 
+def check_no_separator(package_id: str, where: str, value: str) -> str:
+    """Refuse a path separator in a config value that names ONE file IN the
+    package directory, not a path.
+
+    Separate from `check_config_path` rather than a widening of it, because
+    the two disagree on purpose: `check_config_path` deliberately ALLOWS a
+    subdirectory -- `dest: .vscode/settings.json` is documented in
+    STENCIL.md -- while `package_name` names one file directly under the
+    package directory, so the same subdirectory is not a feature to permit
+    here, only a way to nest or escape.
+
+    Refuses '/' only, not backslash: `_UNSAFE_IN_PATH` (above) already
+    contains a backslash, and `check_config_path` runs before this check on
+    every caller, so a backslash branch here would be unreachable dead
+    code -- already refused upstream as a shell/Make metacharacter.
+    """
+    if "/" in value:
+        raise ValueError(
+            f"Package {package_id}: {where} {value!r} contains a path "
+            "separator. This names one file in the package directory, not "
+            "a path."
+        )
+    return value
+
+
 def check_glob_vocabulary(package_id: str, where: str, entry: str) -> None:
     """Bound what a manifest entry's glob may look like (stn-2x4.6,
     adversarial CRITICAL 2).
@@ -449,8 +474,34 @@ def get_template_context(package_id: str, config: dict) -> dict:
             f"Package {package_id} has invalid package_type: {package_type}"
         )
 
-    # package_name is required for zip packages (not for doc or none)
+    # package_name is required for zip packages (not for doc or none), but
+    # validated whenever it is PRESENT (stn-9rn) -- not only for the
+    # package_type that consumes it. Measured safe: every package_name
+    # across the seven consumer configs on this machine is a plain filename,
+    # so this runs unconditionally rather than gated on package_type.
     package_name = package.get("package_name")
+    if package_name is not None:
+        # Checked before check_config_path, which str()s its argument: a
+        # non-string package_name would otherwise sail through as its str()
+        # form and only fail later at `.endswith('.pdf')` (doc packages) as
+        # an AttributeError that package_contexts' generic catch reports by
+        # class name rather than by which key was wrong.
+        if not isinstance(package_name, str):
+            raise ValueError(
+                f"Package {package_id}: package_name {package_name!r} is "
+                f"{type(package_name).__name__}, not a string. package_name "
+                "is the one file `pkg` builds, so it is a filename."
+            )
+        package_name = check_config_path(package_id, "package_name", package_name)
+        # check_config_path deliberately ALLOWS a subdirectory --
+        # `dest: .vscode/settings.json` is documented in STENCIL.md -- but
+        # package_name names one file IN the package directory, not a path,
+        # so a separator it lets through must still be refused here.
+        package_name = check_no_separator(package_id, "package_name", package_name)
+        # Recorded verbatim as a manifest entry, so a glob metacharacter is
+        # the same shape stn-2x4's check_no_glob exists to refuse for docs
+        # and slides.
+        package_name = check_no_glob(package_id, "package_name", package_name)
     if package_type == "zip" and not package_name:
         raise ValueError(
             f"Package {package_id} is missing required 'package_name' (required for zip type)"
