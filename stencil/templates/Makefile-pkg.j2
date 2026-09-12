@@ -78,6 +78,18 @@ pkg: ## Create submission zip file
 endif
 
 {% elif has_package_sources %}
+# A composition may include this partial without Makefile-base.j2 first --
+# AGENTS.md documents composing these partials a la carte, and
+# tests/test_template_contract.py includes this one on its own. Without this
+# guard the failure is `make: run: No such file or directory`, which names
+# neither stencil nor the missing include; this names both. It sits in this
+# arm rather than at the top of the file because this is the only arm that
+# invokes compose: the zip arm archives with tar or zip, and a package_type
+# of "none" renders nothing here but clean-pkg.
+ifeq ($(strip $(STENCIL_COMPOSE)),)
+$(error Makefile-pkg needs STENCIL_COMPOSE: include Makefile-base.j2 before this include, or define it yourself)
+endif
+
 PKG_HTML = {{ package_stem }}$(OUTPUT_SUFFIX).html
 PKG = {{ package_stem }}$(OUTPUT_SUFFIX).pdf
 
@@ -88,9 +100,9 @@ PKG = {{ package_stem }}$(OUTPUT_SUFFIX).pdf
 pkg: format-md ## Build {{ package_name }} from {{ package_sources | join(' ') }}
 	$(if $(strip $(PKG_SOURCES)),,$(error package_sources matched nothing: $(PKG_SOURCE_SPECS)))
 	$(call ensure_image,{{ pandoc_image }},doc)
-	$(DC) run --rm doc --metadata course="{{ name }}" $(METADATA_FLAGS) $(PKG_SOURCES) -o $(PKG_HTML)
-	$(DC) build pdf
-	$(DC) run --rm pdf $(PKG_HTML) $(PKG)
+	$(STENCIL_COMPOSE) run --rm doc --metadata course="{{ name }}" $(METADATA_FLAGS) $(PKG_SOURCES) -o $(PKG_HTML)
+	$(STENCIL_COMPOSE) build pdf
+	$(STENCIL_COMPOSE) run --rm pdf $(PKG_HTML) $(PKG)
 	@echo "Created $(PKG)"
 	@echo "Upload $(PKG) to the course website."
 

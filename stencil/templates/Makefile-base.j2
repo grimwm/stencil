@@ -2,10 +2,153 @@
 # Override to use another Compose implementation, e.g. DC="podman compose"
 DC ?= docker compose
 
-# The runtime CLI that DC actually drives, derived rather than hardcoded. The
-# four spellings pipeline.compose_command() falls through are "docker
-# compose", "podman compose", "docker-compose" and "podman-compose", and
-# ensure_image below needs the bare binary name to run `image inspect`
+# DC NAMES AN IMPLEMENTATION, AND NOTHING ELSE. STENCIL_COMPOSE below puts
+# $(DC) FIRST and the pinned -f after it, so anything DC carries is prepended
+# to the file list -- and a file named earlier is not overridden by the pin, it
+# is MERGED WITH it. MEASURED against a real generated package:
+#
+#   $ DC='docker compose -f evil.yml' make -n format-md
+#   docker compose -f evil.yml -f docker-compose.yml run --rm format-md
+#
+# and `config` on that pair keeps the pinned image -- so the service still
+# LOOKS right -- while `privileged: true` and a `/:/hostfs` mount out of
+# evil.yml land intact, because compose's merge only resolves keys that
+# collide. That is the whole of stn-qli reopened through the sibling variable,
+# so DC is checked rather than trusted.
+#
+# The check is "no word starting with a dash", not a list of known flags:
+# `-f` and `--file` are the obvious smuggling routes, but `--project-directory`
+# moves the base every relative volume source resolves against and
+# `--env-file` re-points the variable file, and neither is a compose file by
+# name. All four spellings pipeline.compose_command() falls through --
+# "docker compose", "podman compose", "docker-compose", "podman-compose" --
+# pass it, because none of them has a word beginning with a dash;
+# "docker-compose" begins with a letter and is one word.
+#
+# LIKE THE COMPOSE_FILES GUARDS BELOW, THIS IS HONEST-MISTAKE PROTECTION AND
+# NOT AN ATTACKER BOUNDARY. DC names the command make runs, so anyone who can
+# set it can already run anything -- `DC='env COMPOSE_FILE=evil.yml docker
+# compose'` carries no dash and passes this check. Its COMPOSE_FILE half is
+# inert, measured: an explicit `-f` makes compose ignore COMPOSE_FILE
+# entirely. The value is NOT inert overall, though, and an earlier version of
+# this comment said it was -- the probe runtime below reads DC's FIRST word,
+# so that value probes with `env`, which fails and silently turns the pull
+# guard into an unconditional pull. See the note on prefix-command DC
+# values there. What
+# the check is for is the realistic case: a consumer who read "override DC to
+# use another implementation", reached for the nearest variable to add a
+# compose file too, and would otherwise get a silent merge rather than an
+# error.
+#
+# THIS CHECK IS A PARSE-TIME SNAPSHOT OF DC, which is not the whole story --
+# it reads DC as it stands HERE. A composition that includes this partial and
+# then sets DC, and a DC defined in terms of another variable whose value
+# arrives later -- a target-specific assignment, say -- both read as
+# flag-free at this point and grow the flag when the recipe expands. `_stencil_pin_check` below asks the same question again at the point
+# of use, where the value is the one the recipe will actually run with; this
+# one stays because it fails earlier and more legibly for the ordinary case.
+#
+# ORIGIN IS DELIBERATELY NOT CHECKED HERE, unlike COMPOSE_FILES below.
+# `export DC="podman compose"` is a legitimate thing to have in a shell profile
+# on a podman-only machine, and the line above advertises the override without
+# saying "command line only". Refusing it would break a working setup to
+# prevent something this check already prevents directly.
+ifneq ($(filter -%,$(DC)),)
+$(error DC names a compose implementation only, e.g. DC="podman compose"; compose files belong in COMPOSE_FILES)
+endif
+
+# The compose file(s) every invocation below pins, so that a
+# docker-compose.override.yml or a .env COMPOSE_FILE sitting in the package
+# directory is never auto-discovered and merged by compose's own resolution
+# (stn-qli). A consumer who genuinely wants such a file merged in still can --
+# by naming it explicitly, e.g.
+# `make doc COMPOSE_FILES="docker-compose.yml docker-compose.override.yml"`.
+COMPOSE_FILES ?= docker-compose.yml
+
+# BARE PATHS, NOT PRE-FLAGGED -- the `-f` is added below, at the point of use,
+# by $(addprefix -f ,$(COMPOSE_FILES)), rather than being part of the value a
+# consumer types. With the flag baked into the value, the obvious spelling --
+# `make COMPOSE_FILES=docker-compose.yml`, the one a consumer will actually
+# type -- would render as the literal `docker compose docker-compose.yml run
+# ...` and fail confusingly, because there would be nothing left to add a
+# `-f` in front of. Bare paths also keep the public interface to exactly "a
+# list of compose files": anything else a consumer stuffs in here (`-p`,
+# `--env-file`, `--profile`) would work once and then have to keep working.
+#
+# `?=` ALONE DOES NOT GUARD AGAINST AN EMPTY VALUE -- it only tests whether
+# COMPOSE_FILES is DEFINED, not whether it is non-empty. MEASURED on a
+# patched Makefile: `make COMPOSE_FILES=`, `COMPOSE_FILES= make`, and
+# `MAKEFLAGS='COMPOSE_FILES=' make` all leave `?=` satisfied and still
+# produce `docker compose  run --rm format-md` -- unpinned, working, and
+# SILENT -- and that invocation really does let a planted override merge
+# back in. So an empty value is refused outright below, rather than left to
+# `?=` to catch, which it cannot.
+ifeq ($(strip $(COMPOSE_FILES)),)
+$(error COMPOSE_FILES must name at least one compose file, e.g. COMPOSE_FILES=docker-compose.yml)
+endif
+
+# THIS GUARD IS HONEST-MISTAKE PROTECTION, NOT AN ATTACKER BOUNDARY. An
+# exported COMPOSE_FILES beats `?=` and silently drops the pin for every
+# package built in that shell, with no output at all -- the realistic actor
+# is a CI job that exported it once, legitimately, for something unrelated,
+# and never revisited it; this turns that into a loud failure naming the
+# variable. It is NOT a security boundary: `MAKEFLAGS='COMPOSE_FILES=evil.yml'
+# make` reports COMPOSE_FILES's origin as "command line", not "environment",
+# and slips straight past this check -- but anyone who can set your MAKEFLAGS
+# already has the run of your environment, so this is not a boundary this
+# guard is trying to hold.
+ifeq ($(origin COMPOSE_FILES),environment)
+$(error COMPOSE_FILES from the environment is ignored; pass it on the make command line)
+endif
+
+# STENCIL_COMPOSE, NOT COMPOSE. `COMPOSE` is short, unnamespaced, and exactly
+# the name a consumer composition might pick for its own purposes; make's
+# last-assignment-wins rule means such a definition would silently override
+# this one and unpin every call site below, with no guard able to catch a
+# wrong-but-non-empty value the way the two guards above catch an empty one.
+# `COMPOSE_FILES` keeps the guessable, unprefixed name instead, because it is
+# the one knob a consumer is actually meant to set.
+#
+# RECURSIVE '=', NOT ':='. With ':=' COMPOSE_FILES would be expanded once,
+# right here, and a composition that includes this partial and then sets
+# COMPOSE_FILES afterward -- from its own text, the command line, or the
+# environment -- would have that later value silently ignored, while every
+# other way of setting a make variable keeps working. That is the kind of
+# mistake that hides because it looks like it works.
+#
+# THE THREE GUARDS ABOVE ARE PARSE-TIME SNAPSHOTS, AND THAT IS NOT ENOUGH ON
+# ITS OWN. Each one sees only what was assigned ABOVE it, so a composition
+# that includes this partial and then sets the variable -- which the
+# paragraph directly above advertises as supported, and AGENTS.md documents
+# as the way consumers compose these partials -- walks straight past all
+# three. MEASURED, against a real generated package:
+#
+#   $ printf 'include base.mk\nCOMPOSE_FILES =\n' > Makefile && make -n format-md
+#   docker compose  run --rm format-md          # unpinned, and SILENT
+#
+# which is exactly the mode the empty-value guard exists to kill. The same
+# holds for DC, and DEFERRED EXPANSION defeats the flag check even without a
+# late assignment -- a DC written in terms of a second variable, with that
+# variable given a target-specific value of -f evil.yml, reads as flag-free
+# at parse time and grows the flag when the recipe expands:
+#
+#   docker compose -f evil.yml -f docker-compose.yml run --rm format-md
+#
+# So the same two questions are asked again HERE, at the point of use, where
+# the values are the ones the recipe will actually run with. This expands to
+# nothing when both hold, so it costs a generated package nothing but the
+# check. The parse-time guards stay: they fail earlier and more legibly for
+# the ordinary case of a consumer typing `make COMPOSE_FILES=`, and a guard
+# that fires at `make` startup beats one that fires midway through a build.
+_stencil_pin_check = $(if $(strip $(COMPOSE_FILES)),,$(error COMPOSE_FILES must name at least one compose file -- e.g. COMPOSE_FILES=docker-compose.yml))$(if $(filter -%,$(DC)),$(error DC names a compose implementation only -- e.g. DC="podman compose" -- and compose files belong in COMPOSE_FILES))
+
+STENCIL_COMPOSE = $(_stencil_pin_check)$(DC) $(addprefix -f ,$(COMPOSE_FILES))
+
+# The runtime CLI that DC actually drives, DERIVED FROM DC AND ONLY FROM DC.
+# Not a knob of its own: DC is the knob, advertised on line 2, and this
+# follows it. The four spellings pipeline.compose_command() falls through are
+# "docker compose", "podman compose", "docker-compose" and "podman-compose",
+# and ensure_image below needs the bare binary name to run `image inspect`
 # against. $(subst -, ,$(DC)) turns "docker-compose" into two words so
 # $(firstword ...) yields "docker" the same way it already does for "docker
 # compose"; the same holds for the two podman spellings. Do NOT simplify this
@@ -13,7 +156,106 @@ DC ?= docker compose
 # spellings but returns the whole standalone binary name ("docker-compose")
 # for the other two, and neither standalone binary has an `image inspect`
 # subcommand, so the probe below would fail to run at all on those hosts.
-CONTAINER ?= $(firstword $(subst -, ,$(DC)))
+#
+# WHY DERIVED RATHER THAN OVERRIDABLE (stn-3y8). This used to be spelled
+# `CONTAINER ?=`, and `?=` means an environment value wins. Since ensure_image
+# runs the result as a BARE COMMAND, an exported CONTAINER was executed by
+# four targets, in the package directory, with both streams sent to
+# /dev/null. MEASURED against a real generated package: with CONTAINER naming
+# a planted script, `make format-md` ran it and exited 0. The PLANTED
+# COMMAND's own stdout and stderr were both discarded, so it left no trace in
+# the build output -- which is not the same as the build being silent, and an
+# earlier draft of this comment wrongly said the build printed nothing at all.
+# The compose line below carries no `@`, so make echoes it either way. The
+# first attempt at that reproduction looked clean for exactly the reason this
+# is dangerous: a marker printed to stdout proves nothing here, and the
+# planted command had to write a file to be seen at all.
+#
+# It also silently disabled the pull guard below, which is the consequence a
+# maintainer would not guess: the probe's EXIT STATUS is what decides whether
+# `|| pull` runs. A planted probe exiting 0 means the pull never happens and
+# a stale image is used with nothing said; one exiting non-zero means the
+# pull happens on every build, forever.
+#
+# The name is namespaced for the reason STENCIL_COMPOSE is. CONTAINER is
+# short, unnamespaced, and exactly the name a consumer composition might pick
+# for its own "the name of my container"; COMPOSE_FILES keeps the guessable
+# unprefixed name because it IS the knob a consumer is meant to set, and this
+# is not one. A stray CONTAINER is now INERT rather than an error,
+# deliberately: that name is generic enough that an unrelated export is
+# plausible, and aborting every build over one would be worse than the bug it
+# came from. The cost is that `make doc CONTAINER=podman` is silently
+# ignored, since make does not warn about an unused command-line variable --
+# recorded in STENCIL.md and the changelog rather than left to be discovered.
+#
+# WHY `override` AND NOT A PLAIN `=`. MEASURED, GNU Make 3.81 (macOS) and 4.3
+# (CI); "loses" means the assignment here loses and the injected value wins:
+#
+#                     env    make -e   cmd line   MAKEFLAGS=V=x   GNUMAKEFLAGS=V=x
+#   X ?= ...          loses  loses     loses      loses           loses (4.x)
+#   X = ...           wins   loses     loses      loses           loses (4.x)
+#   override X = ...  wins   wins      wins       wins            wins
+#
+# `MAKEFLAGS=VAR=value` is the route the COMPOSE_FILES origin guard above
+# explicitly cannot close -- it reports origin "command line" and slips
+# straight past. `override` closes THAT spelling rather than inheriting the
+# caveat. GNUMAKEFLAGS is a live injection route on 4.x and inert on 3.81, so
+# a green local run on macOS proves nothing about it and the test covering it
+# skips here and runs in CI.
+#
+# THE TABLE'S LAST TWO COLUMNS ARE `MAKEFLAGS=VAR=value` SPECIFICALLY, AND
+# THAT QUALIFIER IS LOAD-BEARING. GNU Make 4.0+ also honours `--eval` inside
+# MAKEFLAGS, and `--eval` can carry a PATTERN-SPECIFIC assignment, which beats
+# a global `override` -- so a value still arrives from the environment alone,
+# with no consuming makefile. MEASURED on 4.3:
+#
+#   MAKEFLAGS='--eval %: STENCIL_CONTAINER = x'   ->  probe runs `x`
+#
+# An earlier draft of this comment claimed `override` closed MAKEFLAGS
+# outright. It does not, and a guard that overclaims is the failure this
+# comment itself warns about, so the claim is narrowed rather than repeated.
+# The route is filed as stn-2je with its reproduction; `--eval` injects
+# arbitrary makefile text, so there is no clean defence to reach for here.
+#
+# The assignment stays RECURSIVE, so a DC assigned later -- or built from a
+# second variable, the deferred case _stencil_pin_check above exists for --
+# is still read where it is used.
+#
+# WHAT `override` DOES NOT CLOSE, stated because a guard that overclaims is
+# worse than none. A TARGET-SPECIFIC or PATTERN-SPECIFIC assignment in the
+# consuming makefile beats it -- `doc: STENCIL_CONTAINER = x` for that target,
+# `%: STENCIL_CONTAINER = x` for every one -- while a GLOBAL plain assignment
+# loses. MEASURED on 3.81 and 4.3. This is the same resolve-after-parse fact
+# _stencil_pin_check above was written for, and none of it is defensible in
+# make.
+#
+# Two of these reach further than the consuming makefile, so the convenient
+# dismissal "they all need a makefile you control anyway" is NOT true and is
+# not made here. MAKEFILES (an environment variable naming makefile text to
+# read first) carries the pattern-specific form in with an environment
+# variable plus a file -- MEASURED on 3.81 and 4.3 -- and MAKEFLAGS=--eval
+# above carries it with an environment variable and nothing else. What stays
+# true is that all of this is honest-mistake territory rather than an attacker
+# boundary: anyone who can set MAKEFLAGS or MAKEFILES in your environment can
+# generally set PATH too.
+#
+# THE ESCAPE HATCH, and it has a real customer. A composition needing a
+# differently-named runtime writes, after the include:
+#
+#   override STENCIL_CONTAINER = nerdctl
+#
+# An `override` is required; a plain assignment there loses to this one,
+# which is the one sharp edge in the arrangement. Its customer is a DC that
+# is not a bare implementation name: the derivation reads the FIRST word, so
+# `sudo docker compose` probes with `sudo` (the standard rootful-Linux
+# workaround), `env FOO=1 docker compose` with `env`, and
+# `/opt/my-tools/docker compose` with `/opt/my` -- the subst splits the path
+# too. All three pass the dash-flag guard above, and all three make the probe
+# exit non-zero (MEASURED: 1, 127 and 127), which silently turns the pull
+# guard into an unconditional pull. `podman-remote compose` is quieter and
+# worse: it derives "podman" and probes the LOCAL image store while compose
+# pulls to the remote. A consumer on any of those hosts sets the override.
+override STENCIL_CONTAINER = $(firstword $(subst -, ,$(DC)))
 
 # Pull an image only when it is not already present. Four targets want this and
 # the two shells share no spelling of it, so it lives here rather than as four
@@ -30,8 +272,8 @@ CONTAINER ?= $(firstword $(subst -, ,$(DC)))
 # `image inspect <ref>` checks the reference actually named, digest included,
 # and reports the image absent when the digest is wrong -- which is what this
 # guard always claimed to do and, before this fix, could not. The same
-# measurement holds for podman, and is the reason CONTAINER exists above
-# rather than the literal "docker" this used to say: on a podman-only host
+# measurement holds for podman, and is the reason STENCIL_CONTAINER exists
+# above rather than the literal "docker" this used to say: on a podman-only host
 # the old `-q`-flagged listing doesn't merely miss the digest, it fails
 # outright, so the guard was an unconditional pull there regardless of this
 # bug.
@@ -45,10 +287,18 @@ CONTAINER ?= $(firstword $(subst -, ,$(DC)))
 # actually resolves the reference. But it means this guard does not and
 # cannot validate that the tag half of a ref still describes the digest; it
 # only proves the digest is present.
+#
+# Both branches pull through $(STENCIL_COMPOSE) rather than $(DC), so a
+# missed-image pull is pinned the same as every other invocation. The
+# Windows branch puts it inside a DOUBLE-QUOTED PowerShell -Command string,
+# which is safe for COMPOSE_FILES's own default (no quotes or spaces in
+# "docker-compose.yml") but is not generally safe: a COMPOSE_FILES entry
+# containing a space would need its own quoting inside that string, which
+# this does not attempt, so such a path breaks the Windows branch.
 ifeq ($(OS),Windows_NT)
-ensure_image = @powershell -NoProfile -Command "$(CONTAINER) image inspect '$(1)' *> $$null; if ($$LASTEXITCODE -ne 0) { $(DC) pull $(2) }"
+ensure_image = @powershell -NoProfile -Command "$(STENCIL_CONTAINER) image inspect '$(1)' *> $$null; if ($$LASTEXITCODE -ne 0) { $(STENCIL_COMPOSE) pull $(2) }"
 else
-ensure_image = @$(CONTAINER) image inspect '$(1)' >/dev/null 2>&1 || $(DC) pull $(2)
+ensure_image = @$(STENCIL_CONTAINER) image inspect '$(1)' >/dev/null 2>&1 || $(STENCIL_COMPOSE) pull $(2)
 endif
 
 # Default target

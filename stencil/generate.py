@@ -811,6 +811,13 @@ def get_template_context(package_id: str, config: dict) -> dict:
         # call the file is rendered from, never written down, so a re-vendor
         # moves both at once.
         "format_lockfile_digest": pipeline.lockfile_digest(pipeline.FORMAT_LOCKFILE),
+        # And the same for the browser image, which COPYs its lockfile out of
+        # that directory and runs `npm ci` from it at BUILD time -- so without
+        # this, a consumer-editable file chose which bytes became the puppeteer,
+        # pa11y and pdf-lib that `make pdf` and `make check-access` then run as
+        # uid 0 (stn-egv). Derived from the same call the file is rendered from,
+        # never written down, so a re-vendor moves both at once.
+        "browser_lockfile_digest": pipeline.lockfile_digest(pipeline.BROWSER_LOCKFILE),
         # The names those two land under in the package, which the Dockerfile
         # COPYs and the format-md entrypoint cps, and the directories each
         # install is rooted at.

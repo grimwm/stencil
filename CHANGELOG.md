@@ -93,6 +93,177 @@ How the version gets bumped is written down in
   section naming paths without the top-level `output_dir` prefix, so it
   ignores nothing whenever that key is set (`stn-r5v`).
 
+- **The generated Makefile's image probe no longer runs a command taken from the
+  environment** (`stn-3y8`). The pull guard needs a container runtime rather than a compose
+  one — there is no `compose image inspect` — and derived it as
+  `CONTAINER ?= $(firstword $(subst -, ,$(DC)))`. `?=` means an environment value wins, and
+  the probe runs that value as a **bare command**, so an exported `CONTAINER` was executed by
+  four targets, in the package directory, with both streams sent to `/dev/null`.
+
+  **Measured**, 2026-09-12, against a real generated package: with `CONTAINER` naming a
+  planted script, `make format-md` ran it and **exited 0, with the planted command's own
+  stdout and stderr both discarded** — so it left no trace in the build output. (The build
+  itself is not silent; the compose line carries no `@` and make echoes it either way.) The
+  first attempt at that reproduction looked clean for exactly the reason this was dangerous —
+  a marker printed to stdout proves nothing here, and the planted command had to write a file
+  to be observed at all.
+
+  **It also silently disabled the pull guard added in this same release**, which is the
+  consequence a maintainer would not guess: the probe's *exit status* is what decides whether
+  `|| compose pull` runs. A planted probe exiting 0 means the pull never happens and a stale
+  or wrong-digest image is used with nothing said; one exiting non-zero means the pull happens
+  on every build, forever.
+
+  It is now `override STENCIL_CONTAINER = $(firstword $(subst -, ,$(DC)))` — derived from
+  `DC`, and only from `DC`. `override` was chosen over an origin guard like the one
+  `COMPOSE_FILES` carries because it also closes `MAKEFLAGS=VAR=value`, which that guard
+  explicitly cannot, and `GNUMAKEFLAGS=VAR=value`, which is a live injection route on GNU Make
+  4.x (what CI runs) and inert on 3.81 (what macOS ships) — measured on both, which is why the
+  test covering that route skips locally and runs in CI.
+
+  **What it costs a consumer:** `make doc CONTAINER=podman` is now silently ignored, because
+  make does not warn about an unused command-line variable. The rename is safe to make hard
+  rather than deprecate because `CONTAINER` has never shipped — it was introduced by a single
+  untagged commit (`stn-8vi`, below in this same unreleased section) and the newest tag is
+  `v0.31.0`. The supported replacement, for a `DC` that is not a bare implementation name, is
+  an `override` directive in the consuming composition; see STENCIL.md.
+
+  **What `override` does not close**, stated because a guard that overclaims is worse than
+  none: a target- or pattern-specific assignment in the consuming Makefile still wins
+  (`%: STENCIL_CONTAINER = x`). Two routes carry that form in without a makefile you control —
+  `MAKEFILES=` (an environment variable plus a file) and, on every GNU Make 4.x,
+  `MAKEFLAGS='--eval %: STENCIL_CONTAINER = x'` with nothing but an environment variable. The
+  second was found by this PR's second adversarial review, proven executing a planted binary,
+  and is filed as `stn-2je`: `--eval` injects arbitrary makefile text, so there is no clean
+  defence, and an earlier draft of this entry wrongly claimed `override` closed `MAKEFLAGS`
+  outright. All of it remains honest-mistake territory rather than an attacker boundary —
+  anyone who can set `MAKEFLAGS` can generally set `PATH` too.
+
+  Two further defects were found while reproducing this one and are filed rather than fixed
+  here, so that nobody reads the above as "that file is clean now": an empty `DC` makes the
+  probe run a bare `image` command from `PATH` and the build exit 0 having produced nothing
+  (`stn-mbq`), and `BUILD_DATE`/`WITH` interpolate into a recipe unquoted, so an exported value
+  injects shell (`stn-cb8`). With `stn-2je` above, all three carry their reproductions.
+
+- **The browser image no longer installs from a lockfile it has not checked**
+  (`stn-egv`). `Dockerfile.browser` copied `browser-package-lock.json` out of the
+  build context — `context: .`, the generated package directory you own and edit
+  — and ran `npm ci` from it. `npm ci` fetches whatever host each `resolved`
+  names and checks `integrity` against a value in that same file, so that file
+  decided which bytes became the puppeteer, pa11y and pdf-lib that `make pdf` and
+  `make check-access` run as root over the read-write mount. `--ignore-scripts`
+  does not help: nothing has to run at install time, because the payload runs
+  when puppeteer or pa11y does. Measured before the fix, with one `resolved` host
+  changed and nothing else — npm requested that host.
+
+  The image now carries the sha256 of the lockfile `stencil gen` wrote and checks
+  the copy after the `COPY` and before the install, the same guard `stn-qge` gave
+  the `format-md` service in this release. The digest is derived from the
+  vendored bytes rather than written down, so re-vendoring stays the two steps
+  AGENTS.md documents and the file and its digest cannot drift apart.
+
+  Two things to know. A digest is a checksum, not a signature — it refuses an
+  edit that touches only the lockfile, which is what a `resolved` URL in a
+  generated file actually attracts, and it does not stop someone who edits the
+  Dockerfile beside it. And if you override `Dockerfile.browser.j2` from your own
+  `templates_dir`, keep the guard; see STENCIL.md.
+
+  **If you generate on Windows, this will refuse your own untampered lockfile**
+  until `stn-at4` is fixed: `stencil gen` writes in text mode, so the file lands
+  CRLF and hashes differently. That already broke `make format-md` in this
+  release; it now also stops `make pdf` and `make check-access`. The refusal
+  message names the ticket.
+
+- **Every compose invocation the generated Makefile issues now names its compose file
+  explicitly, so a `docker-compose.override.yml` or `.env` `COMPOSE_FILE` sitting in the
+  package directory is no longer auto-discovered and merged by compose's own resolution**
+  (`stn-qli`). `COMPOSE_FILES ?= docker-compose.yml` holds a bare list of files; `STENCIL_COMPOSE = $(DC) $(addprefix -f ,$(COMPOSE_FILES))` adds the `-f` at the point of use, and every
+  compose invocation across the three Makefile partials — `ensure_image`'s pull, on both the
+  POSIX and the Windows branch — goes through it instead of the bare `$(DC)`.
+
+  **Measured**, 2026-09-12, against a real generated package (Docker Compose v5.3.1): before the
+  fix, a planted `docker-compose.override.yml` rewrote `format-md`'s image and entrypoint and
+  `make format-md` ran the planted one; a `.env` containing `COMPOSE_FILE=evil.yml` made compose
+  load `evil.yml` alone. After the fix both are inert, and naming the override explicitly —
+  `make doc COMPOSE_FILES="docker-compose.yml docker-compose.override.yml"` — still merges it. A
+  relative `-f docker-compose.yml` from the package directory was checked against the unpinned
+  baseline too, and leaves the compose project name and every resolved volume source identical
+  to auto-discovery — the pin moves nothing else.
+
+  Say precisely what this closes, and no more: compose no longer merges compose files it
+  *discovered*, rather than compose files that were *named*. It does not mean a file merely
+  appearing in the package directory can no longer change what `make` runs — GNU Make itself
+  prefers a `GNUmakefile` over the generated `Makefile`, and reads a `MAKEFILES`-named file
+  before either, and nothing in this Makefile's own contents can stop that. Measured
+  separately, reproduced independently, and filed rather than folded in here because it needs
+  its own decision: `stn-bux`, open.
+
+  Two more measurements narrow the claim rather than widen it. `COMPOSE_PROJECT_NAME` in `.env`
+  is *still* honoured under the pin (measured: `name: hijacked`) — low-impact, because every
+  service already runs `--rm`, none declares a named volume, and the image each service builds
+  is named explicitly rather than resolved by project name. `DOCKER_HOST`, `COMPOSE_ENV_FILES`
+  and `DOCKER_DEFAULT_PLATFORM` are not honoured from `.env` under the pin; `COMPOSE_PROFILES`
+  is moot because no generated service declares a profile. And the override never "restored
+  root": no generated service sets `user:` at all — all six run as `user=None`, and `format-md`
+  already ran as uid 0 before this change. What an override took, and what naming it back in
+  still takes, is `stn-20h`'s `--no-config` hardening, the vendored lockfile installed with
+  `npm ci`, and the digest pin above — not a user boundary that was never there.
+
+  The guarantee is measured on Compose v2+ — `docker compose`, and `podman compose` where it
+  delegates to the same provider. The separate Python `podman-compose` implementation was not
+  measured; treat the guarantee there as inferred, not verified.
+
+  Two parse-time guards protect the pin itself, both measured on GNU Make 3.81. `?=` alone tests
+  whether `COMPOSE_FILES` is *defined*, not whether it is non-empty: `make COMPOSE_FILES=`,
+  `COMPOSE_FILES= make`, and `MAKEFLAGS='COMPOSE_FILES=' make` all leave `?=` satisfied and would
+  otherwise silently produce a working, unpinned `docker compose  run`; an empty value is now
+  refused outright, with `COMPOSE_FILES must name at least one compose file, e.g. COMPOSE_FILES=docker-compose.yml`. An exported `COMPOSE_FILES` beats `?=` too, and would
+  silently drop the pin for every package built in that shell; it is refused as well, with
+  `COMPOSE_FILES from the environment is ignored; pass it on the make command line` — named
+  honestly in the comment above it as honest-mistake protection rather than a boundary, since
+  `MAKEFLAGS='COMPOSE_FILES=evil.yml' make` reports the variable's origin as "command line" and
+  slips straight past it.
+
+  The variable driving every call site is `STENCIL_COMPOSE`, not `COMPOSE` — a consuming
+  composition defining its own `COMPOSE` would win by make's last-assignment-wins rule and
+  silently unpin every call site, and no guard can catch a wrong-but-non-empty value the way the
+  two above catch an empty one. `Makefile-doc.j2` and the `has_package_sources` arm of
+  `Makefile-pkg.j2` each gained a parse-time guard naming `STENCIL_COMPOSE` explicitly, because
+  AGENTS.md documents composing these partials a la carte: a composition that includes either
+  without `Makefile-base.j2` first now fails with `Makefile-doc needs STENCIL_COMPOSE: include Makefile-base.j2 before this include, or define it yourself`, instead of the bare `make: run: No such file or directory` it produced before. stencil has no pinning consumers today, so this
+  reaches every consumer on their next `stencil gen` with nothing in between.
+
+  **`DC` may now name a compose implementation only, and a flag inside it is refused.**
+  Found by the adversarial review of this change and reproduced: `STENCIL_COMPOSE` puts
+  `$(DC)` *first*, so `DC="docker compose -f evil.yml"` expands to
+  `docker compose -f evil.yml -f docker-compose.yml run …` — and compose *merges* the two
+  rather than letting the pin override, so `config` still reports the pinned image while a
+  `privileged: true` and a `/:/hostfs` mount out of `evil.yml` land intact. That is this
+  same hole reopened through the sibling variable. `ifneq ($(filter -%,$(DC)),)` refuses any
+  word beginning with a dash, which is deliberately broader than an `-f`/`--file` denylist:
+  `--project-directory` moves the base every relative volume source resolves against and
+  `--env-file` re-points the variable file, and neither is a compose file by name. All four
+  spellings `pipeline.compose_command()` falls through — `docker compose`, `podman compose`,
+  `docker-compose`, `podman-compose` — pass it, exported or on the command line, so
+  `DC="podman compose"` is unaffected. Like the `COMPOSE_FILES` guards, this is
+  honest-mistake protection rather than a boundary: `DC` names the command `make` runs, so
+  anyone who can set it can already run anything. `CONTAINER` has the same env-settable
+  shape but a different objective — what the image probe *executes* rather than which files
+  compose *reads* — and was filed separately as `stn-3y8`, fixed in this same release (see
+  the probe entry at the top of this section). Kept as the record of what this pass found.
+
+  **The pin is checked where it is used, not only where it is defined.** A second adversarial
+  pass found that all three guards — empty `COMPOSE_FILES`, environment-origin `COMPOSE_FILES`,
+  and flag-carrying `DC` — were parse-time snapshots reading only what had been assigned above
+  them. A consuming composition that `include`s the partial and *then* sets the variable walked
+  past all three, and the comment beside them advertised exactly that arrangement as supported.
+  Measured: `include base.mk` followed by `COMPOSE_FILES =` produced `docker compose  run --rm format-md` — unpinned, and silent. A `DC` built from a second variable given a target-specific
+  value defeated the flag check the same way, reading as flag-free at parse time and growing the
+  flag when the recipe expanded. `STENCIL_COMPOSE` now expands a check at the point of use,
+  where the values are the ones the recipe actually runs with; all three cases above now stop
+  the build by name, and a correct setup expands to exactly what it did before. The parse-time
+  guards stay, because they fail earlier and more legibly for the ordinary case.
+
 - **The browser-backed services no longer take their configuration, or their
   driver script, from the consumer's package directory** (`stn-jeq`, `stn-7ki`,
   `stn-ao5`). Three defects, one cause: `make pdf` and `make check-access` both
@@ -429,7 +600,7 @@ How the version gets bumped is written down in
   by both, so a fix to one alone would have left every Windows consumer pulling on
   every build with a green suite.
 
-  The runtime the probe names is derived rather than hardcoded now too: `CONTAINER = $(firstword $(subst -, ,$(DC)))` reads `docker` or `podman` out of whichever of the
+  The runtime the probe names is derived rather than hardcoded now too: `override STENCIL_CONTAINER = $(firstword $(subst -, ,$(DC)))` reads `docker` or `podman` out of whichever of the
   four `DC` spellings `pipeline.compose_command()` falls through to, because a
   podman-only host has always failed this probe outright — `docker images -q` doesn't
   merely miss the digest there, it fails to run at all.

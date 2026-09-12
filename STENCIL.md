@@ -406,6 +406,94 @@ convention rather than stencil's.
 | `clean`        | Remove generated files                                                                                            |
 | `clean-pkg`    | Remove package-specific generated files                                                                           |
 
+### Compose File Pinning
+
+Every target above that drives compose does so through two Make variables: `DC ?= docker compose` names the implementation (override to `DC="podman compose"`, unchanged from before),
+and `COMPOSE_FILES ?= docker-compose.yml` names the file(s) that implementation is pinned to.
+Because of the pin, a `docker-compose.override.yml` sitting in the package directory next to the
+markdown — or a `.env` setting `COMPOSE_FILE` — is **ignored**, not auto-discovered and merged
+the way plain `docker compose` would. To merge one back in, name it explicitly:
+
+```
+make doc COMPOSE_FILES="docker-compose.yml docker-compose.override.yml"
+```
+
+- **`DC` names an implementation, and nothing else.** A flag inside it is refused —
+  `DC="docker compose -f other.yml"` fails with *DC names a compose implementation only*.
+  This is not pedantry: `DC` is placed *before* the pin, so a compose file smuggled in there
+  would be **merged** with `docker-compose.yml` rather than replaced by it, which is the exact
+  behaviour the pin exists to stop. Compose files go in `COMPOSE_FILES`. All four spellings
+  `stencil` itself probes for — `docker compose`, `podman compose`, `docker-compose`,
+  `podman-compose` — are unaffected, whether exported or passed on the command line.
+
+- **The pull guard's runtime follows `DC`, and is not a knob of its own.** Before each
+  compose call the Makefile probes whether the pinned image is already present, so a build
+  that needs no pull does none. That probe needs the *runtime* CLI rather than the compose one
+  — there is no `compose image inspect` — so it derives one from `DC`: `docker compose` and
+  `docker-compose` both probe with `docker`, both podman spellings with `podman`. It is
+  written `override STENCIL_CONTAINER = ...`, which means an exported or command-line
+  `CONTAINER` or `STENCIL_CONTAINER` is **ignored**. That is deliberate: the probe's result is
+  run as a command, so a value exported once for something unrelated would otherwise change
+  what every generated package executes (`stn-3y8`). The trade is that `make doc CONTAINER=podman` no longer does anything, and make issues no warning for an unused
+  command-line variable, so there is no signal — set `DC` instead, and the probe follows it.
+
+  If your `DC` is not a bare implementation name, the derivation reads its first word and gets
+  this wrong: `sudo docker compose` probes with `sudo`, `env FOO=1 docker compose` with `env`,
+  `/opt/my-tools/docker compose` with `/opt/my` (the `-` split reaches into the path too). The
+  probe then always fails, which costs a pull on every build rather than breaking it — except
+  for `sudo` on a host with no cached credential and a tty, where `sudo` opens `/dev/tty` for a
+  password prompt that the probe's `>/dev/null 2>&1` does **not** suppress, so the build stalls
+  on a prompt instead. `podman-remote compose` is quieter and worse: it probes the *local*
+  image store while compose pulls to the remote.
+
+  On any of those hosts, name the runtime in your own composition, after the include:
+
+  ```make
+  override STENCIL_CONTAINER = nerdctl
+  ```
+
+  The `override` is required — a plain assignment there loses to the Makefile's own.
+
+  **This costs you a vendored template, and that is the real price of the change.** `Makefile.j2`
+  is four `{% include %}`s with no extension point, and `stencil gen` overwrites the generated
+  `Makefile`, so "your own composition" means overriding `Makefile.j2` through `templates_dir`.
+  If you have not done that, there is now **no** way to set the probe's runtime — `make doc STENCIL_CONTAINER=docker` is ignored by design. The old `CONTAINER ?=` was a working
+  one-liner for exactly the `sudo docker compose` case above, and it is gone; that is the
+  deliberate trade for a probe that cannot be repointed by a stray export. Do not reach for a
+  `GNUmakefile` beside the generated `Makefile` as a cheaper workaround: that it silently
+  replaces the generated `Makefile` at all is itself a filed defect (`stn-bux`), not a
+  supported extension point.
+
+- **Bare paths, not flags.** `COMPOSE_FILES` is a space-separated list of compose files, not a
+  string of compose arguments — the Makefile adds each file's `-f` itself. Writing
+  `COMPOSE_FILES="-f docker-compose.yml"` fails, and loudly: `-f` is a word like any other, so
+  it gets a `-f` of its own and compose is handed `-f -f -f docker-compose.yml`, which ends in
+  `open .../-f: no such file or directory`.
+
+- **Order matters, and `docker-compose.yml` stays first.** With more than one `-f`, compose
+  takes the *first* file's directory as the project directory — the value that becomes both the
+  compose project name and the base every relative volume source in the file resolves against.
+  Naming an override first would change both of those for a package whose own files never moved.
+
+- **If you rename the compose template's `dest:`, rename `COMPOSE_FILES` to match.** A `.config.yaml`
+  can render `docker-compose.yml.j2` under another name (see `dest:` under
+  [Configuration](#configuration)) — say, `compose.yaml`, which works today purely because
+  plain compose auto-discovers it. Under the pin it does not: compose looks for the literal
+  name(s) in `COMPOSE_FILES` and refuses with `open .../docker-compose.yml: no such file or directory` if the rendered file isn't among them. That is the fix working as intended — a
+  silently-broken build becomes a loud one. (`no configuration file provided` is the
+  *auto-discovery* failure, printed only when compose is given no `-f` at all and finds
+  nothing to fall back on; a pinned-but-missing file fails the other way. Measured on Docker
+  Compose v5.3.1.)
+
+- **No spaces in a `COMPOSE_FILES` entry on Windows.** The generated Makefile's Windows pull
+  guard embeds the compose invocation inside a `powershell -Command "..."` string; a path
+  containing a space is not quoted for that context and breaks it.
+
+- **This is a pin, not a new configuration surface.** The reviewable, version-controlled way to
+  customize what compose builds is still the template search path — overriding
+  `docker-compose.yml.j2` (or `Makefile.j2`) in your own `templates_dir`, which stencil searches
+  before its bundled templates. See [Extending Stencil](#extending-stencil) below.
+
 ## Extending Stencil
 
 ### Custom Templates
@@ -426,6 +514,23 @@ Two consequences worth knowing before you override either file:
 - If you also override `Dockerfile.browser.j2`, keep its `COPY html-to-pdf.js` line. Without it the
   pdf service starts with `Cannot find module`, and the script's own diagnostic — the one that
   explains a missing tools directory — cannot run, because the script is not there to run it.
+- Keep its lockfile guard too — the `RUN … sha256sum -c …` between the `COPY` of
+  `browser-package-lock.json` and the `npm ci` that installs from it. It refuses to build when that
+  lockfile is not the one `stencil gen` wrote, which is what stops a changed `resolved` URL deciding
+  which bytes become the puppeteer, pa11y and pdf-lib your build then runs as root. An override that drops it
+  builds perfectly well and is simply no longer checked — nothing fails, which is the problem.
+  `StrictUndefined` cannot warn you here: it catches a template that reads a key stencil stopped
+  providing, not one that stopped reading a key stencil still provides. If you keep the guard, keep
+  `{{ browser_lockfile_digest }}` with it; that value is derived from the vendored lockfile on every
+  `stencil gen`, so it follows a re-vendor on its own.
+- **Overriding `browser-package-lock.json.j2` is the one combination that does not work on its
+  own.** That template resolves through the same search path, so you can replace it — but the digest
+  in `Dockerfile.browser` comes from stencil's *vendored* lockfile, not from your rendered one, so
+  the build refuses a package that is exactly what you asked for. Worse, the refusal tells you to run
+  `stencil gen`, which regenerates your override and refuses again. If you override the lockfile,
+  override `Dockerfile.browser.j2` in the same breath and put your own digest in its guard — or drop
+  the lockfile override and pin what you need through `pipeline.py` instead. The refusal message says
+  so too, so nobody has to find this page first.
 - `docker compose run --rm pdf …` on its own now runs whichever script was baked the last time the
   image was built. `make pdf` runs `docker compose build pdf` first and is unaffected; if you
   invoke the service by hand while editing the script, build first. The `check-access` service does
