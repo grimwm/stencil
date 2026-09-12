@@ -11,6 +11,58 @@ How the version gets bumped is written down in
 
 ## 0.39.0
 
+- **The generated Makefile's image probe no longer runs a command taken from the
+  environment** (`stn-3y8`). The pull guard needs a container runtime rather than a compose
+  one — there is no `compose image inspect` — and derived it as
+  `CONTAINER ?= $(firstword $(subst -, ,$(DC)))`. `?=` means an environment value wins, and
+  the probe runs that value as a **bare command**, so an exported `CONTAINER` was executed by
+  four targets, in the package directory, with both streams sent to `/dev/null`.
+
+  **Measured**, 2026-09-12, against a real generated package: with `CONTAINER` naming a
+  planted script, `make format-md` ran it and **exited 0, with the planted command's own
+  stdout and stderr both discarded** — so it left no trace in the build output. (The build
+  itself is not silent; the compose line carries no `@` and make echoes it either way.) The
+  first attempt at that reproduction looked clean for exactly the reason this was dangerous —
+  a marker printed to stdout proves nothing here, and the planted command had to write a file
+  to be observed at all.
+
+  **It also silently disabled the pull guard added in this same release**, which is the
+  consequence a maintainer would not guess: the probe's *exit status* is what decides whether
+  `|| compose pull` runs. A planted probe exiting 0 means the pull never happens and a stale
+  or wrong-digest image is used with nothing said; one exiting non-zero means the pull happens
+  on every build, forever.
+
+  It is now `override STENCIL_CONTAINER = $(firstword $(subst -, ,$(DC)))` — derived from
+  `DC`, and only from `DC`. `override` was chosen over an origin guard like the one
+  `COMPOSE_FILES` carries because it also closes `MAKEFLAGS=VAR=value`, which that guard
+  explicitly cannot, and `GNUMAKEFLAGS=VAR=value`, which is a live injection route on GNU Make
+  4.x (what CI runs) and inert on 3.81 (what macOS ships) — measured on both, which is why the
+  test covering that route skips locally and runs in CI.
+
+  **What it costs a consumer:** `make doc CONTAINER=podman` is now silently ignored, because
+  make does not warn about an unused command-line variable. The rename is safe to make hard
+  rather than deprecate because `CONTAINER` has never shipped — it was introduced by a single
+  untagged commit (`stn-8vi`, below in this same unreleased section) and the newest tag is
+  `v0.31.0`. The supported replacement, for a `DC` that is not a bare implementation name, is
+  an `override` directive in the consuming composition; see STENCIL.md.
+
+  **What `override` does not close**, stated because a guard that overclaims is worse than
+  none: a target- or pattern-specific assignment in the consuming Makefile still wins
+  (`%: STENCIL_CONTAINER = x`). Two routes carry that form in without a makefile you control —
+  `MAKEFILES=` (an environment variable plus a file) and, on every GNU Make 4.x,
+  `MAKEFLAGS='--eval %: STENCIL_CONTAINER = x'` with nothing but an environment variable. The
+  second was found by this PR's second adversarial review, proven executing a planted binary,
+  and is filed as `stn-2je`: `--eval` injects arbitrary makefile text, so there is no clean
+  defence, and an earlier draft of this entry wrongly claimed `override` closed `MAKEFLAGS`
+  outright. All of it remains honest-mistake territory rather than an attacker boundary —
+  anyone who can set `MAKEFLAGS` can generally set `PATH` too.
+
+  Two further defects were found while reproducing this one and are filed rather than fixed
+  here, so that nobody reads the above as "that file is clean now": an empty `DC` makes the
+  probe run a bare `image` command from `PATH` and the build exit 0 having produced nothing
+  (`stn-mbq`), and `BUILD_DATE`/`WITH` interpolate into a recipe unquoted, so an exported value
+  injects shell (`stn-cb8`). With `stn-2je` above, all three carry their reproductions.
+
 - **The browser image no longer installs from a lockfile it has not checked**
   (`stn-egv`). `Dockerfile.browser` copied `browser-package-lock.json` out of the
   build context — `context: .`, the generated package directory you own and edit
@@ -115,7 +167,8 @@ How the version gets bumped is written down in
   honest-mistake protection rather than a boundary: `DC` names the command `make` runs, so
   anyone who can set it can already run anything. `CONTAINER` has the same env-settable
   shape but a different objective — what the image probe *executes* rather than which files
-  compose *reads* — and is filed separately as `stn-3y8` with its reproduction.
+  compose *reads* — and was filed separately as `stn-3y8`, fixed in this same release (see
+  the probe entry at the top of this section). Kept as the record of what this pass found.
 
   **The pin is checked where it is used, not only where it is defined.** A second adversarial
   pass found that all three guards — empty `COMPOSE_FILES`, environment-origin `COMPOSE_FILES`,
@@ -465,7 +518,7 @@ How the version gets bumped is written down in
   by both, so a fix to one alone would have left every Windows consumer pulling on
   every build with a green suite.
 
-  The runtime the probe names is derived rather than hardcoded now too: `CONTAINER = $(firstword $(subst -, ,$(DC)))` reads `docker` or `podman` out of whichever of the
+  The runtime the probe names is derived rather than hardcoded now too: `override STENCIL_CONTAINER = $(firstword $(subst -, ,$(DC)))` reads `docker` or `podman` out of whichever of the
   four `DC` spellings `pipeline.compose_command()` falls through to, because a
   podman-only host has always failed this probe outright — `docker images -q` doesn't
   merely miss the digest there, it fails to run at all.
