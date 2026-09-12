@@ -167,6 +167,56 @@ contains whether or not it renders any, and a compose file can reach stencil's
 format-md service through a composition template stencil cannot inspect from the
 outside. It is 1.3 KB, and `stencil clean` removes it either way.
 
+### The Manifest
+
+Every package `stencil gen` writes also gets `.stencil-manifest.json` in its own
+directory: `manifest_version`, the `stencil_version` that wrote it, the package's
+id and `dir`, and `entries` — every file and build-artifact glob that package
+generates, relative to the package directory. It is generated output like
+everything else on this page — the managed `.gitignore` section covers it,
+`stencil clean` removes it, last, after the rest of the package — and it is
+never hand-edited; `stencil gen` overwrites it in full on every run.
+
+`stencil clean` reads a package's manifest in preference to re-deriving the
+removal list from `.config.yaml`; see [When the config is
+wrong](#when-the-config-is-wrong) for what that buys.
+
+**What this does not protect.** The manifest is rewritten on every `gen`, so it
+protects `edit config → clean → gen` but not `edit config → gen → clean`:
+regenerating replaces the manifest with the new, shorter list, and the orphans
+from the old config are then named by nothing — not the new manifest, not the
+config as it reads now. Clean a package before you regenerate it, not after,
+whenever you have just trimmed its config. Unioning the old manifest's entries
+into the new one was considered and rejected: a stale name that an author later
+re-creates by hand would then be deleted by a clean that believes it just
+generated it. The manifest's authority is deliberately narrow — what `gen`
+produced *this run*, not the union of everything it has ever produced.
+
+Two more cases fall out of the same design and are not bugs:
+
+- **A package whose `dir` was renamed after `gen`** is orphaned in full, the
+  same as a package deleted from the config outright. `clean` looks for the
+  manifest under the *current* `dir`; finding none, it derives from the config
+  as it reads today, which no longer mentions the old location, so nothing
+  under it is removed.
+- **A package-level `output_dir`** can put build artifacts outside the package
+  directory. `clean` only unlinks a path that resolves under the package's own
+  directory — the same containment rule that keeps a symlinked package
+  directory from reaching outside the output tree — so those artifacts are
+  never in scope. That is a deliberate limit of what `clean` will touch, not a
+  gap in the manifest.
+- **Packages sharing one `dir` share one manifest, and one blast radius.**
+  There is a single `.stencil-manifest.json` in that directory and `gen`
+  rewrites it, so it names whichever package generated last. `clean` unions it
+  with the config-derived entries of every other package configured with that
+  directory, so nothing is left behind — but the consequence is that
+  `stencil clean alpha` removes what `beta` generated there too, because a
+  manifest naming `beta` cannot be removed without removing what it names.
+  Give two packages the same `dir` only when cleaning one should clean both.
+  If the config *also* does not parse, the member the manifest does not name
+  cannot be derived from anywhere: it is reported by name and `clean` exits
+  non-zero, having removed only what the manifest listed.
+
 You can create custom templates for any project type. Templates are Jinja2 files (`.j2` suffix)
 that have access to the package context variables.
 
@@ -227,10 +277,13 @@ Three things follow, all deliberate:
   refuses while `hs9` is broken. `stencil` already worked this way for `template_env` and `when:`
   mistakes, which have always been checked across the whole config; this extends the same rule to
   the rest of it rather than having two kinds of config error with two behaviours.
-- **`clean` refuses too, which is the awkward one.** It is most wanted exactly when the config has
-  drifted and generated files are still on disk. Refusing is still the right call — running a
-  deletion pass from a config stencil cannot read is worse than not running one — so the error says
-  the way out: fix the config, or remove the generated directory by hand.
+- **`clean` reads each package's own manifest before it reads the config, so it is no longer
+  simply "the awkward one."** It works on a config that no longer parses, for every package that
+  has a manifest — see [The Manifest](#the-manifest). The rule: exit **0** when every package in
+  scope was cleaned, with the config problem printed as a warning; **non-zero**, naming the
+  packages, when any package in scope had neither a manifest nor a readable config. A package
+  generated before the manifest existed has none, and falls back to deriving from the config for
+  that package — the old behaviour exactly.
 
 The one check that is **not** applied everywhere is whether a `brand` logo's file exists. Only
 `gen` looks, because only `gen` copies it: the `.gitignore` entry and the clean list are both

@@ -416,6 +416,16 @@ def test_the_message_names_a_way_out_of_the_clean_deadlock():
         "the message refuses to clean but never says how to recover: "
         f"{str(exc.value)!r}"
     )
+    # stn-2x4.8: package_contexts(config) with no explicit `trailer` is the
+    # call gen and install make, and must keep saying `clean` refuses too --
+    # `clean` itself now asks for a DIFFERENT trailer (CLEAN_DEGRADED_TRAILER)
+    # on its own degraded path, precisely because that sentence stops being
+    # true there. Pinned here so a future edit to the default trailer cannot
+    # silently change gen/install's wording without a test noticing.
+    assert "refuses for the same reason this did" in message, (
+        "the gen/install (default) trailer changed -- package_contexts(config) "
+        f"with no `trailer` argument must keep today's wording: {str(exc.value)!r}"
+    )
 
 
 def test_a_malformed_package_is_not_blamed_on_its_innocent_siblings():
