@@ -76,7 +76,13 @@ def stencil_location() -> Path:
     """
     if stencil.__file__:
         return Path(stencil.__file__)
-    return Path(next(iter(stencil.__path__))) / "__init__.py"
+    # A namespace package can have SEVERAL portions, and reporting only the
+    # first would clear a run whose second portion comes from another tree.
+    # Any foreign portion is the answer worth giving; the first is only the
+    # fallback when they are all ours.
+    portions = [Path(part) for part in stencil.__path__]
+    foreign = [part for part in portions if part.resolve().parent != CHECKOUT]
+    return (foreign[0] if foreign else portions[0]) / "__init__.py"
 
 
 def foreign_stencil_note(checkout: Path, stencil_file: Path, rootdir: Path) -> str | None:

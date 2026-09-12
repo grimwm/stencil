@@ -339,8 +339,18 @@ check did not catch it:
   tree.
 
 `pythonpath = ["."]` in `[tool.pytest.ini_options]` is the fix — the rootdir on
-`sys.path`, before `tests/conftest.py` is imported. **So a worktree needs no
-venv of its own**, and borrowing the main checkout's is fine.
+`sys.path`, before `tests/conftest.py` is imported. **So a worktree changing
+only source needs no venv of its own**, and borrowing the main checkout's is
+fine.
+
+Only source, and the boundary is worth stating because it is where the fix
+stops helping. `pythonpath` decides which `stencil/` gets imported; it decides
+nothing about what is *installed*. A worktree that adds or bumps a dependency,
+adds a pytest plugin, changes an entry point in `pyproject.toml`, or touches
+packaging still needs its own venv — the borrowed one resolves imports from
+whatever was installed into it, and the new dependency simply is not there.
+The symptom is an honest `ModuleNotFoundError` rather than a silent wrong
+answer, which is why it is a footnote here and not a second ticket.
 
 That claim cost a second fix to make true. An inner pytest — the ones
 `test_parallel_harness.py` and `test_tmp_footprint.py` spawn to answer

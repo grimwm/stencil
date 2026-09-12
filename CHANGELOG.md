@@ -39,7 +39,11 @@ How the version gets bumped is written down in
   compares against the conftest's own checkout rather than `config.rootpath`,
   which would have refused the inner pytest runs `test_parallel_harness.py`
   and `test_tmp_footprint.py` legitimately make against a throwaway rootdir.
-  AGENTS.md records what a contributor in a worktree should expect.
+  AGENTS.md records what a contributor in a worktree should expect, including
+  where the fix stops: `pythonpath` decides which `stencil/` is imported and
+  nothing about what is installed, so a worktree that adds a dependency, a
+  pytest plugin or an entry point still needs its own venv. That one fails as
+  an honest `ModuleNotFoundError` rather than a silent wrong answer.
 
   The same bug existed one level down, and the guard is what found it: the
   inner pytest runs `test_parallel_harness.py` and `test_tmp_footprint.py`

@@ -375,6 +375,16 @@ def test_the_guard_speaks_for_a_namespace_package(monkeypatch):
     note = foreign_stencil_note(Path("/checkouts/branch"), located, Path("."))
     assert note is not None and "/checkouts/main/stencil" in note, note
 
+    # Several portions, ours first. Reporting only `__path__[0]` would clear
+    # this run while a second tree was still contributing modules to it.
+    monkeypatch.setattr(
+        stencil, "__path__", [str(CHECKOUT / "stencil"), "/checkouts/main/stencil"]
+    )
+    assert stencil_location().parent == Path("/checkouts/main/stencil"), (
+        "a foreign portion must be the one reported, wherever it sits in "
+        "__path__"
+    )
+
 
 def test_no_tracked_file_at_the_root_shadows_a_dependency():
     """The cost of putting the repository root on sys.path, made visible.
