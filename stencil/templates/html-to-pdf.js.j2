@@ -82,12 +82,14 @@ const fromTools = createRequire("{{ browser_tools_dir }}/package.json");
 let resolvedPuppeteer;
 try {
   resolvedPuppeteer = fromTools.resolve("puppeteer");
-} catch (error) {
+} catch {
   resolvedPuppeteer = null;
 }
+// The trailing separator matters: without it a sibling directory whose name
+// merely STARTS with the tools path would satisfy the check.
 if (
   !resolvedPuppeteer ||
-  !resolvedPuppeteer.startsWith("{{ browser_node_modules }}")
+  !resolvedPuppeteer.startsWith("{{ browser_node_modules }}/")
 ) {
   console.error(
     `Failed to convert ${input}: either this is not running inside the ` +
