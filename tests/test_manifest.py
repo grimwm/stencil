@@ -39,6 +39,7 @@ only the entries list.
 
 from __future__ import annotations
 
+import copy
 import json
 import os
 
@@ -55,7 +56,7 @@ from stencil.generate import (
     read_manifest,
 )
 
-from test_cli import run_cli
+from test_cli import GOOD_AND_BROKEN_CONFIG, run_cli, write_config
 
 MAKEFILE_TEMPLATES = [{"src": "Makefile.j2"}, {"src": "docker-compose.yml.j2"}]
 
@@ -397,3 +398,429 @@ def test_a_failed_regeneration_leaves_no_manifest(tmp_path, generate_package):
         "a failed re-gen left the manifest from the PREVIOUS successful run "
         "in place, naming a file list that no longer matches what is on disk"
     )
+
+
+# =============================================================================
+# stn-2x4.3: clean reads the manifest, and the degraded path.
+#
+# Everything below drives `clean` through the CLI (run_cli, subprocess) in a
+# tmp_path -- never by calling clean_generated directly -- because the exit
+# status is part of what each test asserts, and that only exists at the CLI
+# boundary. Setup (the initial `gen`) is free to use whichever is more direct
+# for the case: the `generate_package` fixture (in-process) when only one
+# package is involved, or `run_cli("gen", ...)` + `write_config` when a
+# config needs to be rewritten between a `gen` and the `clean` under test.
+# =============================================================================
+
+
+# --- clean reads the manifest in preference to a since-edited config -------
+
+
+def test_clean_removes_a_dropped_docs_entrys_build_artifacts_from_the_manifest(
+    generate_package, tmp_path
+):
+    """PRECEDENCE, the headline of the gen/clean split. The manifest names a
+    document's build-artifact glob patterns (Guide*.html, Guide*.pdf, ...)
+    for every doc that existed AT GEN TIME. Editing `docs:` afterward to
+    drop one must not make clean forget that document's artifacts -- a
+    config-derived removal list would no longer name them at all, and they
+    would be left on disk forever. A manifest-driven clean still removes
+    them, because the manifest records what gen actually did, not what the
+    config says today.
+    """
+    config = {
+        "output_dir": "out",
+        "templates": MAKEFILE_TEMPLATES,
+        "packages": {
+            "demo": {
+                "name": "Demo",
+                "package_type": "none",
+                "docs": ["Guide.md", "Extra.md"],
+            }
+        },
+    }
+    generated = generate_package(config)
+
+    # Simulate a `make html`/`make pdf` run: gen itself only writes the
+    # scaffolding, never these build artifacts.
+    for name in ("Guide.html", "Guide.pdf", "Extra.html", "Extra.pdf"):
+        (generated / name).write_text("built")
+
+    edited = copy.deepcopy(config)
+    edited["packages"]["demo"]["docs"] = ["Guide.md"]
+    (tmp_path / ".config.yaml").write_text(yaml.safe_dump(edited))
+
+    result = run_cli("clean", "demo", cwd=tmp_path)
+
+    assert result.returncode == 0, result.stderr
+    for name in ("Guide.html", "Guide.pdf", "Extra.html", "Extra.pdf"):
+        assert not (generated / name).exists(), (
+            f"{name} survived clean -- a config-derived removal list would "
+            "have dropped Extra's artifacts the moment `Extra.md` left docs:"
+        )
+
+
+def test_clean_does_not_remove_a_file_gen_never_produced_from_an_added_docs_entry(
+    generate_package, tmp_path
+):
+    """The converse of the precedence test above. Editing the config AFTER
+    gen to ADD a docs entry must not make clean remove a file gen never
+    produced -- the manifest, not the current config, is authoritative, so a
+    file matching a pattern the manifest never recorded is never even
+    considered, let alone removed.
+    """
+    config = {
+        "output_dir": "out",
+        "templates": MAKEFILE_TEMPLATES,
+        "packages": {
+            "demo": {
+                "name": "Demo",
+                "package_type": "none",
+                "docs": ["Guide.md"],
+            }
+        },
+    }
+    generated = generate_package(config)
+    (generated / "Guide.html").write_text("built")
+
+    edited = copy.deepcopy(config)
+    edited["packages"]["demo"]["docs"] = ["Guide.md", "New.md"]
+    (tmp_path / ".config.yaml").write_text(yaml.safe_dump(edited))
+    # A file that happens to match the NEWLY configured pattern, standing in
+    # for whatever a later `make` run (against the edited config) might have
+    # produced -- gen itself never ran again, so the manifest never heard
+    # about it.
+    (generated / "New.html").write_text("not gen's to remove")
+
+    result = run_cli("clean", "demo", cwd=tmp_path)
+
+    assert result.returncode == 0, result.stderr
+    assert not (generated / "Guide.html").exists()
+    assert (generated / "New.html").exists(), (
+        "clean removed a file the manifest never named, by re-deriving the "
+        "removal list from the edited config instead of trusting the "
+        "manifest"
+    )
+
+
+def test_clean_removes_the_manifest_last(generate_package, tmp_path):
+    """Assert the ordering directly rather than assuming it. The manifest
+    must be the LAST thing removed for its package, so a clean that fails
+    partway through still has a manifest on disk to resume from.
+    """
+    config = {
+        "output_dir": "out",
+        "templates": MAKEFILE_TEMPLATES,
+        "packages": {"demo": {"name": "Demo", "package_type": "none"}},
+    }
+    generate_package(config)
+
+    result = run_cli("clean", "demo", cwd=tmp_path)
+
+    assert result.returncode == 0, result.stderr
+    removed = [
+        line for line in result.stdout.splitlines() if line.startswith("Removed ")
+    ]
+    assert len(removed) >= 2, f"expected at least Makefile and the manifest: {removed}"
+    assert removed[-1].endswith(MANIFEST_NAME), (
+        f"the manifest was not the last thing removed: {removed}"
+    )
+
+
+def test_manifest_survives_a_partial_clean(generate_package, tmp_path):
+    """Review finding A10. When ANY entry for a package was refused (a
+    path-check failure) or failed to be removed, the manifest itself must
+    NOT be removed -- otherwise the file that was refused has no record
+    left naming it at all, and the next clean cannot even try again.
+    """
+    config = {
+        "output_dir": "out",
+        "templates": MAKEFILE_TEMPLATES,
+        "packages": {"demo": {"name": "Demo", "package_type": "none"}},
+    }
+    generated = generate_package(config)
+    manifest_path = generated / MANIFEST_NAME
+
+    # A file just outside the package directory that a malicious/corrupt
+    # manifest entry could reach with "..". If it survives, containment held.
+    outside = tmp_path / "out" / "escape.txt"
+    outside.write_text("do not touch")
+
+    manifest = json.loads(manifest_path.read_text())
+    manifest["entries"].append("../escape.txt")
+    manifest_path.write_text(json.dumps(manifest))
+
+    result = run_cli("clean", "demo", cwd=tmp_path)
+
+    assert result.returncode != 0, (
+        "a refused manifest entry must fail the command, not pass silently"
+    )
+    assert not (generated / "Makefile").exists(), (
+        "the valid entries should still be removed despite the one refusal"
+    )
+    assert outside.is_file() and outside.read_text() == "do not touch", (
+        "the refused '../escape.txt' entry must not have been removed"
+    )
+    assert manifest_path.exists(), (
+        "the manifest must survive a partial clean, so the refused entry is "
+        "still named for next time"
+    )
+
+
+def test_clean_all_does_not_report_a_false_failure_when_a_shared_manifest_is_already_gone(
+    tmp_path,
+):
+    """Review finding D4. Two packages configured with the same `dir` share
+    one physical manifest on disk (today `get_generated_files` unions their
+    entries so a config-derived `clean` already covers both). Cleaning the
+    first package in scope removes that shared manifest; the second package
+    must not be reported as a failure just because ITS manifest is already
+    gone -- its own config is still perfectly readable, so it falls back to
+    deriving from the config, exactly as a package that never had a manifest
+    at all would, and finds nothing left to do.
+    """
+    config = {
+        "output_dir": "out",
+        "templates": [{"src": "Makefile.j2"}],
+        "packages": {
+            "alpha": {"package_type": "none", "dir": "shared"},
+            "beta": {"package_type": "none", "dir": "shared"},
+        },
+    }
+    write_config(tmp_path, config)
+
+    setup = run_cli("gen", "--all", cwd=tmp_path)
+    assert setup.returncode == 0, setup.stderr
+
+    result = run_cli("clean", "--all", cwd=tmp_path)
+
+    assert result.returncode == 0, (
+        f"a shared manifest already removed by the first package must not "
+        f"fail the second: {result.stderr}"
+    )
+    assert "beta" not in result.stderr
+    assert not (tmp_path / "out" / "shared" / "Makefile").exists()
+
+
+def test_dry_run_on_the_degraded_path_previews_without_removing_and_matches_real_exit_status(
+    tmp_path,
+):
+    """Review finding T2. `--dry-run` must preview the manifest path the
+    same way it previews everything else: 'Would remove' for every entry
+    INCLUDING the manifest, nothing actually removed, and -- the point of
+    stn-w4v -- the SAME exit status the real run would go on to produce. A
+    preview that exits 0 where the real run exits 1 (or the reverse) is
+    exactly that bug's shape, applied here to the degraded path where the
+    two exit statuses are least likely to have been kept in sync by hand.
+    """
+    initially_fine = copy.deepcopy(GOOD_AND_BROKEN_CONFIG)
+    del initially_fine["packages"]["broken"]["show_download"]
+    write_config(tmp_path, initially_fine)
+    setup = run_cli("gen", "--all", cwd=tmp_path)
+    assert setup.returncode == 0, setup.stderr
+
+    write_config(tmp_path, GOOD_AND_BROKEN_CONFIG)
+
+    good_manifest = tmp_path / "good" / MANIFEST_NAME
+    assert good_manifest.exists(), "setup: good should still have its manifest"
+
+    dry = run_cli("clean", "--all", "--dry-run", cwd=tmp_path)
+
+    assert dry.returncode == 0, dry.stderr
+    assert "Would remove" in dry.stdout
+    assert good_manifest.exists(), "--dry-run must not remove anything"
+    assert (tmp_path / "good" / "Makefile").exists()
+
+    real = run_cli("clean", "--all", cwd=tmp_path)
+
+    assert real.returncode == dry.returncode == 0, (
+        "the real run's exit status must match what --dry-run already "
+        "reported for the same command"
+    )
+    assert not good_manifest.exists()
+
+
+def test_manifest_with_no_entries_still_gets_removed_and_counts_as_cleaned(
+    generate_package, tmp_path
+):
+    """Review finding T3. `clean_generated`'s existing 'No generated paths
+    for package X' early return is the exact lie stn-p9a's ticket text
+    complains about: files can still be on disk -- the manifest itself, and
+    whatever it deliberately does not list -- even when a manifest's own
+    `entries` is empty. The manifest file must still be removed and the
+    package must still count as successfully cleaned, exit 0.
+    """
+    config = {
+        "output_dir": "out",
+        "templates": MAKEFILE_TEMPLATES,
+        "packages": {"demo": {"name": "Demo", "package_type": "none"}},
+    }
+    generated = generate_package(config)
+    manifest_path = generated / MANIFEST_NAME
+
+    manifest = json.loads(manifest_path.read_text())
+    manifest["entries"] = []
+    manifest_path.write_text(json.dumps(manifest))
+
+    result = run_cli("clean", "demo", cwd=tmp_path)
+
+    assert result.returncode == 0, result.stderr
+    assert "No generated paths" not in result.stdout + result.stderr
+    assert not manifest_path.exists(), (
+        "an empty entries list must not stop the manifest itself from being "
+        "removed"
+    )
+    assert (generated / "Makefile").exists(), (
+        "the manifest is authoritative even when empty -- clean must not "
+        "fall back to deriving from the config just because entries is "
+        "empty"
+    )
+
+
+# --- the degraded path: clean works on a config it cannot fully read -------
+
+
+def test_broken_config_with_manifests_on_both_packages_cleans_warns_and_exits_zero(
+    tmp_path,
+):
+    """DEGRADED, the headline. Both packages were generated -- each has its
+    own manifest -- before the config broke the way GOOD_AND_BROKEN_CONFIG is
+    broken (show_download: "no"). `clean --all` does not need either
+    package's config at all: it reads their manifests, removes every file
+    for both, prints the config problem as a warning, and exits 0 -- because
+    every package IN SCOPE was cleaned. Refusing here would take back the
+    whole point of the ticket: `clean` staying usable when the config is the
+    reason someone reached for it.
+    """
+    initially_fine = copy.deepcopy(GOOD_AND_BROKEN_CONFIG)
+    del initially_fine["packages"]["broken"]["show_download"]
+    write_config(tmp_path, initially_fine)
+    setup = run_cli("gen", "--all", cwd=tmp_path)
+    assert setup.returncode == 0, setup.stderr
+
+    write_config(tmp_path, GOOD_AND_BROKEN_CONFIG)
+
+    result = run_cli("clean", "--all", cwd=tmp_path)
+
+    assert result.returncode == 0, (
+        f"every package in scope had a manifest; clean should still have "
+        f"succeeded: {result.stderr}"
+    )
+    combined = result.stdout + result.stderr
+    assert "broken" in combined, "the config problem must still be reported"
+    assert not (tmp_path / "good" / MANIFEST_NAME).exists()
+    assert not (tmp_path / "broken" / MANIFEST_NAME).exists()
+
+
+def test_broken_config_warning_does_not_claim_nothing_was_removed_or_that_clean_refuses(
+    tmp_path,
+):
+    """Review finding D2. _raise_config_problems' trailer ('Nothing was
+    generated, removed or written ... rather than reaching for `clean`,
+    which refuses for the same reason this did') is written for the path
+    where NOTHING happened. On the degraded path that same sentence would be
+    printed immediately BEFORE clean removes files and exits 0 -- a direct
+    contradiction. The warning printed on the degraded path must not repeat
+    either claim.
+    """
+    initially_fine = copy.deepcopy(GOOD_AND_BROKEN_CONFIG)
+    del initially_fine["packages"]["broken"]["show_download"]
+    write_config(tmp_path, initially_fine)
+    setup = run_cli("gen", "--all", cwd=tmp_path)
+    assert setup.returncode == 0, setup.stderr
+
+    write_config(tmp_path, GOOD_AND_BROKEN_CONFIG)
+
+    result = run_cli("clean", "--all", cwd=tmp_path)
+
+    assert result.returncode == 0, result.stderr
+    combined = result.stdout + result.stderr
+    assert "Nothing was generated, removed or written" not in combined, (
+        "the warning claims nothing was removed on a run that just removed "
+        "files"
+    )
+    assert "which refuses for the same reason this did" not in combined, (
+        "the warning tells the reader clean refuses, on the run where it "
+        "just succeeded"
+    )
+
+
+def test_broken_config_with_no_manifest_anywhere_still_fails_closed(tmp_path):
+    """Pins the stn-445 guarantee at this file too, so a manifest-aware
+    rewrite of clean_generated cannot regress it: a manifest is a NEW way to
+    succeed, never a new way to fail differently. Nothing was ever generated
+    here, so neither package has a manifest, and a broken config must still
+    refuse outright -- non-zero, no traceback -- exactly as it did before
+    this ticket.
+    """
+    write_config(tmp_path, GOOD_AND_BROKEN_CONFIG)
+
+    result = run_cli("clean", "--all", cwd=tmp_path)
+
+    assert result.returncode != 0
+    assert "Traceback" not in result.stderr
+    assert "broken" in result.stderr
+
+
+def test_clean_all_cleans_the_manifest_package_and_names_the_unmanifested_broken_one(
+    tmp_path,
+):
+    """`good` was generated alone, before `broken` existed in the config, so
+    only `good` has a manifest. `clean --all` puts both packages in scope:
+    `good` cleans from its manifest regardless of the broken sibling,
+    `broken` has neither a manifest nor a readable config for itself, so it
+    is named and the command exits non-zero overall -- 'every package in
+    scope was cleaned' is false here, unlike the headline case above.
+    """
+    initial = {
+        "templates": MAKEFILE_TEMPLATES,
+        "packages": {"good": {"package_type": "none"}},
+    }
+    write_config(tmp_path, initial)
+    setup = run_cli("gen", "good", cwd=tmp_path)
+    assert setup.returncode == 0, setup.stderr
+
+    write_config(tmp_path, GOOD_AND_BROKEN_CONFIG)
+
+    result = run_cli("clean", "--all", cwd=tmp_path)
+
+    assert result.returncode != 0, (
+        "broken has neither a manifest nor a readable config; the command "
+        "must still fail overall"
+    )
+    assert "broken" in result.stderr
+    assert not (tmp_path / "good" / MANIFEST_NAME).exists(), (
+        "good should still have been cleaned even though the overall exit "
+        "is non-zero"
+    )
+    assert not (tmp_path / "good" / "Makefile").exists()
+
+
+def test_clean_of_a_single_manifest_backed_package_succeeds_despite_a_broken_sibling(
+    tmp_path,
+):
+    """Deliberately NARROWS decision d-adf7c52b (stn-p9a) -- see the updated
+    docstring on tests/test_cli.py's
+    test_a_single_good_package_still_fails_when_a_sibling_is_broken. `broken`
+    is not even named on this command line, so it is out of scope entirely:
+    a manifest-backed `clean good` no longer pays for a sibling it was never
+    asked about.
+    """
+    initial = {
+        "templates": MAKEFILE_TEMPLATES,
+        "packages": {"good": {"package_type": "none"}},
+    }
+    write_config(tmp_path, initial)
+    setup = run_cli("gen", "good", cwd=tmp_path)
+    assert setup.returncode == 0, setup.stderr
+
+    write_config(tmp_path, GOOD_AND_BROKEN_CONFIG)
+
+    result = run_cli("clean", "good", cwd=tmp_path)
+
+    assert result.returncode == 0, (
+        f"good has a manifest and was not asked to consider broken: "
+        f"{result.stderr}"
+    )
+    assert not (tmp_path / "good" / MANIFEST_NAME).exists()
+    assert not (tmp_path / "good" / "Makefile").exists()
