@@ -357,14 +357,14 @@ def test_a_symlinked_top_level_output_dir_is_refused(tmp_path):
     ordinary value, and `out` is itself a symlink pointing outside the
     config directory.
 
-    Driven through the CLI rather than through `checked_output_base`:
-    that function does not exist until stn-sl2.3, so importing it here
-    would raise ImportError instead of exercising today's actual (wrong)
-    behaviour.
+    Driven through the CLI rather than through `checked_output_base`
+    directly, so the refusal is pinned on the path a user actually runs --
+    the symlink is only visible once `output_dir` has been resolved against
+    the config directory, and only `_main` does that.
 
     Reproduced verbatim per the ticket: `ln -s <outside> cfg/out`,
     `output_dir: out`, a victim file at `<outside>/demo/Makefile`, then
-    `clean --all`. TODAY: rc=0 and the victim file is gone.
+    `clean --all`. BEFORE 0.39.0: rc=0 and the victim file was gone.
     """
     import os
 
@@ -402,7 +402,7 @@ def test_cli_clean_all_leaves_a_file_outside_the_config_directory_alone(
 ):
     """The reproduction stn-pe3 was filed with, run through the CLI rather
     than through `package_contexts` -- which never sees `output_base` at
-    all, only the config. TODAY: rc=0 and
+    all, only the config. BEFORE 0.39.0: rc=0 and
     'Removed .../victim-base/demo/Makefile'. That last assertion, the file
     surviving, is the ticket -- not the exit code.
     """
@@ -455,8 +455,8 @@ def test_output_base_containment_runs_even_when_the_config_is_degraded(
     on-disk manifest at the escaped location, and whose `broken` package
     fails `package_contexts` (whitespace in `docs`) -- so the CLI's
     pre-flight is degraded, `config_readable` is False, and yet `demo`'s
-    directory carries a manifest naming it. TODAY, that manifest is enough
-    to authorize a delete outside the config directory anyway.
+    directory carries a manifest naming it. BEFORE 0.39.0, that manifest
+    was enough to authorize a delete outside the config directory anyway.
     """
     config_dir = tmp_path / "cfg"
     config_dir.mkdir()
@@ -560,7 +560,7 @@ def test_cli_gen_through_a_symlinked_package_dir_refuses_and_writes_nothing(
 
 
 def test_cli_gen_refusal_names_both_the_declared_and_resolved_paths(tmp_path):
-    """Today's success message names only the path INSIDE the tree
+    """Before 0.39.0 the success message named only the path INSIDE the tree
     (``out/demo``), which is the specific harm the ticket records. The
     refusal must name the RESOLVED target too, so the report says where the
     bytes would actually have gone.
@@ -615,11 +615,11 @@ def test_cli_gen_refusal_names_both_the_declared_and_resolved_paths(tmp_path):
 
 
 def test_cli_gen_dry_run_through_a_symlinked_package_dir_also_refuses(tmp_path):
-    """Today ``--dry-run`` prints ``Would write: out/demo/Makefile`` -- the
-    path INSIDE the tree, for bytes that would actually land outside via the
-    symlink. That is precisely the lie stn-vhr was filed about: a preview
-    must not report a write it would not perform, nor the wrong path for one
-    it would.
+    """Before 0.39.0, ``--dry-run`` printed ``Would write:
+    out/demo/Makefile`` -- the path INSIDE the tree, for bytes that would
+    actually land outside via the symlink. That is precisely the lie stn-vhr
+    was filed about: a preview must not report a write it would not perform,
+    nor the wrong path for one it would.
     """
     import os
 
@@ -647,7 +647,8 @@ def test_cli_gen_dry_run_through_a_symlinked_package_dir_also_refuses(tmp_path):
         f"stdout={result.stdout!r}, stderr={result.stderr!r}"
     )
     assert "out/demo/Makefile" not in result.stdout, (
-        "TODAY: dry-run prints 'Would write: .../out/demo/Makefile' -- the "
+        "Before 0.39.0, dry-run printed 'Would write: "
+        ".../out/demo/Makefile' -- the "
         "inside path, naming bytes that would actually land outside. A "
         "preview must not report a write it would not perform, nor the "
         f"wrong path for one it would: stdout={result.stdout!r}"
@@ -828,10 +829,10 @@ def test_a_package_name_with_a_glob_metacharacter_is_refused():
 def test_cli_gen_with_an_unsafe_package_name_refuses_and_writes_nothing(
     tmp_path,
 ):
-    """The ticket's reproduction end to end. TODAY: gen exits 0, writes a
-    Makefile whose PKG line word-splits on the space, and records the
-    unvalidated string verbatim as a manifest entry -- which `clean` then
-    refuses by name forever. The fix must refuse at gen time, so the
+    """The ticket's reproduction end to end. BEFORE 0.39.0: gen exited 0,
+    wrote a Makefile whose PKG line word-split on the space, and recorded
+    the unvalidated string verbatim as a manifest entry -- after which
+    `clean` refused by name forever. The fix must refuse at gen time, so the
     un-cleanable manifest is never written in the first place: assert the
     Makefile does not exist at all, not only that the exit code is
     non-zero."""

@@ -278,12 +278,13 @@ def test_a_non_string_output_dir_raises_valueerror_not_typeerror():
 
 @pytest.mark.parametrize("value", [7, 0, False, []])
 def test_a_non_string_top_level_output_dir_raises_valueerror_not_typeerror(value):
-    """`_main` computes `output_base = (config_dir / output_dir_raw).resolve()`
-    with no shape check at all, so today `package_contexts` raises nothing
-    here -- the value passes straight through. 0, False and [] are FALSY
-    non-strings, which a naive `if not value: return None` swallows into
-    "output base is the config directory", the same silent mis-read stn-40a
-    exists to close.
+    """Before 0.39.0, `_main` computed
+    `output_base = (config_dir / output_dir_raw).resolve()` with no shape
+    check at all, and `package_contexts` raised nothing here -- the value
+    passed straight through. 0, False and [] are FALSY non-strings, which a
+    naive `if not value: return None` swallows into "output base is the
+    config directory", the same silent mis-read stn-40a exists to close --
+    which is why `check_output_dir` tests the type BEFORE falsiness.
     """
     config = {"output_dir": value, "packages": {"demo": package()}}
     with pytest.raises(ValueError, match="output_dir"):
@@ -298,12 +299,12 @@ def test_a_non_string_top_level_output_dir_raises_valueerror_not_typeerror(value
 def test_cli_reports_a_non_string_top_level_output_dir_without_a_traceback(
     tmp_path, args
 ):
-    """stn-40a's other half: `_main` computes `output_base` before
-    `package_contexts`'s pre-flight ever runs, so today `gen` and `clean`
-    traceback with a bare `TypeError` -- 'unsupported operand type(s) for /:
-    PosixPath and int' -- and `install`, which returns above that line
-    entirely, reports nothing at all and exits 0. All three must become an
-    ordinary, non-zero, traceback-free error.
+    """stn-40a's other half. `_main` computes `output_base` before
+    `package_contexts`'s pre-flight ever runs, so before 0.39.0 `gen` and
+    `clean` tracebacked with a bare `TypeError` -- 'unsupported operand
+    type(s) for /: PosixPath and int' -- while `install`, which returns
+    above that line entirely, reported nothing at all and exited 0. All
+    three are now an ordinary, non-zero, traceback-free error.
     """
     write_config(
         tmp_path,

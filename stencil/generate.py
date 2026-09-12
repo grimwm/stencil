@@ -19,6 +19,7 @@ import shutil
 import stat
 import sys
 from pathlib import Path
+from typing import NoReturn
 
 import yaml
 from jinja2 import Environment, FileSystemLoader, StrictUndefined, Undefined, meta, nodes
@@ -1275,8 +1276,18 @@ CLEAN_DEGRADED_TRAILER = (
 )
 
 
-def _raise_config_problems(problems: list[str], trailer: str | None = None) -> None:
+def _raise_config_problems(
+    problems: list[str], trailer: str | None = None
+) -> NoReturn:
     """Turn collected config problems into the one ValueError callers print.
+
+    ``NoReturn``, not ``None``, and that is load-bearing rather than
+    decorative: every caller relies on this never returning, and
+    ``checked_output_base`` reads a name bound in the ``try`` immediately
+    after its ``except`` calls this. Spelled ``-> None``, that reads to a
+    type-checker -- and to a person -- as a possible ``UnboundLocalError``
+    rather than as the config error it actually is, and any future edit that
+    gave this function a non-raising path would turn that into a real one.
 
     Deliberately names no file: --config means the path is not always
     .config.yaml, and nothing down here is told which one it got. Every
