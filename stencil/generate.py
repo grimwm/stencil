@@ -1231,7 +1231,10 @@ def copy_brand_image(
     nofollow = getattr(os, "O_NOFOLLOW", 0)
     with (
         open(source, "rb", opener=lambda p, f: os.open(p, f | nofollow)) as src,
-        open(destination, "wb") as dst,
+        # stn-h5q. The SOURCE has taken this care since stn-ttg; the
+        # DESTINATION, which is the half that writes, was a bare
+        # open(..., "wb") and followed a symlink straight out of the tree.
+        open_for_write_nofollow(destination) as dst,
     ):
         shutil.copyfileobj(src, dst)
     print(f"Copied: {destination}")
@@ -1701,7 +1704,9 @@ def write_manifest(
         "dir": pkg_dir,
         "entries": sorted(entries),
     }
-    manifest_path.write_text(json.dumps(document, sort_keys=True, indent=2) + "\n")
+    write_text_nofollow(
+        manifest_path, json.dumps(document, sort_keys=True, indent=2) + "\n"
+    )
     print(f"Generated: {manifest_path}")
 
 
@@ -1883,6 +1888,288 @@ def read_manifest(path: Path) -> dict:
     return document
 
 
+def template_destinations(template_defs: list, context: dict) -> list[tuple[str, str]]:
+    """Every (template name, destination) pair one package will actually
+    render, `when` conditions already applied.
+
+    Lifted out of `render_templates` (stn-h5q) because `generate_package`'s
+    pre-pass has to check the same destinations BEFORE the renderer writes
+    the first of them, and two spellings of "which templates survive their
+    `when`" is the drift bug this file has already paid for three times --
+    see `package_entries`' docstring for the other two.
+    """
+    destinations = []
+    for tdef in template_defs:
+        if not when_holds(tdef, context):
+            continue
+        src = tdef["src"]
+        destinations.append((src, tdef.get("dest", template_dest(src))))
+    return destinations
+
+
+def write_targets(context: dict, template_defs: list) -> list[tuple[str, str]]:
+    """Every (where, path-relative-to-the-package-directory) `gen` is about
+    to write for one package: each surviving template's destination, the
+    copied brand image, and the manifest.
+
+    `where` is the config key to name in a refusal, so an author reading one
+    is pointed at the line they wrote rather than at a filename stencil
+    derived.
+
+    Deliberately NOT `package_entries`. That function lists what a package
+    PRODUCES, including build artifacts `gen` never writes itself -- the
+    `Guide*.html` and `Guide*.pdf` globs `make` produces later. This lists
+    what THIS CALL writes, which is the only set a write-side check can say
+    anything about.
+    """
+    targets = [("dest", dest) for _src, dest in template_destinations(template_defs, context)]
+    if context.get("has_pages"):
+        # Named from the unresolved config string, which is how
+        # copy_brand_image names its destination and how package_entries
+        # reads it back (stn-8wt). A third spelling here would be the same
+        # drift with a new author.
+        brand_image = brand_image_path(context.get("config_brand"))
+        if brand_image:
+            targets.append(("brand", Path(brand_image).name))
+    targets.append(("manifest", MANIFEST_NAME))
+    return targets
+
+
+def contained_entry_parent(
+    package_id: str,
+    where: str,
+    declared: str,
+    unresolved: Path,
+    root: Path,
+    pkg_path: Path,
+) -> Path:
+    """Resolve one entry's PARENT directory and require it under both the
+    output base and the package directory. Returns the resolved parent.
+
+    ONE RULE, TWO CALLERS, which is the whole of stn-h5q's thesis: `clean`
+    has applied this since stn-2x4.6 (`_remove_entries`) and `gen` applied
+    nothing, so gen wrote a file clean then refused to remove. Two sides
+    resolving different components of the same path IS the defect class, so
+    a second copy of this five-line rule -- agreeing today, drifting later --
+    would have closed the symptom and left the cause. This file has paid for
+    that shape three times already; see `package_entries`' docstring.
+
+    Not folded into `contained_path`, which is a different rule: that one is
+    rooted at ONE base and is about a package DIRECTORY, and stn-17h now has
+    it refuse a candidate equal to its root -- correct for a package
+    directory, wrong here, where `dest: Makefile` legitimately has the
+    package directory itself as its parent.
+
+    THE PARENT ONLY, never the entry's own final component. That asymmetry
+    is deliberate on clean's side (`unlink` does not follow a final-component
+    symlink, so refusing one would make such a package permanently
+    un-cleanable) and gen checks that component separately, by lstat, in
+    `checked_write_target`. What the two sides share is exactly this: the
+    directory the entry sits in must be inside the tree.
+    """
+    try:
+        parent_resolved = unresolved.parent.resolve()
+    except OSError as error:
+        raise ValueError(
+            f"Package {package_id}: {where} {declared!r} could not be "
+            f"resolved: {error} -- refusing to touch it"
+        ) from error
+    if not (
+        parent_resolved.is_relative_to(root)
+        and parent_resolved.is_relative_to(pkg_path)
+    ):
+        raise ValueError(
+            f"Package {package_id}: {where} {declared!r} resolves to "
+            f"{parent_resolved}, outside the package directory {pkg_path} "
+            "-- refusing to touch it"
+        )
+    return parent_resolved
+
+
+def checked_write_target(
+    package_id: str, where: str, root: Path, pkg_path: Path, relative: str
+) -> Path:
+    """One path `gen` is about to write, checked at EVERY component below the
+    package directory (stn-h5q). Returns the joined path.
+
+    stn-vhr contains the package DIRECTORY. This is the half below it: in
+    every case stn-h5q reproduces, the package directory is a genuine
+    directory that resolves cleanly and passes that check, and what leaves
+    the tree is a component underneath -- which no directory-level check can
+    see.
+
+    THREE REFUSALS, and the second is the reason this stats components
+    rather than resolving the path again:
+
+    - A SYMLINK at any component. `write_text` opens O_WRONLY|O_CREAT|O_TRUNC
+      with no O_NOFOLLOW, and `mkdir(parents=True, exist_ok=True)` walks a
+      link happily, so both the file itself and a subdirectory a nested
+      `dest` writes through led straight out of the tree at exit 0.
+    - A HARDLINK at the final component (`st_nlink > 1` on a regular file).
+      `resolve()` reports such a path CONTAINED, because it is: the second
+      name for the inode lives outside and no `relative_to` can ever see it.
+      `st_nlink` is the only thing that distinguishes it.
+    - ANYTHING THAT IS NOT THE KIND OF FILE `gen` WRITES: a component that
+      exists but is not a directory where a directory must go, or a final
+      component that exists and is not a regular file. A FIFO planted at a
+      destination would otherwise block the whole run on `open`, and a
+      device node would be written to.
+
+    It also calls `contained_entry_parent`, the rule `clean` has applied to
+    every entry since stn-2x4.6 -- resolve the PARENT, require it under both
+    `root` and `pkg_path` -- because gen and clean resolving DIFFERENT
+    components of one path is the defect class stn-h5q is about, not a
+    detail of it.
+
+    WHAT THAT MAKES SYMMETRIC, stated exactly rather than generously: the
+    PARENT half. gen and clean now compute it with one function. The final
+    component is deliberately NOT symmetric and must not be made so -- gen
+    refuses a link there (it would follow it) while clean unlinks one
+    without resolving it (removing the link is the only way such a package
+    is ever cleanable again). Each side does what its own operation
+    requires. The two computations of the parent also differ in one way
+    worth knowing: at gen time the directory may not exist yet, so
+    `resolve()` is lexical, while clean runs after gen created it and
+    resolves for real. Same rule, same path, different ground truth
+    available.
+
+    `pkg_path` must already be resolved (`contained_path`'s return value),
+    the same contract `_remove_entries` has.
+
+    WHAT IT DOES NOT CLOSE, stated rather than implied: a symlink planted at
+    an intermediate directory BETWEEN this check and the write. The write
+    sites add O_NOFOLLOW, which covers the final component only. That is the
+    same limit stn-vhr already documents for the package directory -- anyone
+    who can swap a directory for a symlink mid-run can already write
+    wherever the running user can.
+    """
+    check_config_path(package_id, where, relative)
+    target = pkg_path / relative
+
+    # THE COMPONENT WALK RUNS FIRST, and the order is a message decision
+    # rather than a correctness one. A symlinked intermediate directory
+    # fails both checks; the parent check reports it as "dest 'sub/Makefile'
+    # resolves to /somewhere/outside", which is true and sends the author to
+    # edit a config line that is not the problem, while the walk names
+    # `.../out/demo/sub` -- the link itself -- and says how to clear it.
+    parts = Path(relative).parts
+    current = pkg_path
+    for index, part in enumerate(parts):
+        current = current / part
+        try:
+            info = os.lstat(current)
+        except FileNotFoundError:
+            # Nothing here yet, so nothing below it either: `gen` creates
+            # this component and everything under it.
+            break
+        except OSError as error:
+            raise ValueError(
+                f"Package {package_id}: {where} {relative!r} could not be "
+                f"checked at {part!r}: {error} -- refusing to write it"
+            ) from error
+
+        last = index == len(parts) - 1
+        if stat.S_ISLNK(info.st_mode):
+            # NAMES THE COMPONENT, not only the declared value. For a nested
+            # `dest` the two differ -- the config says `sub/Makefile` and the
+            # link is `sub` -- and a message naming only the declared value
+            # sends the author to edit a config line that is not the problem.
+            #
+            # The recovery differs by which component it is, so the message
+            # says which. A link AT the file is removable by `stencil clean`,
+            # which unlinks a final component without resolving it
+            # (_remove_entries, and the test that pins it). A link at an
+            # INTERMEDIATE directory is not: `clean` refuses that entry
+            # because its parent resolves outside the package, deliberately
+            # and permanently, so only `rm` clears it.
+            #
+            # KEPT SHORT ON PURPOSE. `_safe` truncates a problem at
+            # _MAX_PROBLEM_CHARS, and these messages carry a resolved
+            # absolute path -- a first draft of this one explained itself at
+            # length and had the recovery advice, the part the reader needs,
+            # cut off the end.
+            recovery = (
+                "`stencil clean` removes it."
+                if last
+                else "`clean` cannot remove it either; delete the link yourself."
+            )
+            raise ValueError(
+                f"Package {package_id}: {where} {relative!r} passes through "
+                f"{current}, which is a symlink -- refusing to write through "
+                f"it. {recovery}"
+            )
+
+        if not last:
+            if not stat.S_ISDIR(info.st_mode):
+                raise ValueError(
+                    f"Package {package_id}: {where} {relative!r} passes "
+                    f"through {part!r}, which exists and is not a directory "
+                    "-- refusing to write through it."
+                )
+            continue
+
+        if not stat.S_ISREG(info.st_mode):
+            raise ValueError(
+                f"Package {package_id}: {where} {relative!r} already exists "
+                "and is not a regular file -- refusing to write over it."
+            )
+        if info.st_nlink > 1:
+            raise ValueError(
+                f"Package {package_id}: {where} {relative!r} is a hardlink "
+                f"(st_nlink={info.st_nlink}): the same file has another name "
+                "outside this package directory, which no path check can "
+                "see. Remove it and run `gen` again."
+            )
+
+    # Belt and braces, deliberately kept rather than trimmed as unreachable.
+    # With no symlink at any component the parent cannot resolve outside, so
+    # this should never fire for a path the walk just cleared -- but it is
+    # the rule `clean` applies, called through the one function both sides
+    # share, and the walk is a snapshot while this is a resolve. Cheap, and
+    # the day the walk gains a `break` in the wrong place this is what still
+    # holds the line.
+    contained_entry_parent(package_id, where, relative, target, root, pkg_path)
+
+    return target
+
+
+def open_for_write_nofollow(path: Path):
+    """`open(path, "wb")`, refusing a symlink at the final component.
+
+    The check-to-write window is small and it is real: `checked_write_target`
+    stats a path and the write happens afterwards. O_NOFOLLOW closes it for
+    the component that matters most -- the file itself -- by failing with
+    ELOOP rather than following a link swapped in meanwhile. This is the
+    spelling `copy_brand_image` already used for its SOURCE, applied to the
+    side that writes.
+
+    Windows has no O_NOFOLLOW; `getattr` there leaves the flags unchanged,
+    which is the same accommodation the brand read makes.
+    """
+    nofollow = getattr(os, "O_NOFOLLOW", 0)
+    flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC | nofollow
+    return os.fdopen(os.open(path, flags, 0o666), "wb")
+
+
+def write_text_nofollow(path: Path, text: str) -> None:
+    """`Path.write_text` without following a symlink at the final component.
+
+    UTF-8, DECIDED RATHER THAN INHERITED. `Path.write_text` with no encoding
+    argument -- which is what these call sites used -- writes in the locale's
+    preferred encoding, so the bytes a generated Makefile got depended on the
+    shell that ran `stencil gen`. Everything stencil renders is UTF-8: the
+    templates are, the config is read as UTF-8 by yaml, and the pandoc
+    invocations in the generated compose file assume it. Switching to an
+    explicit `os.open` is the moment that inconsistency has to be settled one
+    way or the other, and settling it silently on a security fix is the thing
+    worth avoiding, so it is settled here, out loud: UTF-8 on every platform.
+    On any machine whose locale was already UTF-8 -- which is CI and every
+    developer machine this has run on -- nothing about the bytes changes.
+    """
+    with open_for_write_nofollow(path) as handle:
+        handle.write(text.encode("utf-8"))
+
+
 def generate_package(
     env: Environment,
     config: dict,
@@ -1911,9 +2198,26 @@ def generate_package(
     # the package directory itself, not a symlinked subdirectory nested
     # inside it or copy_brand_image's destination -- that gap is filed
     # separately as stn-h5q.
-    contained_path(
+    pkg_resolved = contained_path(
         package_id, "dir", context["package_dir"], output_dir, output_base
     )
+
+    # stn-h5q: check every path this call is about to write, at every
+    # component below the package directory, BEFORE anything is created.
+    # A pre-pass rather than a guard at each write site, so a refused run
+    # touches nothing -- the guarantee stn-vhr already gives for the package
+    # directory, extended to the files inside it. Without it, a package
+    # whose third template lands on a planted link is left with two rendered
+    # files and no manifest: a half-generated package that looks generated.
+    #
+    # `template_defs` is computed here rather than below the mkdir for the
+    # same reason; nothing else about the order changes.
+    config_templates = list(config.get("templates", []))
+    template_defs = injected_templates(context) + config_templates
+    for where, relative in write_targets(context, template_defs):
+        checked_write_target(
+            package_id, where, output_base, pkg_resolved, relative
+        )
 
     if not output_dir.exists():
         if dry_run:
@@ -1932,8 +2236,6 @@ def generate_package(
     if not dry_run and manifest_path.exists():
         manifest_path.unlink()
 
-    config_templates = list(config.get("templates", []))
-    template_defs = injected_templates(context) + config_templates
     if not template_defs:
         print(f"Error: No templates defined in config", file=sys.stderr)
         return None
@@ -1975,15 +2277,9 @@ def render_templates(
     dry_run: bool = False,
 ):
     """Render all templates to the output directory."""
-    templates = []
-
-    for tdef in template_defs:
-        if not when_holds(tdef, context):
-            continue
-        src = tdef["src"]
-        templates.append((src, tdef.get("dest", template_dest(src))))
-
-    for template_name, output_name in templates:
+    for template_name, output_name in template_destinations(
+        template_defs, context
+    ):
         try:
             template = env.get_template(template_name)
             content = template.render(**context)
@@ -1998,8 +2294,16 @@ def render_templates(
             else:
                 # Create parent directories if needed (for nested paths like .vscode/settings.json)
                 output_path.parent.mkdir(parents=True, exist_ok=True)
-                output_path.write_text(content)
-                # Set execute bit on shell scripts
+                # stn-h5q: O_NOFOLLOW. generate_package has already refused
+                # a symlink at this path; this closes the window between
+                # that check and this write.
+                write_text_nofollow(output_path, content)
+                # Set execute bit on shell scripts. `stat()` FOLLOWS a
+                # symlink, which would matter if the final component could
+                # still be one -- it cannot: the O_NOFOLLOW write above has
+                # just succeeded on this path, which proves it is not a link.
+                # Left as-is deliberately, and said here so the next reviewer
+                # does not file it again.
                 if output_path.suffix == ".sh":
                     output_path.chmod(
                         output_path.stat().st_mode
@@ -2427,22 +2731,14 @@ def _remove_entries(
 
         unresolved = pkg_path / entry
         try:
-            parent_resolved = unresolved.parent.resolve()
-        except OSError as error:
-            problems.append(
-                f"Package {package_id}: manifest entry {entry!r} could not "
-                f"be resolved: {error} -- refusing to touch it"
+            # stn-h5q: the same helper `gen`'s write-side check calls, so
+            # the two sides cannot drift. The messages below used to be
+            # spelled here; they now come from that one function.
+            parent_resolved = contained_entry_parent(
+                package_id, "manifest entry", entry, unresolved, root, pkg_path
             )
-            continue
-        if not (
-            parent_resolved.is_relative_to(root)
-            and parent_resolved.is_relative_to(pkg_path)
-        ):
-            problems.append(
-                f"Package {package_id}: manifest entry {entry!r} resolves "
-                f"to {parent_resolved}, outside the package directory "
-                f"{pkg_path} -- refusing to touch it"
-            )
+        except ValueError as error:
+            problems.append(str(error))
             continue
 
         # Rebuilt on `parent_resolved`, NEVER on `unresolved.parent`. The
