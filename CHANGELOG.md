@@ -9,6 +9,66 @@ and the closed epics in `.beads/issues.jsonl` are the readable index.
 How the version gets bumped is written down in
 [AGENTS.md](AGENTS.md#cutting-a-release), not here.
 
+## 0.39.0
+
+- **The container tier now runs in parallel** (`stn-vda`). CI's integration job
+  ran a single `pytest -v`; it now runs `pytest -v -n auto --dist loadfile`.
+  `loadfile`, not xdist's default `load`: nine test files carry module- or
+  file-scoped fixtures that each pay one container run to answer many
+  assertions, and AGENTS.md now carries the full list and the reasoning.
+
+  **Measured**, per container test on this branch against the pinned
+  `pandoc/core:3.10.0.0` image: 0.30s docker-run container start and 0.56s
+  pandoc, a 35%/65% split. `stencil gen` (`make_package`) is 0.031s;
+  `install_fixtures` is 0.001s. The 0.56s decomposes by flag, cumulatively:
+  pandoc's own process startup is 4ms; `--standalone` against pandoc's own
+  template is 16ms; `--standalone --template=html-template.html` is 559ms;
+  adding all six lua filters brings it to 565ms; adding `--citeproc` brings it
+  to 579ms. The entire per-render cost is pandoc parsing the generated
+  `html-template.html` — 5.3MB, almost all of it the inlined
+  Bootstrap/highlight.js/Mermaid/webfont payload. The six lua filters and
+  citeproc together cost about 20ms, roughly 2% of a render.
+
+  That measurement refutes two of the ticket's three proposed fixes, plainly,
+  so neither needs re-proposing from scratch. Widening fixture scope targets
+  `stencil gen` at 31ms of an 870ms test — about 3.5% of the tier — while
+  introducing shared mutable package directories across fifteen test files.
+  Batching `test_dates.py`'s 102 builds into one container saves only the
+  container starts (102 × 0.30s ≈ 31s), because each of the 102 still parses
+  the same 5.3MB template, while turning a spreadable file into a serialized
+  57s critical path.
+
+  The single biggest cut available — generating test packages against a
+  slimmed asset set, which is 65% of every container test — is not taken.
+  `tests/test_assets.py`, `tests/test_fonts.py` and `tests/test_pins.py`
+  assert on exactly that inlined payload; a lean variant would mean the
+  container tier stops testing the artifact stencil actually ships.
+
+  Locally, the fast tier went from 18.18s serial to 5.24s under `-n auto --dist loadfile` — 553 tests, same assertions. For the container tier, the
+  number that matters is CI wall clock: CI run 34678996838 on `8e17d65`
+  measured the `pytest -v` step at 565s inside a 9m42s job. Under `-n auto --dist loadfile`, the same step measured TKTK.
+
+  No assertion was deleted, weakened, skipped or merged, and the compose gate
+  from #86 is untouched.
+
+- **The shared-basetemp guard now actually fires** (`stn-6fs`). It never did.
+  `pytest_configure` wrote `.pytest-run-owner` into the basetemp, and pytest's
+  own `TempPathFactory.getbasetemp()` `rmtree()`s that directory on first use
+  and recreates it — so a run deleted its own marker the moment any test
+  asked for `tmp_path`, and the window in which the guard could fire was
+  milliseconds. Dead, not racy: two concurrent runs on one `--basetemp` both
+  passed.
+
+  The test that was supposed to prove otherwise hand-writes the marker into a
+  directory no pytest ever rotates, so it proved the marker is **read** while
+  saying nothing about whether it is ever there to read.
+
+  The fix claims the basetemp twice: the check stays in `pytest_configure`
+  (refusing after the rotation would destroy the run being protected), and the
+  write is repeated in `pytest_sessionstart`, after touching `getbasetemp()`
+  to force the rotation while the run is still starting. Proven by two real
+  pytest runs overlapping in time, the first already past a `tmp_path`.
+
 ## 0.38.0
 
 - **Two test runs at once no longer corrupt each other** (`stn-zim`). The

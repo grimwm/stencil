@@ -215,6 +215,48 @@ fixtures, and it is `stn-vda`. Concurrency is a third thing again: two runs
 sharing a `--basetemp`, or the one fixed browser image tag, corrupt each other
 (`stn-zim`).
 
+### The container tier runs in parallel with `-n auto --dist loadfile` (`stn-vda`)
+
+`pytest -n auto --dist loadfile` is the local fast path for the container
+tier — the same flags CI's integration job uses. `loadfile`,
+not xdist's default `load`: nine test files carry module- or file-scoped
+fixtures that each pay one container run to answer many assertions —
+`accessibility` in `test_check_access.py` at 44s, `installed` in
+`test_pins.py`, and the module-scoped fixtures in `test_pdf_ua`, `test_pdf`,
+`test_columns`, `test_painted_gaps` and `test_download`. Under `load`, a
+file's tests scatter across workers and each worker rebuilds that fixture —
+up to four times. A regression dressed as parallelism.
+
+The flag lives on the CI step, not in `[tool.pytest.ini_options]` addopts. In
+addopts it would change what plain `pytest` does for every contributor and
+break `-x` and `--pdb` by default, and a contributor who wants the speed can
+pass the two flags. Not, note, because the fast tier has nothing to gain: it
+goes from 18.18s to 5.24s under the same flags, which is a better ratio than
+the container tier manages. Being wrong about that is the reason it is written
+down — the argument for keeping the default serial is about `-x`, `--pdb` and
+a predictable plain `pytest`, and it does not need a speed claim that is
+false. The standing risk of a CI-only flag — a code path exercised
+only in CI can silently stop working, the same failure this file already
+records for the pre-push hook — is answered by `tests/test_parallel_harness.py`,
+which pins the two harness behaviours this depends on in the fast tier, not by
+trusting the job to notice.
+
+Two of `stn-vda`'s three proposed fixes were measured and not taken, recorded
+here so the question does not get re-litigated from scratch. Widening fixture
+scope targets `stencil gen` at 31ms of an 870ms test — about 3.5% of the tier
+— while introducing shared mutable package directories across fifteen test
+files. Batching `test_dates.py`'s 102 builds into one container saves only the
+container starts (102 × 0.30s ≈ 31s), because each of the 102 still parses
+the same 5.3MB template, while turning a spreadable file into a serialized
+57s critical path. CHANGELOG.md's 0.39.0 entry carries the full per-container
+breakdown these numbers come from.
+
+One practical warning worth its line: a pytest run spawned as a subprocess
+from inside the suite must not inherit `$PYTEST_XDIST_WORKER`, or it announces
+itself as its own parent's worker and exempts itself from the basetemp guard.
+`conftest.inner_pytest_env()` is what strips it. Four guard tests
+failed this way the first time the fast tier ran in parallel.
+
 ## Architecture Overview
 
 **stencil is a scaffolding generator, not a renderer.** It never invokes pandoc.
