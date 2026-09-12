@@ -205,6 +205,17 @@ Two more cases fall out of the same design and are not bugs:
   directory from reaching outside the output tree — so those artifacts are
   never in scope. That is a deliberate limit of what `clean` will touch, not a
   gap in the manifest.
+- **Packages sharing one `dir` share one manifest, and one blast radius.**
+  There is a single `.stencil-manifest.json` in that directory and `gen`
+  rewrites it, so it names whichever package generated last. `clean` unions it
+  with the config-derived entries of every other package configured with that
+  directory, so nothing is left behind — but the consequence is that
+  `stencil clean alpha` removes what `beta` generated there too, because a
+  manifest naming `beta` cannot be removed without removing what it names.
+  Give two packages the same `dir` only when cleaning one should clean both.
+  If the config *also* does not parse, the member the manifest does not name
+  cannot be derived from anywhere: it is reported by name and `clean` exits
+  non-zero, having removed only what the manifest listed.
 
 You can create custom templates for any project type. Templates are Jinja2 files (`.j2` suffix)
 that have access to the package context variables.

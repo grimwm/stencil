@@ -171,8 +171,26 @@ def brand_image_path(value: str | None) -> str | None:
 # something other than naming a file -- a space splitting one argument into
 # two, a `;` running a second command, a `..` escaping the package.
 #
-# Globs stay: * ? [ ] are the point of an outputs pattern.
+# Globs stay: * ? [ ] are the point of a `package_sources` pattern, which is
+# documented and used (`md/*.md`). That is why this regex was NOT widened to
+# cover them when the glob vocabulary below was tightened -- widening it here
+# would refuse a working feature to close a manifest-entry hole that
+# `check_glob_vocabulary` already closes at the only place an entry is
+# expanded. `check_no_glob` is the narrow, opt-in refusal for the config keys
+# where a pattern is meaningless instead.
 _UNSAFE_IN_PATH = re.compile(r"[$`;|&<>\\\n]")
+
+# Every character `Path.glob` gives a meaning other than "itself". Used two
+# ways: `check_no_glob` refuses the whole class in a config value that names
+# ONE file, and `check_glob_vocabulary` bounds where it may appear in a
+# manifest entry.
+_GLOB_IN_PATH = re.compile(r"[*?\[\]]")
+
+# The ONLY shape a manifest entry's final component may have once it carries
+# a metacharacter at all: a non-empty literal prefix, exactly one '*', and
+# no '?' or bracket anywhere. This is what `package_entries` emits --
+# `Guide*.html`, `Guide*.pdf` -- and nothing else.
+_GLOB_SHAPE = re.compile(r"[^*?\[\]]+\*[^*?\[\]]*")
 
 # The C0 controls and DEL, checked LAST so the two more specific messages keep
 # the characters they already explain: `\n` stays a Make metacharacter and a
@@ -267,6 +285,33 @@ def check_config_path(package_id: str, where: str, value) -> str:
     return text
 
 
+def check_no_glob(package_id: str, where: str, value: str) -> str:
+    """Refuse a glob metacharacter in a config value that names ONE file.
+
+    The other half of `check_glob_vocabulary` (below), and the reason it is
+    a separate function rather than a widening of `_UNSAFE_IN_PATH`: a
+    config value is where a metacharacter gets INTO a manifest entry in the
+    first place. `docs: ["[!z].md"]` produced the entry `[!z]*.html`, which
+    the vocabulary check now refuses -- so the package became permanently
+    un-cleanable, and the complaint pointed at a "manifest entry" the author
+    never wrote.
+
+    Applied to `docs` and `slides` only. They are the two keys whose values
+    `package_entries` splices into a glob of its own making
+    (`<stem>*.html`), so an author metacharacter compounds with stencil's.
+    `package_sources` deliberately keeps its globs -- `md/*.md` is
+    documented and in use -- which is the whole reason this is opt-in.
+    """
+    if _GLOB_IN_PATH.search(value):
+        raise ValueError(
+            f"Package {package_id}: {where} {value!r} contains a glob "
+            "metacharacter (one of * ? [ ]). This names one file, not a "
+            "pattern -- `clean` would have to expand it back out of the "
+            "manifest, and would refuse to."
+        )
+    return value
+
+
 def check_glob_vocabulary(package_id: str, where: str, entry: str) -> None:
     """Bound what a manifest entry's glob may look like (stn-2x4.6,
     adversarial CRITICAL 2).
@@ -288,22 +333,41 @@ def check_glob_vocabulary(package_id: str, where: str, entry: str) -> None:
     it. ``'**'``, a bare ``'*'``, and ``'*'`` in a non-final component such
     as ``'dir/*'`` are all refused by name -- none of them is a shape
     `get_generated_files` produces, so nothing legitimate is lost.
+
+    THE LITERAL IS VALIDATED, NOT THE POSITION OF A ``'*'``. The first
+    version of this function reasoned about ``'*'`` alone, and ``'?'`` and
+    ``'['``/``']'`` are metacharacters ``Path.glob`` honours just as
+    happily -- none of them is in ``_UNSAFE_IN_PATH`` either. Measured:
+    ``'?*'``, ``'[!z]*'``, ``'[a-z]*'`` and ``'sub/?*'`` all passed BOTH
+    checks, and ``'?*'`` is a bare ``'*'`` wearing a hat -- worse, because
+    ``Path.glob`` matches dotfiles where ``glob.glob`` does not, so it also
+    sweeps up ``.stencil-manifest.json`` itself. Reproduced end to end: a
+    manifest carrying ``["?*", "sub/?*"]`` removed the author's own
+    ``thesis.md``, ``research.bib`` and ``sub/keep.md``, and exited 0.
+
+    There is deliberately no ``if '*' not in entry: return`` fast path --
+    that is exactly what let ``'Makefil?'`` through. An entry with no
+    metacharacter at all is the common case and is answered by the
+    ``_GLOB_IN_PATH.search(final)`` test below, on the literal rather than
+    on one character of it.
     """
-    if "*" not in entry:
-        return
     parts = entry.split("/")
-    if any("*" in part for part in parts[:-1]):
+    if any(_GLOB_IN_PATH.search(part) for part in parts[:-1]):
         raise ValueError(
-            f"Package {package_id}: {where} {entry!r} has '*' outside its "
-            "final path component. A glob may only vary the last component "
-            "of a path."
+            f"Package {package_id}: {where} {entry!r} has a glob "
+            "metacharacter (one of * ? [ ]) outside its final path "
+            "component. A glob may only vary the last component of a path."
         )
     final = parts[-1]
-    if final.count("*") != 1 or final.startswith("*"):
+    if not _GLOB_IN_PATH.search(final):
+        # An ordinary literal filename. Nothing to bound.
+        return
+    if not _GLOB_SHAPE.fullmatch(final):
         raise ValueError(
             f"Package {package_id}: {where} {entry!r} is not a recognized "
             "glob shape. Only '<literal-prefix>*<literal-suffix>', in the "
-            "final path component, is allowed -- never '**' or a bare '*'."
+            "final path component, is allowed -- never '**', a bare '*', a "
+            "'?' or a [character class]."
         )
 
 
@@ -391,13 +455,15 @@ def get_template_context(package_id: str, config: dict) -> dict:
     # recipe that /bin/sh parses. A space in a filename silently becomes two
     # arguments and builds the wrong thing.
     docs = [
-        check_config_path(package_id, "docs", d) for d in package.get("docs", [])
+        check_no_glob(package_id, "docs", check_config_path(package_id, "docs", d))
+        for d in package.get("docs", [])
     ]
 
     # slides list: markdown rendered as a slide deck instead of a flowing document.
     # Same pipeline, different pandoc template plus the slide-sections filter.
     slides = [
-        check_config_path(package_id, "slides", d) for d in package.get("slides", [])
+        check_no_glob(package_id, "slides", check_config_path(package_id, "slides", d))
+        for d in package.get("slides", [])
     ]
 
     both = sorted(set(docs) & set(slides))
@@ -2048,12 +2114,30 @@ def _remove_entries(
             )
             continue
 
+        # Rebuilt on `parent_resolved`, NEVER on `unresolved.parent`. The
+        # parent is the half that was just containment-checked, so every
+        # path that leaves here has a real, checked directory above it --
+        # which is what makes `_remove_empty_parent_dirs`' `relative_to`
+        # guards containment checks rather than lexical tests on a string.
+        #
+        # Measured before this: an intermediate directory that is a SYMLINK
+        # pointing inside the package left `unresolved.parent` naming the
+        # link, the sweep called `rmdir` on it, and `clean` ended in
+        # NotADirectoryError -- a bare traceback AFTER the unlink, which is
+        # the shape `_main`'s clean branch says in a comment that it refuses
+        # to create.
+        #
+        # The FINAL component stays unresolved (it is joined on as a plain
+        # name), so `unlink()` still removes a symlinked file rather than
+        # its target -- see this docstring's third point, and
+        # test_removing_a_generated_symlink_removes_the_link_not_its_target.
         name = Path(entry).name
         if "*" in name:
-            for p in unresolved.parent.glob(name):
-                paths_with_depth.append((len(p.parts), p))
+            for match in parent_resolved.glob(name):
+                paths_with_depth.append((len(match.parts), match))
         else:
-            paths_with_depth.append((len(unresolved.parts), unresolved))
+            resolved_join = parent_resolved / name
+            paths_with_depth.append((len(resolved_join.parts), resolved_join))
 
     paths_with_depth.sort(key=lambda x: -x[0])
 
@@ -2065,19 +2149,36 @@ def _remove_entries(
             if dry_run:
                 print(f"Would remove {path}")
             else:
-                # Unlinks the UNRESOLVED path -- see the docstring above.
-                # unlink() removes the directory entry itself and never
-                # follows a final-component symlink, so this is correct
-                # for an ordinary symlink living inside the package even
-                # though `path.is_file()` above followed it to check type.
-                path.unlink()
+                # The final component is unresolved -- see the docstring
+                # above. unlink() removes the directory entry itself and
+                # never follows a final-component symlink, so this is
+                # correct for an ordinary symlink living inside the package
+                # even though `path.is_file()` above followed it to check
+                # type.
+                try:
+                    path.unlink()
+                except OSError as error:
+                    # A named failure, never a traceback mid-delete: a
+                    # read-only parent directory, a file removed by
+                    # something else between the check and here, a
+                    # filesystem going away. The rest of the package is
+                    # still processed, exactly as a refused entry is.
+                    problems.append(
+                        f"Package {package_id}: {str(path)!r} could not be "
+                        f"removed: {error}"
+                    )
+                    continue
                 print(f"Removed {path}")
             removed.append(path)
     return removed
 
 
 def _remove_empty_parent_dirs(
-    root: Path, pkg_path: Path, removed_paths: list[Path], dry_run: bool
+    root: Path,
+    pkg_path: Path,
+    removed_paths: list[Path],
+    dry_run: bool,
+    problems: list[str],
 ) -> None:
     """Remove now-empty directories (e.g. .vscode, scripts/) left behind
     under one package directory -- never the package directory itself.
@@ -2092,6 +2193,11 @@ def _remove_empty_parent_dirs(
     permissive, because a directory can sit under `root` (inside
     `output_dir`) while still being a SIBLING of `pkg_path` rather than
     nested inside it -- exactly the escape that test pins.
+
+    Every directory reaching here is `_remove_entries`' `parent_resolved`
+    (or a resolved glob match's parent), so the two guards are containment
+    checks on a real directory rather than lexical tests on a path that
+    might still have a symlink in it.
     """
     parent_dirs = {p.parent for p in removed_paths}
     candidate_dirs = []
@@ -2119,29 +2225,116 @@ def _remove_empty_parent_dirs(
                 print(f"Would skip non-empty directory (leave as-is): {d}")
         else:
             if is_empty:
-                d.rmdir()
+                try:
+                    d.rmdir()
+                except OSError as error:
+                    # Same rule as the unlink above: an emptied directory
+                    # whose parent is not writable is a named failure, not a
+                    # traceback landing after the files underneath it are
+                    # already gone.
+                    problems.append(
+                        f"directory {str(d)!r} could not be removed: {error}"
+                    )
+                    continue
                 print(f"Removed directory {d}")
             else:
                 print(f"Skipped non-empty directory (leave as-is): {d}")
 
 
-def _remove_path(path: Path, dry_run: bool) -> None:
+def _remove_path(path: Path, dry_run: bool, problems: list[str]) -> None:
     """Unlink a single file (the manifest), the same way _remove_entries
     reports an ordinary entry -- kept separate so the manifest is always the
-    LAST thing printed and removed for its package."""
+    LAST thing printed and removed for its package. Guarded the same way
+    too: a manifest that cannot be unlinked is a named problem, never a
+    traceback after every file it named is already gone."""
     if not path.exists():
         return
     if dry_run:
         print(f"Would remove {path}")
-    else:
+        return
+    try:
         path.unlink()
-        print(f"Removed {path}")
+    except OSError as error:
+        problems.append(f"manifest {str(path)!r} could not be removed: {error}")
+        return
+    print(f"Removed {path}")
+
+
+def _config_template_defs(
+    config: dict, who: str, problems: list[str]
+) -> list[dict]:
+    """The config's `templates:` list, shape-guarded, for the config-derived
+    removal list.
+
+    `package_contexts` inspects `templates` only when it is a list and skips
+    any member that is not a mapping, so `templates: ["Makefile.j2"]` --
+    strings rather than mappings -- passes validation outright and then
+    reaches `tdef.get(...)` here as a `str`. Measured on this branch: the
+    first package's files were deleted from its manifest and the SECOND
+    group raised AttributeError, so the command tracebacked after a partial
+    delete. (On the predecessor the whole list was computed before the first
+    unlink, so the same config failed harmlessly.)
+
+    A dropped member is a NAMED problem rather than a silent filter: the
+    files those templates render to cannot be identified, so `clean` is
+    knowingly leaving them behind and has to say so.
+    """
+    declared = config.get("templates", [])
+    if not isinstance(declared, list):
+        problems.append(
+            f"Package(s) {who}: 'templates' must be a list of template "
+            f"definitions, not {type(declared).__name__} -- the files it "
+            "renders cannot be named, so none of them was removed"
+        )
+        return []
+    kept = [tdef for tdef in declared if isinstance(tdef, dict)]
+    dropped = len(declared) - len(kept)
+    if dropped:
+        problems.append(
+            f"Package(s) {who}: {dropped} entr"
+            f"{'y' if dropped == 1 else 'ies'} under 'templates' "
+            f"{'is' if dropped == 1 else 'are'} not a mapping with a `src:` "
+            "-- the file(s) they render to could not be named, so they were "
+            "not removed"
+        )
+    return kept
+
+
+def _config_derived_entries(
+    pids: list[str], config: dict, problems: list[str]
+) -> set[str]:
+    """`package_entries` for each of `pids`, unioned -- the same union
+    `get_generated_files` has always produced for packages sharing a `dir`
+    (a set, deduplicated), computed directly here instead of via a second
+    full-config sweep.
+
+    Every failure is a named problem rather than an exception, because this
+    runs INSIDE `clean`, interleaved with the deleting. See
+    `_config_template_defs` for the shape this exists to survive.
+    """
+    who = ", ".join(sorted(pids))
+    config_templates = _config_template_defs(config, who, problems)
+    entries: set[str] = set()
+    for pid in pids:
+        try:
+            context = get_template_context(pid, config)
+            entries |= package_entries(
+                pid, config["packages"][pid], context, config_templates
+            )
+        except (ValueError, TypeError, AttributeError, KeyError) as error:
+            problems.append(
+                f"Package {pid}: its removal list could not be derived from "
+                f"the config ({type(error).__name__}: {error}) -- nothing "
+                "was removed for it"
+            )
+    return entries
 
 
 def _clean_one_directory(
     root: Path,
     pkg_path: Path,
     members: list[str],
+    all_members: list[str],
     config: dict,
     config_readable: bool,
     dry_run: bool,
@@ -2157,9 +2350,23 @@ def _clean_one_directory(
 
     `root` is the resolved output base, threaded through to `_remove_entries`
     and `_remove_empty_parent_dirs` -- see their docstrings.
+
+    `members` is the SELECTION at this directory (what the command line
+    asked for); `all_members` is every package in `config['packages']`
+    configured with it. The two are different and both are needed:
+
+    - The manifest's `package` field is checked against `all_members`.
+      Checked against the selection instead, `stencil clean alpha` on a
+      directory shared with `beta` was refused EVERY time -- the manifest
+      names whichever package `gen` wrote last, so a one-package selection
+      could never match it, and no user action cleared it. `clean --all`
+      worked; `clean alpha` could not, ever.
+    - The entries actually removed come from the selection, unioned into
+      the manifest (below).
     """
     manifest_path = pkg_path / MANIFEST_NAME
     member_set = set(members)
+    full_member_set = set(all_members) | member_set
     representative_id = sorted(member_set)[0]
 
     if manifest_path.is_file():
@@ -2174,21 +2381,47 @@ def _clean_one_directory(
             return
 
         manifest_pkg = manifest.get("package")
-        if isinstance(manifest_pkg, str) and manifest_pkg not in member_set:
+        if isinstance(manifest_pkg, str) and manifest_pkg not in full_member_set:
             problems.append(
                 f"manifest {manifest_path} names package {manifest_pkg!r}, "
                 "which is not among the package(s) configured with this "
-                f"directory ({', '.join(sorted(member_set))}); refusing to "
-                "use it"
+                f"directory ({', '.join(sorted(full_member_set))}); refusing "
+                "to use it"
             )
             return
 
         entries = set(manifest["entries"])
         entry_problems: list[str] = []
+
+        # THE MANIFEST NAMES ONE PACKAGE; A DIRECTORY MAY HOLD SEVERAL.
+        # `generate_package` unlinks the existing manifest and writes only
+        # `package_entries(package_id)`, so after `gen --all` a shared
+        # directory carries a manifest naming whichever package ran LAST.
+        # Driving the whole group from it left the other package's
+        # artifacts named by nothing: measured, `alpha.zip` survived
+        # `clean --all`, which exited 0 and said nothing -- a manifest
+        # making `clean` LESS thorough than the config-derived predecessor,
+        # which is the opposite of what stn-p9a is for.
+        unnamed = [pid for pid in sorted(member_set) if pid != manifest_pkg]
+        if unnamed:
+            if config_readable:
+                entries |= _config_derived_entries(unnamed, config, entry_problems)
+            else:
+                # Nothing can name these files: not the manifest, which is
+                # another package's, and not the config, which does not
+                # parse. Named and non-zero, never silently dropped.
+                for pid in unnamed:
+                    entry_problems.append(
+                        f"Package {pid}: the manifest at {manifest_path} "
+                        f"names package {manifest_pkg!r}, and the config "
+                        "could not be read -- nothing was cleaned for it. "
+                        "Fix the config and run `clean` again."
+                    )
+
         removed = _remove_entries(
             representative_id, root, pkg_path, entries, dry_run, entry_problems
         )
-        _remove_empty_parent_dirs(root, pkg_path, removed, dry_run)
+        _remove_empty_parent_dirs(root, pkg_path, removed, dry_run, entry_problems)
         if entry_problems:
             # stn-2x4.6, review finding A10
             # (test_manifest_survives_a_partial_clean): the manifest is NOT
@@ -2201,7 +2434,7 @@ def _clean_one_directory(
             return
         # Last of all -- stn-2x4's whole point: a clean that fails partway
         # still has a manifest on disk naming what is left to resume from.
-        _remove_path(manifest_path, dry_run)
+        _remove_path(manifest_path, dry_run, problems)
         return
 
     if manifest_path.exists():
@@ -2240,22 +2473,14 @@ def _clean_one_directory(
             )
         return
 
-    # Config-derived fallback, unioned across every package sharing this
-    # directory -- the same union get_generated_files has always produced
-    # for a shared dir (a set, deduplicated), computed directly here instead
-    # of via a second full-config sweep.
-    entries = set()
-    config_templates = list(config.get("templates", []))
-    for pid in members:
-        context = get_template_context(pid, config)
-        entries |= package_entries(
-            pid, config["packages"][pid], context, config_templates
-        )
-    entry_problems = []
+    # Config-derived fallback, unioned across every selected package
+    # sharing this directory.
+    entry_problems: list[str] = []
+    entries = _config_derived_entries(sorted(member_set), config, entry_problems)
     removed = _remove_entries(
         representative_id, root, pkg_path, entries, dry_run, entry_problems
     )
-    _remove_empty_parent_dirs(root, pkg_path, removed, dry_run)
+    _remove_empty_parent_dirs(root, pkg_path, removed, dry_run, entry_problems)
     problems.extend(entry_problems)
 
 
@@ -2323,9 +2548,30 @@ def clean_generated(
     for pid, pkg_path in package_dirs.items():
         groups.setdefault(pkg_path, []).append(pid)
 
+    # Every package configured with each directory, regardless of what the
+    # command line selected -- which is what the manifest's `package` field
+    # has to be checked against. Enumerated over the WHOLE config (scope
+    # None) and with its problems discarded: a package outside the selection
+    # is not this command's business to report, it only has to be known
+    # about. See `_clean_one_directory` for what goes wrong without it.
+    full_groups: dict[Path, list[str]] = {}
+    discarded: list[str] = []
+    full_scope = _clean_scope(config, None, discarded) or {}
+    for pid, pkg_path in _validated_package_dirs(
+        full_scope, output_base, discarded
+    ).items():
+        full_groups.setdefault(pkg_path, []).append(pid)
+
     for pkg_path, members in groups.items():
         _clean_one_directory(
-            root, pkg_path, members, config, config_readable, dry_run, problems
+            root,
+            pkg_path,
+            members,
+            full_groups.get(pkg_path, members),
+            config,
+            config_readable,
+            dry_run,
+            problems,
         )
 
     return problems

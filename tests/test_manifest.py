@@ -51,6 +51,7 @@ from jinja2 import UndefinedError
 from stencil.generate import (
     MANIFEST_NAME,
     MANIFEST_VERSION,
+    check_glob_vocabulary,
     get_generated_files,
     package_contexts,
     package_entries,
@@ -1757,3 +1758,421 @@ def test_manifest_version_1_with_an_unknown_extra_key_is_accepted(
     assert result.returncode == 0, result.stderr
     assert not (generated / "Makefile").exists()
     assert not manifest_path.exists()
+
+
+# --- ADVERSARIAL ROUND 2: the four defects found on this branch ------------
+#
+# Every test below was reproduced by hand against this branch before it was
+# written. They are not speculative hardening; each one names a measured
+# behaviour that the committed implementation got wrong.
+
+
+# --- 1. the glob vocabulary reasoned about '*' and nothing else ------------
+
+
+@pytest.mark.parametrize(
+    "entry",
+    ["?*", "[!z]*", "[a-z]*", "sub/?*", "Makefil?", "Guide[0-9]*.html", "sub/[a-z]/x"],
+    ids=[
+        "question-star",
+        "negated-class-star",
+        "range-class-star",
+        "subdir-question-star",
+        "trailing-question",
+        "class-inside-a-legitimate-shape",
+        "class-in-a-non-final-component",
+    ],
+)
+def test_check_glob_vocabulary_refuses_every_glob_metacharacter(entry):
+    """`check_glob_vocabulary` reasoned only about '*', but `Path.glob`
+    honours '?' and '[...]' too, and none of the three is in
+    `_UNSAFE_IN_PATH`. Measured on this branch: every entry above passed
+    BOTH `check_config_path` and `check_glob_vocabulary`.
+
+    '?*' is the one that matters most -- it is a bare '*' wearing a hat,
+    and `Path.glob` (unlike `glob.glob`) matches dotfiles, so it also
+    matches `.stencil-manifest.json` itself.
+    """
+    with pytest.raises(ValueError):
+        check_glob_vocabulary("demo", "manifest entry", entry)
+
+
+def test_a_question_mark_glob_entry_does_not_sweep_the_authors_own_files(
+    tmp_path, generate_package
+):
+    """The end-to-end reproduction. A manifest carrying ['?*', 'sub/?*']
+    removed every file in the package -- the author's own `thesis.md`,
+    `research.bib` and `sub/keep.md` included -- and exited 0.
+
+    The legitimately manifested `Makefile` must still be removed: a refused
+    entry is a per-entry skip, not a whole-package refusal (the shape
+    `test_manifest_survives_a_partial_clean` already pins).
+    """
+    config = {
+        "output_dir": "out",
+        "templates": [{"src": "Makefile.j2"}],
+        "packages": {"demo": {"name": "Demo", "package_type": "none"}},
+    }
+    generated = generate_package(config)
+
+    (generated / "sub").mkdir()
+    authored = {
+        generated / "thesis.md": "the author's own source",
+        generated / "research.bib": "the author's own bibliography",
+        generated / "sub" / "keep.md": "the author's own chapter",
+    }
+    for path, text in authored.items():
+        path.write_text(text)
+
+    manifest_path = generated / MANIFEST_NAME
+    manifest = json.loads(manifest_path.read_text())
+    manifest["entries"] += ["?*", "sub/?*"]
+    manifest_path.write_text(json.dumps(manifest))
+
+    result = run_cli("clean", "demo", cwd=tmp_path)
+
+    assert result.returncode != 0, (
+        "'?*' must be refused, not expanded, so the command must fail"
+    )
+    assert "Traceback" not in result.stderr
+    for path, text in authored.items():
+        assert path.is_file() and path.read_text() == text, (
+            f"{path.name} is the author's own file and was swept up by '?*'"
+        )
+    assert not (generated / "Makefile").exists(), (
+        "Makefile is a legitimately manifested entry and should still have "
+        "been removed despite the refusal next to it"
+    )
+
+
+@pytest.mark.parametrize("key", ["docs", "slides"])
+def test_a_glob_metacharacter_in_docs_or_slides_is_refused_at_gen_time(tmp_path, key):
+    """The other half of the same defect: a config value is where a
+    metacharacter gets INTO a manifest entry. `docs: ["[!z].md"]` produced
+    the entry `[!z]*.html`, which the vocabulary check above now refuses --
+    leaving that package permanently un-cleanable, with the complaint
+    pointing at a "manifest entry" the author never wrote.
+
+    Refused where it was written instead. `package_sources` deliberately
+    keeps its globs (`md/*.md` is documented and used), which is why
+    `_UNSAFE_IN_PATH` itself is left alone.
+    """
+    write_config(
+        tmp_path,
+        {
+            "output_dir": "out",
+            "templates": [{"src": "Makefile.j2"}],
+            "packages": {"demo": {"package_type": "none", key: ["[!z].md"]}},
+        },
+    )
+
+    result = run_cli("gen", "demo", cwd=tmp_path)
+
+    assert result.returncode != 0, f"a glob in {key} must be refused"
+    assert "Traceback" not in result.stderr
+    assert key in result.stderr
+
+
+# --- 2. two packages sharing a `dir` -- clean --all lost files main removed -
+
+
+def _shared_dir_config() -> dict:
+    """Two packages on one `dir`, with DIFFERENT entry sets.
+
+    The distinct `package_name` is the whole point: the existing shared-dir
+    test uses two `package_type: none` packages with identical settings, so
+    their entry sets are equal and a manifest naming only one of them is
+    indistinguishable from a manifest naming both.
+    """
+    return {
+        "output_dir": "out",
+        "templates": [{"src": "Makefile.j2"}],
+        "packages": {
+            "alpha": {
+                "name": "Alpha",
+                "dir": "shareddir",
+                "package_type": "zip",
+                "package_name": "alpha.zip",
+            },
+            "beta": {
+                "name": "Beta",
+                "dir": "shareddir",
+                "package_type": "zip",
+                "package_name": "beta.zip",
+            },
+        },
+    }
+
+
+def test_clean_all_removes_both_shared_dir_packages_artifacts(tmp_path):
+    """`generate_package` unlinks the shared manifest and writes only its
+    own entries, so after `gen --all` the manifest names whichever package
+    ran LAST. `_clean_one_directory` then drove the whole group from that
+    manifest, and the other package's artifacts were never named.
+
+    Measured on this branch: `alpha.zip` survived `clean --all`, which
+    exited 0 and said nothing. `main` removed it. A manifest that makes
+    `clean` LESS thorough than the config-derived predecessor is the
+    opposite of what stn-p9a is for.
+    """
+    write_config(tmp_path, _shared_dir_config())
+    setup = run_cli("gen", "--all", cwd=tmp_path)
+    assert setup.returncode == 0, setup.stderr
+
+    shared = tmp_path / "out" / "shareddir"
+    (shared / "alpha.zip").write_text("alpha build output")
+    (shared / "beta.zip").write_text("beta build output")
+
+    result = run_cli("clean", "--all", cwd=tmp_path)
+
+    assert result.returncode == 0, result.stderr
+    assert not (shared / "beta.zip").exists()
+    assert not (shared / "alpha.zip").exists(), (
+        "alpha's archive was left behind because the shared manifest named "
+        "only beta -- silently, and with exit 0"
+    )
+    assert not (shared / MANIFEST_NAME).exists()
+
+
+def test_shared_dir_member_the_manifest_does_not_name_is_reported_when_the_config_is_broken(
+    tmp_path,
+):
+    """The union above is only available while the config is readable. When
+    it is not, the member the manifest does not name cannot be derived from
+    anywhere -- so it is a NAMED problem and a non-zero exit, never a silent
+    drop. The manifest survives, so the run can be resumed once the config
+    is fixed.
+    """
+    config = _shared_dir_config()
+    write_config(tmp_path, config)
+    setup = run_cli("gen", "--all", cwd=tmp_path)
+    assert setup.returncode == 0, setup.stderr
+
+    shared = tmp_path / "out" / "shareddir"
+    (shared / "alpha.zip").write_text("alpha build output")
+    (shared / "beta.zip").write_text("beta build output")
+
+    broken = copy.deepcopy(config)
+    broken["packages"]["alpha"]["show_download"] = "no"
+    write_config(tmp_path, broken)
+
+    result = run_cli("clean", "--all", cwd=tmp_path)
+
+    assert result.returncode != 0, (
+        "alpha is neither named by the manifest nor derivable from a broken "
+        "config; it cannot be reported as cleaned"
+    )
+    assert "Traceback" not in result.stderr
+    assert "alpha" in result.stderr
+    assert (shared / "alpha.zip").is_file(), "alpha's archive was not named"
+    assert not (shared / "beta.zip").exists(), (
+        "beta IS named by the manifest and should still have been cleaned"
+    )
+    assert (shared / MANIFEST_NAME).is_file(), (
+        "a run with problems leaves the manifest behind to resume from"
+    )
+
+
+# --- 3. `clean <pkg>` was permanently impossible for a shared-dir package ---
+
+
+def test_clean_of_one_package_sharing_a_dir_is_not_permanently_refused(tmp_path):
+    """`clean_generated` built its groups from the CLI SCOPE, so
+    `clean alpha` produced a member set of {alpha} and the shared manifest
+    -- which names beta -- failed the membership test every single time.
+    No user action cleared it: `clean --all` worked and `clean alpha` could
+    not, ever.
+
+    The membership test belongs against the directory's COMPLETE member set,
+    read from `config['packages']`, with the selection intersected into it
+    afterwards.
+    """
+    write_config(tmp_path, _shared_dir_config())
+    setup = run_cli("gen", "--all", cwd=tmp_path)
+    assert setup.returncode == 0, setup.stderr
+
+    shared = tmp_path / "out" / "shareddir"
+    (shared / "alpha.zip").write_text("alpha build output")
+    (shared / "beta.zip").write_text("beta build output")
+
+    result = run_cli("clean", "alpha", cwd=tmp_path)
+
+    assert result.returncode == 0, (
+        f"clean of a shared-dir package must be possible at all: "
+        f"{result.stderr}"
+    )
+    assert "refusing to use it" not in result.stderr
+    assert not (shared / "alpha.zip").exists()
+    assert not (shared / MANIFEST_NAME).exists()
+    assert not (shared / "beta.zip").exists(), (
+        "one directory is one blast radius: the shared manifest is beta's, "
+        "and removing it without removing what it names would strand beta"
+    )
+
+
+# --- 4. the sweep rmdir'd an UNRESOLVED path ------------------------------
+
+
+def test_a_symlinked_intermediate_directory_does_not_traceback_after_deleting(
+    tmp_path, generate_package
+):
+    """`_remove_entries` returned UNRESOLVED paths and the sweep called
+    `rmdir` on `{p.parent}` of each. With an intermediate directory that is
+    a symlink pointing INSIDE the package, that parent is the symlink, and
+    `rmdir` raises NotADirectoryError -- a bare traceback from the command
+    whose premise is working when everything else is broken, landing AFTER
+    the unlink.
+
+    It also means the sweep's `relative_to`/`is_relative_to` guards were
+    lexical tests on an unresolved path rather than containment checks.
+    """
+    config = {
+        "output_dir": "out",
+        "templates": [{"src": "Makefile.j2"}],
+        "packages": {"demo": {"name": "Demo", "package_type": "none"}},
+    }
+    generated = generate_package(config)
+
+    (generated / "real").mkdir()
+    (generated / "real" / "x.txt").write_text("generated")
+    os.symlink("real", generated / "sub")
+
+    manifest_path = generated / MANIFEST_NAME
+    manifest = json.loads(manifest_path.read_text())
+    manifest["entries"].append("sub/x.txt")
+    manifest_path.write_text(json.dumps(manifest))
+
+    result = run_cli("clean", "demo", cwd=tmp_path)
+
+    assert "Traceback" not in result.stderr, result.stderr
+    assert result.returncode == 0, result.stderr
+    assert not (generated / "real" / "x.txt").exists()
+    assert not manifest_path.exists()
+
+
+@pytest.mark.skipif(
+    hasattr(os, "geteuid") and os.geteuid() == 0,
+    reason="root ignores the directory permissions this test relies on",
+)
+def test_an_entry_that_cannot_be_unlinked_is_a_named_problem_not_a_traceback(
+    tmp_path, generate_package
+):
+    """`path.unlink()` ran unguarded in the middle of the removal loop, so a
+    permission error was a traceback halfway through deleting -- the exact
+    shape `_main`'s clean branch says in a comment that it refuses to
+    create.
+    """
+    config = {
+        "output_dir": "out",
+        "templates": [{"src": "Makefile.j2"}],
+        "packages": {"demo": {"name": "Demo", "package_type": "none"}},
+    }
+    generated = generate_package(config)
+
+    locked = generated / "locked"
+    locked.mkdir()
+    (locked / "x.txt").write_text("generated")
+
+    manifest_path = generated / MANIFEST_NAME
+    manifest = json.loads(manifest_path.read_text())
+    manifest["entries"] = ["locked/x.txt"]
+    manifest_path.write_text(json.dumps(manifest))
+
+    locked.chmod(0o555)
+    try:
+        result = run_cli("clean", "demo", cwd=tmp_path)
+    finally:
+        locked.chmod(0o755)
+
+    assert "Traceback" not in result.stderr, result.stderr
+    assert result.returncode != 0
+    assert "locked/x.txt" in result.stderr
+    assert (locked / "x.txt").is_file()
+    assert manifest_path.is_file(), (
+        "a refused entry leaves the manifest behind, so it is still named "
+        "next time"
+    )
+
+
+@pytest.mark.skipif(
+    hasattr(os, "geteuid") and os.geteuid() == 0,
+    reason="root ignores the directory permissions this test relies on",
+)
+def test_a_directory_that_cannot_be_rmdired_is_a_named_problem_not_a_traceback(
+    tmp_path, generate_package
+):
+    """The same guard on the sweep's own `rmdir`: an emptied directory whose
+    PARENT is not writable cannot be removed, and that is a named failure,
+    never a traceback after the files underneath it are already gone.
+    """
+    config = {
+        "output_dir": "out",
+        "templates": [{"src": "Makefile.j2"}],
+        "packages": {"demo": {"name": "Demo", "package_type": "none"}},
+    }
+    generated = generate_package(config)
+
+    (generated / "sub").mkdir()
+    (generated / "sub" / "x.txt").write_text("generated")
+
+    manifest_path = generated / MANIFEST_NAME
+    manifest = json.loads(manifest_path.read_text())
+    manifest["entries"] = ["sub/x.txt"]
+    manifest_path.write_text(json.dumps(manifest))
+
+    generated.chmod(0o555)
+    try:
+        result = run_cli("clean", "demo", cwd=tmp_path)
+    finally:
+        generated.chmod(0o755)
+
+    assert "Traceback" not in result.stderr, result.stderr
+    assert result.returncode != 0
+    assert "sub" in result.stderr
+    assert not (generated / "sub" / "x.txt").exists(), (
+        "the file itself was removable and should have been removed"
+    )
+
+
+# --- 5. a non-mapping `templates` crashed AFTER partial deletion -----------
+
+
+def test_a_non_mapping_templates_entry_is_a_named_problem_not_a_traceback(tmp_path):
+    """`package_contexts` only inspects `templates` when it is a list and
+    skips non-dict members, so `templates: ["Makefile.j2"]` -- strings, not
+    mappings -- passes validation and the config-derived fallback reaches
+    `tdef.get(...)` with a `str`.
+
+    On `main` the whole removal list was computed before the first unlink.
+    On this branch the work is interleaved per group, so the first group is
+    DELETED and the second tracebacks.
+    """
+    good = {
+        "output_dir": "out",
+        "templates": [{"src": "Makefile.j2"}],
+        "packages": {
+            "aaa": {"name": "A", "package_type": "none"},
+            "zzz": {"name": "Z", "package_type": "none"},
+        },
+    }
+    write_config(tmp_path, good)
+    setup = run_cli("gen", "--all", cwd=tmp_path)
+    assert setup.returncode == 0, setup.stderr
+
+    # aaa keeps its manifest and cleans from it; zzz must fall back to the
+    # config, which is where the crash used to land -- after aaa's files
+    # were already gone.
+    (tmp_path / "out" / "zzz" / MANIFEST_NAME).unlink()
+
+    broken = copy.deepcopy(good)
+    broken["templates"] = ["Makefile.j2"]
+    write_config(tmp_path, broken)
+
+    result = run_cli("clean", "--all", cwd=tmp_path)
+
+    assert "Traceback" not in result.stderr, result.stderr
+    assert result.returncode != 0
+    assert "templates" in result.stderr
+    assert not (tmp_path / "out" / "aaa" / "Makefile").exists(), (
+        "aaa had a manifest and should still have been cleaned"
+    )
