@@ -1382,6 +1382,8 @@ def copy_brand_image(
     config_dir: Path,
     output_dir: Path,
     dry_run: bool = False,
+    *,
+    dir_fd: int | None = None,
 ) -> None:
     """Copy a config-level brand image into the package it brands.
 
@@ -1392,6 +1394,14 @@ def copy_brand_image(
     document referring to a file they were never given. A copy per package is
     the cost of each folder standing on its own, and the copies are ignored by
     git for the same reason every other generated file is.
+
+    `dir_fd`, OPTIONAL AND KEYWORD-ONLY (stn-avv, stn-6mcb.5): a descriptor on
+    `output_dir` itself, opened by `generate_package` with
+    `_open_package_base_fd`. The copy always lands at a TOP-LEVEL name in the
+    package directory -- `Path(relative).name`, never a nested path -- so
+    writing through it needs no walk, only the base descriptor and that name.
+    `None` -- today's behaviour, unchanged -- opens the full `destination`
+    path instead.
     """
     problem = brand_problem(package, config, config_dir)
     if problem:
@@ -1427,7 +1437,14 @@ def copy_brand_image(
         # stn-h5q. The SOURCE has taken this care since stn-ttg; the
         # DESTINATION, which is the half that writes, was a bare
         # open(..., "wb") and followed a symlink straight out of the tree.
-        open_for_write_nofollow(destination) as dst,
+        # stn-avv: when `dir_fd` is given, the NAME passed alongside it must
+        # be relative to that descriptor -- `destination`'s directory
+        # portion would otherwise be resolved by path all over again,
+        # throwing away the whole point of holding `dir_fd` open.
+        open_for_write_nofollow(
+            Path(destination.name) if dir_fd is not None else destination,
+            dir_fd=dir_fd,
+        ) as dst,
     ):
         shutil.copyfileobj(src, dst)
     print(f"Copied: {destination}")
@@ -1959,6 +1976,8 @@ def write_manifest(
     pkg_dir: str,
     entries: set[str] | list[str],
     dry_run: bool = False,
+    *,
+    dir_fd: int | None = None,
 ) -> None:
     """Write ``<output_dir>/MANIFEST_NAME``, recording exactly what this
     generate_package call produced for one package.
@@ -1968,6 +1987,12 @@ def write_manifest(
     avoid. Never written under ``--dry-run``: a preview's manifest would tell
     a later, manifest-driven `clean` about files that were never actually
     produced.
+
+    `dir_fd`, OPTIONAL AND KEYWORD-ONLY (stn-avv, stn-6mcb.5): a descriptor
+    on `output_dir` itself. The manifest is always a TOP-LEVEL name in the
+    package directory, so writing through it needs no walk -- just the base
+    descriptor and `MANIFEST_NAME`. `None` -- today's behaviour, unchanged
+    -- writes through the full `manifest_path` instead.
     """
     manifest_path = output_dir / MANIFEST_NAME
     if dry_run:
@@ -1981,9 +2006,11 @@ def write_manifest(
         "dir": pkg_dir,
         "entries": sorted(entries),
     }
-    write_text_nofollow(
-        manifest_path, json.dumps(document, sort_keys=True, indent=2) + "\n"
-    )
+    text = json.dumps(document, sort_keys=True, indent=2) + "\n"
+    if dir_fd is not None:
+        write_text_nofollow(Path(MANIFEST_NAME), text, dir_fd=dir_fd)
+    else:
+        write_text_nofollow(manifest_path, text)
     print(f"Generated: {manifest_path}")
 
 
@@ -2791,6 +2818,105 @@ def write_text_nofollow(
             )
 
 
+def _open_package_base_fd(output_base: Path, package_dir: str, package_id: str) -> int:
+    """Open a descriptor on the package directory itself -- creating it, and
+    every intermediate component below `output_base`, purely by descriptor
+    (stn-avv, architecture-review finding 1).
+
+    THE ONE PATH-BASED OPEN LEFT, STATED RATHER THAN IMPLIED AWAY. A single
+    `os.open(output_base, O_RDONLY|O_DIRECTORY|O_NOFOLLOW)` anchors the walk;
+    everything BELOW it is then descended by descriptor with `walk_dir_fd`,
+    so a symlink swapped in at any component of `package_dir` is refused the
+    same way an intermediate component below the package directory already
+    is (`render_templates`). What this does NOT close: `output_base` itself
+    -- the user's declared output root -- and every one of ITS OWN ancestors
+    are still resolved by the kernel's ordinary path lookup at the moment of
+    this one call. There is no descriptor to start a walk from further up,
+    because `output_base` IS the start. A component ABOVE it swapped for a
+    symlink between `checked_output_base`'s one-time resolve (at the start
+    of a whole `gen --all` run) and this call is not caught -- the stated
+    residual (STENCIL.md), not an oversight: closing it would mean walking
+    from the filesystem root on every single package, which nothing in this
+    repository's threat model asks for. The declared output root is the
+    user's own boundary, the same way `checked_output_base` already trusts
+    `config_dir`.
+
+    `package_dir` MAY BE MULTI-COMPONENT -- `check_package_dir` allows a
+    `dir: a/b` -- so this walks it exactly like any other nested
+    destination. A single `os.open` on the whole joined path would protect
+    only its LAST component and leave every one above it open to the same
+    swap `walk_dir_fd` exists to refuse.
+
+    THE FINAL OPEN DELIBERATELY DROPS `O_NOFOLLOW`, unlike every other open
+    in this walk -- see the comment at that call for why: the package
+    directory's own name is the one component in this file `contained_path`
+    has always permitted to be a symlink, so long as it resolves back under
+    `output_base`. `os.mkdir` over an existing symlink still raises
+    `FileExistsError`, indistinguishable from "the directory is already
+    there", exactly like `walk_dir_fd`'s own intermediate-component trap --
+    caught and ignored below for the same reason: the open that follows is
+    what actually decides whether `final_name` leads somewhere usable.
+
+    Raises `ValueError` naming `package_id`, in the same family as
+    `checked_write_target`'s messages, on any refusal from the walk or the
+    final open. The returned fd is the caller's to close.
+    """
+    # `output_base` need not exist yet -- `checked_output_base` resolves it
+    # LEXICALLY, so a first `gen` on a fresh project reaches here with
+    # nothing on disk at all. `output_dir.mkdir(parents=True)` used to be
+    # what created it (and every one of ITS ancestors) as a side effect;
+    # this is the same path-based creation, moved here so the descriptor
+    # open immediately below has something to open. It is part of the
+    # residual this function's docstring already names -- `output_base`
+    # and its ancestors are resolved by path regardless -- not a new one.
+    output_base.mkdir(parents=True, exist_ok=True)
+    output_base_fd = os.open(
+        output_base, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+    )
+    try:
+        parent_fd, final_name = walk_dir_fd(output_base_fd, package_dir)
+    finally:
+        os.close(output_base_fd)
+
+    try:
+        try:
+            os.mkdir(final_name, dir_fd=parent_fd)
+        except FileExistsError:
+            # Proves nothing by itself -- see the docstring, and
+            # walk_dir_fd's own identical trap for an INTERMEDIATE
+            # component. Here at the FINAL component it is not even a
+            # trap: see the NO O_NOFOLLOW note below for why this one
+            # case is deliberately allowed to be a symlink.
+            pass
+        try:
+            # NO O_NOFOLLOW HERE, UNLIKE EVERY OTHER OPEN IN THIS WALK, AND
+            # DELIBERATELY. `contained_path` (stn-vhr) already resolved
+            # `output_dir` and confirmed it stays under `output_base`
+            # BEFORE this function was ever called -- and that check has
+            # always permitted the package directory itself to be a
+            # symlink, e.g. a stable alias for a package that moved
+            # (`test_a_package_dir_symlinked_inside_the_output_tree_still_generates`).
+            # `walk_dir_fd`'s O_NOFOLLOW discipline is for a component that
+            # is NOT supposed to be a link at all; the package directory's
+            # own name is the one component in this whole file that is. An
+            # intermediate component of a MULTI-part `package_dir` (`dir:
+            # a/b`) gets no such exemption -- `walk_dir_fd`, above, already
+            # refused a symlink there before reaching this line.
+            return os.open(
+                final_name,
+                os.O_RDONLY | os.O_DIRECTORY,
+                dir_fd=parent_fd,
+            )
+        except OSError as error:
+            raise ValueError(
+                f"Package {package_id}: package directory {package_dir!r} "
+                f"could not be opened at {final_name!r} ({error.strerror}) "
+                "-- refusing to write into it"
+            ) from error
+    finally:
+        os.close(parent_fd)
+
+
 def generate_package(
     env: Environment,
     config: dict,
@@ -2840,54 +2966,114 @@ def generate_package(
             package_id, where, output_base, pkg_resolved, relative
         )
 
-    if not output_dir.exists():
-        if dry_run:
-            print(f"Would create directory: {output_dir}")
-        else:
-            output_dir.mkdir(parents=True)
-            print(f"Created directory: {output_dir}")
+    existed_before = output_dir.exists()
+    if not existed_before and dry_run:
+        print(f"Would create directory: {output_dir}")
 
-    # Before the first render, and never a stale manifest left behind: a
-    # regeneration that fails partway must leave NO manifest, so a
-    # manifest-driven `clean` falls back to deriving from the config --
-    # today's behaviour exactly -- instead of trusting a list that names the
-    # old files while whatever the failed run half-wrote sits unnamed on
-    # disk.
-    manifest_path = output_dir / MANIFEST_NAME
-    if not dry_run and manifest_path.exists():
-        manifest_path.unlink()
+    # stn-avv (architecture review finding 1). The package-directory
+    # descriptor is acquired UNCONDITIONALLY here, for every non-dry-run
+    # call -- NOT only when `output_dir` does not exist yet. Regeneration
+    # over an already-generated package is the ordinary case, not the
+    # exceptional one, and it must be exactly as descriptor-protected as a
+    # first run: every write below this point goes through `base_fd` on a
+    # capable platform, whether or not this is the package's first
+    # generation. Held for the rest of the function and closed in the
+    # `finally` below, which covers every early return from here on --
+    # including the "no templates defined" refusal a few lines down -- so a
+    # malformed config cannot leak the descriptor `gen --all` would
+    # otherwise open once per package with no matching close.
+    #
+    # `_DIR_FD_CAPABLE` is the module global, read fresh here rather than
+    # captured anywhere -- the same discipline `walk_dir_fd` documents --
+    # so a test can force the fallback with
+    # `monkeypatch.setattr(generate, "_DIR_FD_CAPABLE", False)` even on a
+    # platform where it is naturally True.
+    base_fd = None
+    if not dry_run and _DIR_FD_CAPABLE:
+        base_fd = _open_package_base_fd(
+            output_base, context["package_dir"], package_id
+        )
+    try:
+        if not dry_run:
+            if base_fd is None:
+                # Windows, or any platform with no dir_fd support: today's
+                # snapshot behaviour, completely unchanged, and now the
+                # ONLY place this runs -- the capable branch above never
+                # reaches it, because `_open_package_base_fd` already
+                # created every component of `output_dir` by descriptor.
+                if not existed_before:
+                    output_dir.mkdir(parents=True)
+            if not existed_before:
+                print(f"Created directory: {output_dir}")
 
-    if not template_defs:
-        print(f"Error: No templates defined in config", file=sys.stderr)
-        return None
+        # Before the first render, and never a stale manifest left behind:
+        # a regeneration that fails partway must leave NO manifest, so a
+        # manifest-driven `clean` falls back to deriving from the config --
+        # today's behaviour exactly -- instead of trusting a list that
+        # names the old files while whatever the failed run half-wrote
+        # sits unnamed on disk.
+        manifest_path = output_dir / MANIFEST_NAME
+        if not dry_run:
+            if base_fd is not None:
+                # stn-avv (operator ruling). Routed through the SAME
+                # descriptor as every write below it, rather than the
+                # path-based `manifest_path.unlink()` this replaces --
+                # which was the one delete sitting in the middle of a
+                # function this task otherwise converts entirely to
+                # descriptors. If `output_dir` were swapped for a symlink
+                # to a victim directory after `base_fd` was opened, that
+                # path-based unlink would delete the VICTIM's manifest: a
+                # delete outside the tree, performed by the very run
+                # meant to make `gen` descriptor-safe. `os.unlink` is in
+                # `os.supports_dir_fd` on Linux and macOS, so this is
+                # available everywhere `base_fd` is. `clean`'s own
+                # resolve-then-unlink-by-path window stays OUT OF SCOPE
+                # (filed as stn-cfby) -- this closes only the write side.
+                try:
+                    os.unlink(MANIFEST_NAME, dir_fd=base_fd)
+                except FileNotFoundError:
+                    pass
+            elif manifest_path.exists():
+                manifest_path.unlink()
 
-    render_templates(env, template_defs, context, output_dir, dry_run)
+        if not template_defs:
+            print(f"Error: No templates defined in config", file=sys.stderr)
+            return None
 
-    # After the templates, so a package that fails to render does not leave a
-    # logo behind in a directory with nothing to use it.
-    if context.get("has_pages"):
-        copy_brand_image(
-            config,
-            config["packages"][package_id],
-            config_dir or output_base.parent,
-            output_dir,
-            dry_run,
+        render_templates(
+            env, template_defs, context, output_dir, dry_run, dir_fd=base_fd
         )
 
-    # Last of all, from the same derivation get_generated_files uses (see
-    # package_entries) -- so the manifest cannot name a file this call did
-    # not itself just produce.
-    write_manifest(
-        output_dir,
-        package_id,
-        context["package_dir"],
-        package_entries(
-            package_id, config["packages"][package_id], context, config_templates
-        ),
-        dry_run,
-    )
+        # After the templates, so a package that fails to render does not
+        # leave a logo behind in a directory with nothing to use it.
+        if context.get("has_pages"):
+            copy_brand_image(
+                config,
+                config["packages"][package_id],
+                config_dir or output_base.parent,
+                output_dir,
+                dry_run,
+                dir_fd=base_fd,
+            )
 
-    return output_dir
+        # Last of all, from the same derivation get_generated_files uses
+        # (see package_entries) -- so the manifest cannot name a file this
+        # call did not itself just produce.
+        write_manifest(
+            output_dir,
+            package_id,
+            context["package_dir"],
+            package_entries(
+                package_id, config["packages"][package_id], context, config_templates
+            ),
+            dry_run,
+            dir_fd=base_fd,
+        )
+
+        return output_dir
+    finally:
+        if base_fd is not None:
+            os.close(base_fd)
 
 
 def render_templates(
@@ -2896,8 +3082,26 @@ def render_templates(
     context: dict,
     output_dir: Path,
     dry_run: bool = False,
+    *,
+    dir_fd: int | None = None,
 ):
-    """Render all templates to the output directory."""
+    """Render all templates to the output directory.
+
+    `dir_fd`, OPTIONAL AND KEYWORD-ONLY (stn-avv, stn-6mcb.5): a descriptor
+    on `output_dir` itself, opened by `generate_package` with
+    `_open_package_base_fd` and held for the whole package. When given,
+    EVERY destination -- a top-level name or a nested one like
+    `.vscode/settings.json` alike -- is walked by descriptor with
+    `walk_dir_fd` and written with `dir_fd=`, rather than joined onto
+    `output_dir` and handed to `Path.mkdir`/`write_text_nofollow` as a bare
+    path. That is the fix for the gap `checked_write_target`'s docstring
+    names: a symlink swapped in at an intermediate directory between that
+    pre-pass and this write is refused here instead of followed, because
+    the object the walk opens and the object this writes through are the
+    same inode by construction. `None` -- the default, and what a platform
+    with no `dir_fd` support, or any `--dry-run` call, always passes --
+    is today's behaviour, completely unchanged.
+    """
     for template_name, output_name in template_destinations(
         template_defs, context
     ):
@@ -2912,6 +3116,24 @@ def render_templates(
                 print("-" * 40)
                 print(content)
                 print()
+            elif dir_fd is not None:
+                # stn-avv. `walk_dir_fd` creates any missing intermediate
+                # directory itself (dir_fd=), so there is nothing left for
+                # this branch to `mkdir` -- and every intermediate fd the
+                # walk opened along the way is closed by the time it
+                # returns; only the final `parent_fd` is ours to close,
+                # which the `finally` below does.
+                parent_fd, final_name = walk_dir_fd(dir_fd, output_name)
+                try:
+                    write_text_nofollow(
+                        Path(final_name),
+                        content,
+                        executable=output_path.suffix == ".sh",
+                        dir_fd=parent_fd,
+                    )
+                finally:
+                    os.close(parent_fd)
+                print(f"Generated: {output_path}")
             else:
                 # Create parent directories if needed (for nested paths like .vscode/settings.json)
                 output_path.parent.mkdir(parents=True, exist_ok=True)
