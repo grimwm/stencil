@@ -45,6 +45,50 @@ How the version gets bumped is written down in
 
 ## 0.39.0
 
+- **A stray `npm install` in a package directory can no longer decide which
+  puppeteer renders your handouts** (`stn-86y`). The generated
+  `html-to-pdf.js` runs inside the browser image but lives in the mounted
+  package directory, and it asked for its tools by bare specifier. Node
+  resolves those starting from the requiring file, so
+  `<package>/node_modules` outranked the image's pinned, lockfile-verified
+  tree at `/opt/tools` -- which was reached only through `NODE_PATH`, Node's
+  *last-resort* path.
+
+  **Measured**, in the image built from the generated `Dockerfile.browser`,
+  with a decoy planted at `<package>/node_modules`:
+
+  ```
+  puppeteer      /workspace/node_modules/puppeteer/index.js   0.0.0-decoy
+  pdf-lib        /workspace/node_modules/pdf-lib/index.js     0.0.0-decoy
+  ```
+
+  Both, not just puppeteer -- and `pdf-lib` is the one that writes the PDF/UA
+  role map and XMP metadata that `make check-pdf` exists to require, so a
+  decoy there yields a finished-looking PDF missing exactly that, with
+  nothing about the rendering looking wrong.
+
+  `html-to-pdf.js` now resolves both through `module.createRequire` rooted at
+  the image's install root, and refuses to run at all if resolution lands
+  outside it. `make check-access` was never affected by this particular
+  hijack: `pa11y` resolves its own dependencies from its own location inside
+  the tools tree, not from the working directory.
+
+  **What this does and does not close.** It closes an *incidental*
+  `node_modules` -- someone, or some tool, once ran `npm install` in the
+  package directory -- silently outranking the pinned tree. That is the real,
+  common, traceless case. It does **not** close a hostile package directory,
+  and cannot from inside one: `html-to-pdf.js` is itself in the mount, as are
+  the `Makefile`, `docker-compose.yml` and the Lua filters.
+
+  **If you have copied `html-to-pdf.js.j2` into your own `templates_dir`**,
+  you keep the old resolution and get no warning -- `StrictUndefined` cannot
+  tell you, because your copy reads none of these keys. Re-apply the change,
+  or drop your override.
+
+  **The fix reaches a package only when you run `stencil gen`.** `make pkg`
+  has no `gen` prerequisite, so an existing package keeps running the
+  `html-to-pdf.js` it was generated with.
+
 - **The container tier now runs in parallel** (`stn-vda`). CI's integration job
   ran a single `pytest -v`; it now runs `pytest -v -n auto --dist loadfile`.
   `loadfile`, not xdist's default `load`: nine test files carry module- or
