@@ -10,8 +10,10 @@ contributor without docker still gets a useful run.
 from __future__ import annotations
 
 import copy
+import hashlib
 import os
 import shutil
+import tempfile
 import time
 from pathlib import Path
 
@@ -192,6 +194,23 @@ def _pid_alive(pid: int) -> bool:
     return True
 
 
+def _claim_lock(basetemp: Path) -> FileLock:
+    """The lock that makes claiming a basetemp atomic.
+
+    It has to live OUTSIDE the basetemp, because the whole difficulty here is
+    that pytest rmtree()s that directory -- a lock file inside it would be
+    deleted by the very rotation it exists to cover. Keyed on the resolved
+    path so two runs naming the same directory differently still meet on the
+    same lock.
+
+    Held only across the two transitions below, never for the length of the
+    session. The MARKER is the long-lived claim; a lock held for a ten-minute
+    run would add nothing to it and would turn a killed run into a puzzle.
+    """
+    key = hashlib.sha256(str(basetemp.resolve()).encode()).hexdigest()[:16]
+    return FileLock(str(Path(tempfile.gettempdir()) / f".stencil-basetemp-{key}.lock"))
+
+
 def _claim_basetemp(basetemp: Path) -> None:
     """Refuse a basetemp a live pytest already owns, then claim it.
 
@@ -274,7 +293,12 @@ def pytest_configure(config):
     # to `TempPathFactory.getbasetemp()` rmtree()s the directory. A guard that
     # refused AFTER that point would have already destroyed the run it was
     # about to protect.
-    _claim_basetemp(Path(basetemp))
+    #
+    # Under the lock so that check-then-write is one step. Two runs starting
+    # together would otherwise both read an empty directory and both claim it.
+    basetemp = Path(basetemp)
+    with _claim_lock(basetemp):
+        _claim_basetemp(basetemp)
 
 
 def pytest_sessionstart(session):
@@ -304,8 +328,14 @@ def pytest_sessionstart(session):
     if not basetemp or _is_xdist_worker():
         return
 
-    session.config._tmp_path_factory.getbasetemp()
-    _claim_basetemp(Path(basetemp))
+    # Rotation and re-claim under one lock. Between the rmtree inside
+    # getbasetemp() and the marker being written again, the directory is
+    # unclaimed -- microseconds, but a second run reading in that instant
+    # would be told the basetemp was free while this one was mid-rotation.
+    basetemp = Path(basetemp)
+    with _claim_lock(basetemp):
+        session.config._tmp_path_factory.getbasetemp()
+        _claim_basetemp(basetemp)
 
 
 def pytest_collection_modifyitems(config, items):

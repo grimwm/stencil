@@ -87,6 +87,9 @@ def _inner_xdist(tmp_path: Path, basetemp: Path, workers: int = 2):
         env=_inner_env(PYTHONPATH=str(TESTS), REPORT_DIR=str(reports)),
         capture_output=True,
         text=True,
+        # An inner run that wedges must fail this test rather than hang the
+        # job until the CI timeout kills it with nothing to read.
+        timeout=300,
     )
     return result, reports
 
@@ -233,7 +236,26 @@ def _race(tmp_path: Path, mode: str, callers: int = 4):
         )
         for _ in range(callers)
     ]
-    results = [(p.wait(timeout=120), p.stdout.read()) for p in processes]
+
+    # `communicate`, not `wait` then `read`: with stdout=PIPE a child that
+    # outgrew the pipe buffer would block writing while the parent blocked
+    # waiting. The output here is two lines, so it has never happened -- which
+    # is exactly the kind of thing that starts happening the day someone adds a
+    # traceback to the child.
+    #
+    # And in a `finally`, because these are deliberately racing processes: if
+    # one times out, the others are still running, and a test that leaves four
+    # pytest-adjacent processes behind is worse than the one it was checking.
+    results = []
+    try:
+        for process in processes:
+            output, _ = process.communicate(timeout=120)
+            results.append((process.returncode, output))
+    finally:
+        for process in processes:
+            if process.poll() is None:
+                process.kill()
+                process.communicate()
     return results, log.read_text().splitlines()
 
 

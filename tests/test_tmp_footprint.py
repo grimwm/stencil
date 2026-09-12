@@ -473,3 +473,70 @@ def test_a_live_run_is_refused_by_a_second_one_that_actually_overlaps(tmp_path):
         except subprocess.TimeoutExpired:
             process.kill()
             process.wait()
+
+
+RACER = '''
+import time
+
+
+def test_holds_briefly(tmp_path):
+    (tmp_path / "touched").write_text("x")
+    time.sleep(1.5)
+'''
+
+
+def test_only_one_of_several_simultaneous_runs_claims_the_basetemp(tmp_path):
+    """The race the marker alone cannot win.
+
+    Two runs starting together both read an empty basetemp, both find no
+    owner, and both claim it -- the check and the write are two steps, and
+    nothing made them one. There is a second instant of the same kind inside
+    `pytest_sessionstart`: between the rmtree in `getbasetemp()` and the
+    marker being written again, the directory is genuinely unclaimed.
+
+    Both are closed by a lock that lives OUTSIDE the basetemp, because a lock
+    inside it would be deleted by the rotation it is there to cover. The lock
+    spans only those two transitions; the marker remains the long-lived claim,
+    since a lock held for a ten-minute run adds nothing a marker does not
+    already say and turns a killed run into a puzzle.
+
+    Four starters, one directory, exactly one survivor. Without the lock this
+    test is a coin toss rather than a failure, which is the honest reason it
+    is written as four racers and not two.
+    """
+    project = tmp_path / "racer"
+    project.mkdir()
+    (project / "test_racer.py").write_text(RACER)
+    basetemp = tmp_path / "contested"
+
+    env = _inner_env(PYTHONPATH=str(PYPROJECT.parent / "tests"))
+    processes = [
+        subprocess.Popen(
+            [
+                sys.executable, "-m", "pytest", "test_racer.py",
+                "-p", "conftest", "-p", "no:cacheprovider",
+                f"--basetemp={basetemp}", "-q",
+            ],
+            cwd=project, env=env,
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+        )
+        for _ in range(4)
+    ]
+    outcomes = []
+    try:
+        for process in processes:
+            output, _ = process.communicate(timeout=120)
+            outcomes.append((process.returncode, output))
+    finally:
+        for process in processes:
+            if process.poll() is None:
+                process.kill()
+                process.communicate()
+
+    refused = [out for code, out in outcomes if code == 4]
+    assert len(refused) == 3, (
+        f"expected three of four simultaneous runs to be refused, got "
+        f"{len(refused)}:\n"
+        + "\n---\n".join(out for _, out in outcomes)
+    )
+    assert all("in use by a running pytest" in out for out in refused)
