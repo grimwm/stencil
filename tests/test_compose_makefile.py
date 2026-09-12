@@ -100,6 +100,19 @@ _SCRUBBED_ENV_VARS = (
     "STENCIL_CONTAINER",
     "GNUMAKEFLAGS",
     "MAKEFILES",
+    # The three stn-cb8 names, for the same reason as every name above it and
+    # with a live example: BUILD_DATE is the OCI
+    # `org.opencontainers.image.created` convention, so a developer or a CI
+    # job really can have it exported for something unrelated. Inherited, it
+    # would silently steer the legitimate-value matrix -- the run would be
+    # asserting against that value instead of the Makefile's own default, and
+    # an out-of-class one would fail this tier for a reason that has nothing
+    # to do with the templates. Every test here that needs one of these sets
+    # it explicitly, through _hostile() or _deliver(), both of which start
+    # from clean_env() and add back exactly the variable under test.
+    "BUILD_DATE",
+    "WITH",
+    "with",
 )
 
 # What every generated compose invocation must expand to, immediately after
@@ -1290,6 +1303,10 @@ def test_an_empty_dc_neither_runs_a_planted_probe_nor_reports_success(
         "DC= make doc exited 0 -- the build reported success having built nothing",
         result,
     )
+    assert "DC" in result.stdout + result.stderr, (
+        "the failure does not name DC, so a consumer cannot act on it:\n"
+        f"{result.stdout}\n{result.stderr}"
+    )
     assert not ran.exists(), (
         "an empty DC made the image probe run a bare `image` command from "
         f"PATH:\n{result.stdout}\n{result.stderr}"
@@ -1453,6 +1470,13 @@ def test_the_legitimate_values_still_render_what_they_always_rendered(
     """
     cases = [
         ([], "--metadata build-date="),
+        # The escape hatch STENCIL.md documents for an out-of-class BUILD_DATE
+        # a consumer cannot unset: empty passes the class (an empty residue is
+        # in class), `?=` does not fire because the variable IS defined, and
+        # `text_of` in frontmatter-filter.lua reads an empty value as absent,
+        # so the container stamps its own date. Documented behaviour with no
+        # test until review asked for one.
+        (["BUILD_DATE="], '--metadata build-date=""'),
         (["WITH=solutions"], "--metadata include-solutions=true"),
         (["with=hidden,draft"], "--metadata include-hidden=true"),
         (["with=hidden,draft"], "--metadata include-draft=true"),
