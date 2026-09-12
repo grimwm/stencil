@@ -68,6 +68,83 @@ How the version gets bumped is written down in
   become the one the suite imports; a new test fails if any git-tracked name
   at the root starts shadowing an installed module.
 
+- **`format-md` installs only the lockfile stencil generated** (`stn-qge`). The
+  service copied `format-package-lock.json` out of the mount — the consumer's
+  own package directory — and ran `npm ci` from it. `npm ci` fetches whatever
+  host each `resolved` names and checks `integrity` against a value in that same
+  file, so a consumer-editable file decided which bytes became the prettier that
+  then ran as uid 0 over that read-write mount. Neither `--ignore-scripts` nor
+  0.39.0's own `--no-config` touches it: nothing has to run at install time,
+  because the payload runs when prettier runs.
+
+  **Measured**, on the pinned node image, with one `resolved` host changed in a
+  generated package's lockfile and nothing else: npm requested that host. It now
+  fails before npm asks, with a message saying the file is stencil's, that
+  editing it has no supported effect, and that `stencil gen` restores it.
+
+  The entrypoint carries the sha256 of the lockfile `stencil gen` wrote and
+  checks the copy in `/tmp/fmt` — after the `cp`, before the install, so what
+  was hashed is what npm reads rather than a file the host could still rewrite.
+  The digest is derived from the vendored bytes at generation time, never
+  written down, so re-vendoring moves the lockfile and its digest together and
+  bumping a pin stays the same two steps it was.
+
+  **What it proves, exactly.** A checksum is not a signature: it shows that two
+  files in the package agree, and both are files whoever edited the lockfile
+  could edit. It refuses every edit that touches only the lockfile — a script, a
+  dependency bot, a bad merge, a half-finished hand edit — and it turns the
+  collusive case into something visible: the digest in `docker-compose.yml`
+  moves without stencil having been re-run.
+
+  Nothing a consumer does legitimately changes that file, so no build that was
+  working stops. If you had edited your package's copy — there was never a
+  supported reason to — run `stencil gen` and the package goes back to the
+  lockfile stencil ships.
+
+- **A stray `npm install` in a package directory can no longer decide which
+  puppeteer renders your handouts** (`stn-86y`). The generated
+  `html-to-pdf.js` runs inside the browser image but lives in the mounted
+  package directory, and it asked for its tools by bare specifier. Node
+  resolves those starting from the requiring file, so
+  `<package>/node_modules` outranked the image's pinned, lockfile-verified
+  tree at `/opt/tools` -- which was reached only through `NODE_PATH`, Node's
+  *last-resort* path.
+
+  **Measured**, in the image built from the generated `Dockerfile.browser`,
+  with a decoy planted at `<package>/node_modules`:
+
+  ```
+  puppeteer      /workspace/node_modules/puppeteer/index.js   0.0.0-decoy
+  pdf-lib        /workspace/node_modules/pdf-lib/index.js     0.0.0-decoy
+  ```
+
+  Both, not just puppeteer -- and `pdf-lib` is the one that writes the PDF/UA
+  role map and XMP metadata that `make check-pdf` exists to require, so a
+  decoy there yields a finished-looking PDF missing exactly that, with
+  nothing about the rendering looking wrong.
+
+  `html-to-pdf.js` now resolves both through `module.createRequire` rooted at
+  the image's install root, and refuses to run at all if resolution lands
+  outside it. `make check-access` was never affected by this particular
+  hijack: `pa11y` resolves its own dependencies from its own location inside
+  the tools tree, not from the working directory.
+
+  **What this does and does not close.** It closes an *incidental*
+  `node_modules` -- someone, or some tool, once ran `npm install` in the
+  package directory -- silently outranking the pinned tree. That is the real,
+  common, traceless case. It does **not** close a hostile package directory,
+  and cannot from inside one: `html-to-pdf.js` is itself in the mount, as are
+  the `Makefile`, `docker-compose.yml` and the Lua filters.
+
+  **If you have copied `html-to-pdf.js.j2` into your own `templates_dir`**,
+  you keep the old resolution and get no warning -- `StrictUndefined` cannot
+  tell you, because your copy reads none of these keys. Re-apply the change,
+  or drop your override.
+
+  **The fix reaches a package only when you run `stencil gen`.** `make pkg`
+  has no `gen` prerequisite, so an existing package keeps running the
+  `html-to-pdf.js` it was generated with.
+
 - **The container tier now runs in parallel** (`stn-vda`). CI's integration job
   ran a single `pytest -v`; it now runs `pytest -v -n auto --dist loadfile`.
   `loadfile`, not xdist's default `load`: nine test files carry module- or
