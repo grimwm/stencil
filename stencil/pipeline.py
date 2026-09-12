@@ -22,6 +22,7 @@ import os
 import re
 import shutil
 import subprocess
+from functools import lru_cache
 from pathlib import Path
 
 # Pinned, and bumped deliberately. Against :latest a build is not reproducible
@@ -29,10 +30,16 @@ from pathlib import Path
 # warning that --fail-if-warnings promotes to a failure -- breaking CI on a
 # commit that changed nothing, at whatever hour the release landed.
 #
-# To bump: edit this line, run the suite, and read what changed in the rendered
-# fixtures. The four-part tag is the specific release; :3.10 would still float
-# across patch releases.
-PANDOC_IMAGE = "docker.io/pandoc/core:3.10.0.0"
+# To bump: edit this line, run `python3 scripts/resolve_image_digests.py` to
+# record the new manifest digest, run the suite, and read what changed in the
+# rendered fixtures. The four-part tag is the specific release; :3.10 would
+# still float across patch releases.
+#
+# This is the TAG, not the full reference a build actually pulls -- see
+# pinned_image() and IMAGE_TAGS below for why the digest is looked up by tag
+# rather than kept beside it, and PANDOC_IMAGE (read lazily through module
+# __getattr__) for the tag@digest string itself.
+PANDOC_TAG = "docker.io/pandoc/core:3.10.0.0"
 
 # The pdf and check-access services share one image, built from this Dockerfile
 # in the generated package. Tests build it once and reuse the tag.
@@ -80,22 +87,71 @@ def browser_image_tag() -> str:
 # are already documented, three lines into Dockerfile.browser.j2, as the thing
 # that moves every page break.
 #
-# To bump: edit this line, rebuild the browser image, and run the container
+# To bump: edit this line, run `python3 scripts/resolve_image_digests.py` to
+# record the new digest, rebuild the browser image, and run the container
 # tier. Read what moved in the PDF geometry and the PDF/UA results.
 #
-# A TAG, NOT A DIGEST -- deliberately, and not because a digest would be worse.
-# A registry tag is mutable and `@sha256:...` is not, so a digest is strictly
-# stronger here. It is left off because the same is true of PANDOC_IMAGE and
-# VERAPDF_IMAGE, and pinning one of the three by digest buys defence in depth
-# for a third of the surface while making the convention inconsistent for
-# whoever bumps the next one. Raised by review; moving all three together is
-# stn-8vi.
+# PINNED BY DIGEST NOW, NOT JUST BY TAG -- stn-8vi, reversing the argument that
+# used to sit here. That argument was: a registry tag is mutable and a digest
+# is not, so a digest is strictly stronger, but pinning only one of the three
+# images by digest would buy defence in depth for a third of the surface while
+# leaving the convention inconsistent for whoever bumps the next one. That is
+# an argument for doing all three together, not for doing none -- and stn-8vi
+# is that: NODE_IMAGE, PANDOC_IMAGE and VERAPDF_IMAGE (all read lazily below,
+# through module __getattr__) now carry `<tag>@sha256:<digest>`.
+#
+# THE DIGEST IS KEYED BY THE TAG, in stencil/assets/image-digests.json, rather
+# than written inline as one `tag@digest` string beside each constant. A
+# registry resolves `name:tag@digest` BY THE DIGEST and ignores the tag
+# entirely, so an inline pair is one edit that can go stale without failing:
+# bump the tag, forget to re-resolve, and the build silently keeps pulling the
+# OLD image under a name that now says something else. Keyed by the tag, that
+# state cannot be expressed -- pinned_image() has nothing to look up for a tag
+# with no entry, so a forgotten re-resolve fails loudly and offline the way
+# `npm ci` refuses a lockfile the manifest does not satisfy, rather than
+# quietly shipping a stale digest that happens to parse.
+#
+# NOT at import, though -- at the first READ of one of the three constants.
+# The distinction is the whole reason __getattr__ is down there rather than
+# three eager assignments up here: failing at import is what would deadlock
+# the resolver script that exists to fix the failure. `stencil version` and
+# `stencil list` keep working; `stencil gen` is what stops.
+#
+# THE COST BEING ACCEPTED, so nobody later "fixes" this by going back to a
+# tag. A digest pin gives a CONSUMER three new ways to fail that a tag pin did
+# not:
+#
+#   1. Registry garbage collection. A tag pin degrades to different bytes
+#      under the same name; a digest pin degrades to "manifest unknown". Once
+#      upstream repushes the tag, the old manifest is untagged, and untagged
+#      manifests do get reclaimed -- so the pin has an expiry date a tag did
+#      not.
+#   2. `docker save` -> transfer -> `docker load` -> `docker tag` loses
+#      RepoDigests, so both `docker image inspect <ref>@sha256:...` and the
+#      compose pull fail against a reference that worked fine as a tag. A
+#      pull-through cache preserves digests; a save/load air-gap does not.
+#   3. No override. generate.py's reject_derived deliberately refuses
+#      `template_env: {pandoc_image: ...}`, so a consumer behind a mirror has
+#      no supported knob, and hand-editing the generated Makefile is undone by
+#      the next `stencil gen`. AGENTS.md already records this exact regret
+#      about Chromium -- "neither the Makefile nor the compose file gives a
+#      consumer a build argument to work around it with" -- and this pins the
+#      same regret onto three more images rather than pretending it does not
+#      apply here too.
+#
+# Deliberately NO escape hatch for any of the three: rendering through
+# overridable variables would need Makefile-doc.j2, Makefile-pkg.j2 and
+# docker-compose-html.yml.j2, and would let an environment variable downgrade
+# the very pin this exists to create. What is written down instead is the
+# RECOVERY PATH: a pull failing with "manifest unknown" means the digest was
+# garbage-collected upstream -- re-resolve with
+# `python3 scripts/resolve_image_digests.py` and regenerate.
 #
 # stn-5hv, which this comment used to point at, closed the equivalent gap one
 # layer in -- the npm tree installed INTO this image is fixed by a committed
-# lockfile and verified by hash. That makes the image itself the remaining
-# floating input, and does not settle it.
-NODE_IMAGE = "docker.io/library/node:24.20.0-alpine3.24"
+# lockfile and verified by hash. That made the image itself the remaining
+# floating input; this closes that one too.
+NODE_TAG = "docker.io/library/node:24.20.0-alpine3.24"
 
 # What the browser image installs. Exact, not `^`: stn-s5b was filed because
 # html-to-pdf.js pins `tagged: true` on page.pdf() to stop a version bump
@@ -207,7 +263,26 @@ FORMAT_TOOLS_DIR = "/tmp/fmt"
 # PDF/UA-1 conformance checking. Pinned, because veraPDF's rule set is the
 # thing being asserted against: an unpinned tag lets a build go red or green
 # on someone else's release rather than on a change here.
-VERAPDF_IMAGE = "docker.io/verapdf/cli:v1.30.2"
+#
+# PINNED BY DIGEST TOO (stn-8vi), and this one is the odd image out.
+# `docker.io/verapdf/cli:v1.30.2` is NOT a manifest list -- measured, not
+# assumed: the registry answers with a single
+# `application/vnd.docker.distribution.manifest.v2+json`, `linux/amd64` only.
+# There is no index to resolve per architecture, so the only digest that
+# exists for this tag is the one pinned; image-digests.json records the
+# single-arch media type explicitly rather than treating "not an index" as an
+# error, and tests/test_pins.py checks for it by name so a future multi-arch
+# veraPDF release is a deliberate edit here rather than a silent pass. (An
+# earlier version of the source ticket assumed this image carried a manifest
+# list like the other two; it does not, and this comment is the correction.)
+#
+# On arm64 this already runs emulated today -- pinning the digest makes that
+# fact visible rather than causing it. The freeze is the point, not a defect
+# to fix: with a tag, a future multi-arch repush of v1.30.2 would silently
+# start running verapdf NATIVE on arm64, changing what is being measured
+# without a line in any diff. With the digest, it stays emulated until
+# someone deliberately re-resolves and reads what changed.
+VERAPDF_TAG = "docker.io/verapdf/cli:v1.30.2"
 
 # verapdf is the image's ENTRYPOINT and is not on PATH. Measured: `sh -c
 # verapdf ...` inside this image exits 127.
@@ -508,6 +583,119 @@ def lockfile_digest(filename: str) -> str:
     return hashlib.sha256((read_lockfile(filename) + "\n").encode("utf-8")).hexdigest()
 
 
+# ---------------------------------------------------------------------------
+# stn-8vi: the three pulled images, pinned by manifest digest.
+#
+# IMAGE_TAGS is the plain, human-edited tags -- always readable, eagerly. The
+# digests that turn a tag into the reference a build actually pulls live in
+# stencil/assets/image-digests.json, written by
+# scripts/resolve_image_digests.py and read lazily below, the same
+# request/answer shape read_lockfile() above uses for the npm locks.
+IMAGE_TAGS = {
+    "node": NODE_TAG,
+    "pandoc": PANDOC_TAG,
+    "verapdf": VERAPDF_TAG,
+}
+
+_IMAGE_DIGESTS_FILE = "image-digests.json"
+
+# Lowercase hex, exactly 64 characters, no separators -- the only shape a
+# sha256 digest takes in a registry reference.
+_DIGEST = re.compile(r"sha256:[0-9a-f]{64}")
+
+
+@lru_cache(maxsize=1)
+def _image_digests() -> dict[str, dict]:
+    path = ASSETS_DIR / _IMAGE_DIGESTS_FILE
+    if not path.is_file():
+        raise VendoredAssetError(
+            f"image digests not vendored: {_IMAGE_DIGESTS_FILE}; "
+            f"run python3 scripts/resolve_image_digests.py"
+        )
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def pinned_image(tag: str) -> str:
+    """``<tag>@sha256:<digest>`` for a tag this scaffolding pulls.
+
+    Looks the tag up in stencil/assets/image-digests.json rather than taking
+    an inline ``tag@digest`` pair, because a registry resolves
+    ``name:tag@digest`` BY THE DIGEST and ignores the tag entirely -- an
+    inline pair that goes stale (tag bumped, digest not re-resolved) would
+    silently keep pulling the OLD image under a name that now says something
+    else. Keyed by the tag, that state cannot be expressed: a tag with no
+    entry has nothing to look up, so a forgotten re-resolve fails here, loudly
+    and before any network call, instead of shipping a digest that used to be
+    right.
+
+    Raises VendoredAssetError, not KeyError, for the same reason
+    read_lockfile() raises it instead of FileNotFoundError: generate.py's
+    ``main()`` already catches this exception and prints a clean "this is
+    stencil's own installation, not your config" message rather than a
+    traceback pointing at a dict lookup the reader did not write.
+    """
+    try:
+        digest = _image_digests()[tag]["digest"]
+    except KeyError:
+        raise VendoredAssetError(
+            f"no recorded digest for {tag}; "
+            f"run python3 scripts/resolve_image_digests.py"
+        ) from None
+    # Checked HERE, at the point of use, and not only in the resolver that
+    # writes the file. What comes back is interpolated into a Makefile, a
+    # compose file and a Dockerfile FROM line, so the one thing that must
+    # never happen is an arbitrary string reaching all three. The resolver
+    # validates what it writes, but the file it writes is committed, and a
+    # committed file gets hand-edited and mis-merged; a check the reader
+    # performs costs one regex and does not depend on the writer having been
+    # careful.
+    if not _DIGEST.fullmatch(digest):
+        raise VendoredAssetError(
+            f"{_IMAGE_DIGESTS_FILE} records {digest!r} for {tag}, which is not "
+            f"a sha256 digest; re-resolve it: "
+            f"python3 scripts/resolve_image_digests.py"
+        )
+    return f"{tag}@{digest}"
+
+
+# NODE_IMAGE / PANDOC_IMAGE / VERAPDF_IMAGE are resolved lazily, through
+# module __getattr__ (PEP 562), rather than computed eagerly as
+# `NODE_IMAGE = pinned_image(NODE_TAG)` right after NODE_TAG. This is a
+# bootstrap requirement, not a style choice.
+#
+# pinned_image() raises the moment a tag has no recorded digest. If the three
+# constants were eager, bumping a tag and running
+# `python3 scripts/resolve_image_digests.py` to record its digest would
+# already be too late: that script does `from stencil import pipeline` to
+# read IMAGE_TAGS, and `import stencil.pipeline` would raise before the
+# script's first line ever ran, on the exact tag it exists to resolve.
+# scripts/vendor_npm_locks.py imports this module the same way. The
+# documented bump procedure would deadlock on its own import on the first
+# bump after this landed -- confirmed by construction, not assumed, which is
+# what tests/test_pins.py::test_the_tags_are_readable_without_resolving_them
+# guards against.
+#
+# __dir__ lists the three names too, so `dir(pipeline)` and tab-completion
+# still show them even though `vars(pipeline)` does not.
+_LAZY_IMAGES = {
+    "NODE_IMAGE": NODE_TAG,
+    "PANDOC_IMAGE": PANDOC_TAG,
+    "VERAPDF_IMAGE": VERAPDF_TAG,
+}
+
+
+def __getattr__(name: str) -> str:
+    try:
+        tag = _LAZY_IMAGES[name]
+    except KeyError:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}") from None
+    return pinned_image(tag)
+
+
+def __dir__() -> list[str]:
+    return sorted(set(globals()) | set(_LAZY_IMAGES))
+
+
 _TEMPLATE = {"doc": "html-template.html", "slide": "slide-template.html"}
 
 
@@ -674,7 +862,7 @@ def render(
         f"{Path(workdir).resolve()}:/workspace:z",
         "-w",
         "/workspace",
-        PANDOC_IMAGE,
+        pinned_image(PANDOC_TAG),
         *pandoc_argv(kind),
     ]
     for key, value in (metadata or {}).items():
@@ -888,7 +1076,7 @@ def verapdf(
             "/workspace",
             "--entrypoint",
             "sh",
-            VERAPDF_IMAGE,
+            pinned_image(VERAPDF_TAG),
             "-c",
             VERAPDF_SCRIPT,
             # $0 for the script; the files land in "$@" exactly as the compose
