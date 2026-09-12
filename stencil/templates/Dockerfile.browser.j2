@@ -178,10 +178,14 @@ RUN if ! echo "{{ browser_lockfile_digest }}  {{ browser_tools_dir }}/package-lo
       echo "Dockerfile.browser: {{ browser_lockfile_name }} is not the file stencil generated." >&2; \
       echo "That file is stencil's. It is the lockfile this image installs from," >&2; \
       echo "and editing it has no supported effect: a changed 'resolved' URL would" >&2; \
-      echo "decide which bytes become the puppeteer and pa11y that run here, as" >&2; \
-      echo "root, over the mounted package -- so the build refuses it rather than" >&2; \
-      echo "installing from it." >&2; \
+      echo "decide which bytes become the puppeteer, pa11y and pdf-lib that run" >&2; \
+      echo "here, as root, over the mounted package -- so the build refuses it" >&2; \
+      echo "rather than installing from it." >&2; \
       echo "Run 'stencil gen' for this package to restore it." >&2; \
+      echo "If you deliberately override browser-package-lock.json.j2 from your" >&2; \
+      echo "own templates_dir, 'stencil gen' will not help: the digest above is" >&2; \
+      echo "stencil's vendored lockfile, not your rendered one. Override this" >&2; \
+      echo "Dockerfile's guard with it, or drop the override. See STENCIL.md." >&2; \
       echo "On Windows, see stn-at4: generated files are written CRLF, which" >&2; \
       echo "changes this digest even though nobody edited the file." >&2; \
       exit 1; \

@@ -49,12 +49,21 @@ So the assertion filters to lines the builder did not echo back:
     spoken = [l for l in output.splitlines()
               if REFUSAL in l and "echo " not in l and ">>>" not in l]
 
-A line containing `echo "` is the Dockerfile's own source (docker's
-`>>>`-prefixed excerpt already contains `echo`, and podman's `STEP`/`Error`
-lines do not repeat the instruction's `echo` calls verbatim, which is why
-`>>>` is checked as a second, docker-specific tell). What survives the filter
-is a line the shell script actually PRINTED while running -- the two of seven
-that matter.
+A line containing `echo ` is the Dockerfile's own source, and on both engines
+that tell is the one doing the work. Measured -- docker 29.6.2/BuildKit: seven
+occurrences, two spoken. podman 6.1.1: three occurrences, one spoken, and both
+of its quoted forms (`STEP n/m: RUN if ! echo "..."` and
+`Error: building at STEP "RUN if ! echo "..."`) DO repeat the instruction's
+`echo` calls verbatim, with the line continuations joined into one long line.
+
+So `>>>` is belt-and-braces rather than load-bearing: the single docker line
+that carries it (`108 | >>>   echo "..."`) contains `echo ` as well and would
+be filtered without it. It is kept because it costs nothing and a future
+BuildKit that prints the excerpt some other way would still be caught -- but
+do not read it as the tell that covers podman. It is not; `echo ` is.
+
+What survives the filter is a line the shell script actually PRINTED while
+running.
 
 THE SECOND ASSERTION IS THE ONE THAT ACTUALLY DISTINGUISHES TAMPERING FROM AN
 UNREACHABLE HOST. The build failing proves nothing on its own: `npm ci`
@@ -362,10 +371,21 @@ def test_a_tampered_browser_lockfile_is_refused_before_npm_fetches_anything(
         f"one, so this test would not be tampering with what it thinks it "
         f"is: {pdf_lib['resolved']!r}"
     )
-    pdf_lib["resolved"] = pdf_lib["resolved"].replace(
-        "registry.npmjs.org", TAMPERED_HOST
+    # BYTE-LEVEL, so the file differs from stencil's in exactly the way the
+    # ticket reproduced and in no other way. Re-serialising with
+    # json.dumps(..., indent=2) would reformat all 20KB, and then a guard that
+    # noticed only the reformatting would look like a guard that noticed the
+    # redirected host. The json round-trip above is a FIXTURE CHECK -- it is
+    # how this test knows pdf-lib is still resolved from the registry -- not
+    # how the edit is made.
+    tampered = vendored.replace(
+        b"registry.npmjs.org", TAMPERED_HOST.encode(), 1
     )
-    lockfile.write_text(json.dumps(lock, indent=2) + "\n")
+    assert tampered != vendored, (
+        "bytes.replace found nothing to replace, so this test would build from "
+        "an untampered lockfile and report the guard as broken when it is not"
+    )
+    lockfile.write_bytes(tampered)
 
     image = "localhost/tampered_browser:latest"
     run = compose(package, image=image)
@@ -388,7 +408,8 @@ def test_a_tampered_browser_lockfile_is_refused_before_npm_fetches_anything(
         "Measured on docker 29.6.2 / BuildKit / Compose v5.3.1: of seven "
         "occurrences of the refusal string in a failing build, five are the "
         f"builder quoting the Dockerfile and only two are the guard "
-        f"speaking; podman quotes the same way under 'STEP'/'Error' lines. "
+        f"speaking; podman 6.1.1 quotes 3 times with 1 spoken, under its own "
+        f"'STEP'/'Error' lines. "
         f"See spoken_refusal_lines and the module docstring.\n"
         f"{outcome('compose build pdf', refused)}"
     )

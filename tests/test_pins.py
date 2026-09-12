@@ -797,6 +797,15 @@ def _guard_block(text: str, *, terminator: str = "fi &&") -> str:
     than on the polarity they exist to check, which reads in a log like a
     broken guard rather than a broken test.
     """
+    # The slice keeps the `fi` and drops whatever chains it onward, which only
+    # works because every terminator BEGINS with `fi`. That coupling was
+    # implicit while the length was hardcoded and the terminator was a
+    # parameter; state it, so a caller passing `done` or `esac` fails here
+    # rather than returning a block silently missing its last two characters.
+    assert terminator.startswith("fi"), (
+        f"terminator {terminator!r} does not start with 'fi', so the slice "
+        "below would cut the block short"
+    )
     start = text.index("if ! echo")
     end = text.index(terminator, start) + len("fi")
     return text[start:end]
@@ -885,6 +894,16 @@ def test_the_guard_is_written_as_a_refusal(doc_package):
         "the digest guard is not written as `if ! echo ... | sha256sum -c`. If "
         "it was rewritten, make sure the new shape still refuses on MISMATCH "
         f"and update the executed test above with it:\n{script}"
+    )
+
+    # The other half of the polarity, and it was missing here too until stn-egv
+    # went looking. A negated condition decides WHICH branch fires; `exit 1` is
+    # what makes that branch mean anything. Mutate it to `exit 0` and the
+    # service announces the refusal and then installs from the file anyway,
+    # while every other assertion in this file stays green.
+    assert "exit 1" in _guard_block(script), (
+        "the guard's refusal branch does not exit non-zero, so a tampered "
+        f"lockfile is announced and then installed from anyway:\n{script}"
     )
 
 
@@ -1113,8 +1132,16 @@ def test_the_browser_guard_refuses_on_mismatch_rather_than_on_match(
         f"stencil generated would not build:\n{accepted.stderr}"
     )
 
-    target.write_bytes(
-        target.read_bytes().replace(b"registry.npmjs.org", b"evil.invalid.host")
+    # Asserted, because `bytes.replace` of an absent needle is a silent no-op:
+    # if the vendored lockfile ever stops naming this host, the "tampered" file
+    # below would be byte-identical to the good one and the refusal check would
+    # fail as "the guard accepted a tampered lockfile" -- a confusing way to
+    # learn the fixture went stale.
+    good = target.read_bytes()
+    target.write_bytes(good.replace(b"registry.npmjs.org", b"evil.invalid.host"))
+    assert target.read_bytes() != good, (
+        "the fixture edits the vendored lockfile by replacing its registry "
+        "host, and that host no longer appears in it, so nothing was tampered"
     )
     refused = run()
     assert refused.returncode != 0, (
@@ -1168,14 +1195,36 @@ def test_the_browser_guard_is_written_as_a_refusal(doc_package):
     """The same polarity, asserted textually, for where the test above skips.
 
     One character, and the executed test cannot run on a host whose sha256sum
-    has no -c. This one runs everywhere and says the same thing about the shape:
-    the condition is negated, so the branch that fires is the failure.
+    has no -c -- Darwin's has none, so on a maintainer's laptop this tier is the
+    ONLY thing standing between a mutated guard and a green `pytest`.
+
+    BOTH ASSERTIONS ARE OVER SOMETHING THE HELPER DID NOT ALREADY GUARANTEE,
+    which the first version of this test got wrong and an adversarial review
+    caught. `_browser_guard` slices from `text.index("if ! echo")`, so
+    `block.startswith("if ! echo")` is true by construction and can never fail;
+    it looked like the format-md sibling's genuine `"if ! echo" in script` while
+    asserting nothing. Search the FILE for the shape, the way that sibling does.
+
+    And the negation is only half the polarity. Measured: mutating the rendered
+    `exit 1` to `exit 0` leaves the guard printing its refusal and then
+    installing anyway -- and every other assertion in this group passes, because
+    the wording, the digest, the ordering, the character exclusions and the echo
+    count are all untouched by it. Nothing in the unit tier caught that. The
+    `exit 1` assertion is what closes it, and the format-md guard has the same
+    hole, so it is asserted there too.
     """
-    block = _browser_guard(doc_package)
-    assert block.startswith("if ! echo"), (
+    dockerfile = (doc_package / pipeline.BROWSER_DOCKERFILE).read_text()
+    assert "if ! echo" in dockerfile, (
         "the digest guard is not written as `if ! echo ... | sha256sum -c`. If "
         "it was rewritten, make sure the new shape still refuses on MISMATCH "
-        f"and update the executed test above with it:\n{block}"
+        f"and update the executed test above with it:\n{dockerfile}"
+    )
+
+    block = _browser_guard(doc_package)
+    assert "exit 1" in block, (
+        "the guard's refusal branch does not exit non-zero, so a tampered "
+        "lockfile is announced and then installed from anyway -- and the build "
+        f"goes on to succeed:\n{block}"
     )
 
 
@@ -1187,9 +1236,12 @@ def test_the_browser_refusal_tells_the_consumer_what_to_do(doc_package):
     to neither. The message has to say three things: the file is stencil's,
     editing it has no supported effect, and `stencil gen` puts it back.
 
-    Asserted against the lifted block rather than the file, so the long comment
-    above the RUN -- which necessarily contains these same phrases while
-    explaining them -- cannot satisfy it.
+    Asserted against the lifted block rather than the whole file. The comment
+    above the RUN happens to contain none of these three phrases today -- so
+    this is insurance rather than an active trap, and saying it is one would be
+    a measured-sounding claim nobody measured. What it does buy is that a future
+    comment explaining the refusal, which is the natural thing to write there,
+    cannot start satisfying the test on the message's behalf.
     """
     block = _browser_guard(doc_package)
 
