@@ -32,13 +32,20 @@ case that makes the brand one worth more than its severity suggests.
 
 from __future__ import annotations
 
+import json
+
 import pytest
 
+from stencil import __version__ as stencil_version
 from stencil.generate import (
+    MANIFEST_NAME,
+    MANIFEST_VERSION,
     check_config_path,
     get_generated_files,
     package_contexts,
 )
+
+from test_cli import run_cli, write_config
 
 
 def package(**overrides):
@@ -294,3 +301,203 @@ def test_a_non_string_dest_is_a_config_problem_not_a_typeerror():
     }
     with pytest.raises(ValueError, match="dest 2024 is int, not a string"):
         package_contexts(cfg)
+
+
+# --- stn-pe3: output_dir is the third member of the set dir (stn-vhm) and ---
+# --- dest (stn-c25) belong to, and the only one still exempt from every  ---
+# --- path check -------------------------------------------------------------
+#
+# `_main` computes `output_base = (config_dir / output_dir_raw).resolve()`
+# and nothing requires the result to stay under `config_dir`. Every path
+# `clean` unlinks, and every line of the managed `.gitignore` section, is
+# relative to it -- so an escaping top-level `output_dir` is a way OUT of
+# the config directory for every one of those, string-clean or not.
+#
+# NOTE: `config()` above builds `{"packages": {"demo": package(**overrides)}}`
+# -- its overrides land on the PACKAGE, not the top level -- so these tests
+# build the config dict directly rather than reusing it.
+
+
+def test_a_top_level_output_dir_that_escapes_is_refused():
+    """Reproduced verbatim against 0.38.0: `output_dir: ../victim-base` plus
+    `clean --all` removes a file at `../victim-base/demo/Makefile`, rc=0.
+    See the CLI test below for the end-to-end version of this same value."""
+    cfg = {"output_dir": "../victim", "packages": {"demo": package()}}
+    with pytest.raises(ValueError, match="output_dir"):
+        package_contexts(cfg)
+
+
+def test_an_absolute_top_level_output_dir_is_refused():
+    cfg = {"output_dir": "/tmp/escape", "packages": {"demo": package()}}
+    with pytest.raises(ValueError, match="output_dir"):
+        package_contexts(cfg)
+
+
+@pytest.mark.parametrize("value", ["out", ".", ""])
+def test_a_valid_top_level_output_dir_still_passes(value):
+    """The regression guard on refusing too much: `out` is ordinary, `.` is
+    the value STENCIL.md documents (`output_dir: . # Where to generate
+    packages`), and `""` is what an empty-but-present key means today. None
+    of these may start failing gen, clean or install."""
+    cfg = {"output_dir": value, "packages": {"demo": package()}}
+    contexts = package_contexts(cfg)
+    assert "demo" in contexts
+
+
+def test_a_config_with_no_top_level_output_dir_still_passes():
+    """Most configs never set this key at all (checked across every
+    consumer config on this machine before the epic's plan was written)."""
+    cfg = {"packages": {"demo": package()}}
+    contexts = package_contexts(cfg)
+    assert "demo" in contexts
+
+
+def test_a_symlinked_top_level_output_dir_is_refused(tmp_path):
+    """The half a string check cannot see: `output_dir: out` is a perfectly
+    ordinary value, and `out` is itself a symlink pointing outside the
+    config directory.
+
+    Driven through the CLI rather than through `checked_output_base`:
+    that function does not exist until stn-sl2.3, so importing it here
+    would raise ImportError instead of exercising today's actual (wrong)
+    behaviour.
+
+    Reproduced verbatim per the ticket: `ln -s <outside> cfg/out`,
+    `output_dir: out`, a victim file at `<outside>/demo/Makefile`, then
+    `clean --all`. TODAY: rc=0 and the victim file is gone.
+    """
+    import os
+
+    outside = tmp_path / "outside"
+    (outside / "demo").mkdir(parents=True)
+    victim = outside / "demo" / "Makefile"
+    victim.write_text("precious")
+
+    config_dir = tmp_path / "cfg"
+    config_dir.mkdir()
+    os.symlink(outside, config_dir / "out")
+
+    write_config(
+        config_dir,
+        {
+            "output_dir": "out",
+            "templates": [{"src": "Makefile.j2"}],
+            "packages": {"demo": {"package_type": "none"}},
+        },
+    )
+
+    result = run_cli("clean", "--all", cwd=config_dir)
+
+    assert victim.exists(), (
+        "a file outside the config directory was removed via a symlinked "
+        f"top-level output_dir; rc={result.returncode}, "
+        f"stdout={result.stdout!r}, stderr={result.stderr!r}"
+    )
+    assert result.returncode != 0
+    assert "Traceback" not in result.stderr
+
+
+def test_cli_clean_all_leaves_a_file_outside_the_config_directory_alone(
+    tmp_path,
+):
+    """The reproduction stn-pe3 was filed with, run through the CLI rather
+    than through `package_contexts` -- which never sees `output_base` at
+    all, only the config. TODAY: rc=0 and
+    'Removed .../victim-base/demo/Makefile'. That last assertion, the file
+    surviving, is the ticket -- not the exit code.
+    """
+    config_dir = tmp_path / "cfg"
+    config_dir.mkdir()
+    victim_base = tmp_path / "victim-base"
+    (victim_base / "demo").mkdir(parents=True)
+    victim = victim_base / "demo" / "Makefile"
+    victim.write_text("precious")
+
+    write_config(
+        config_dir,
+        {
+            "output_dir": "../victim-base",
+            "templates": [{"src": "Makefile.j2"}],
+            "packages": {"demo": package()},
+        },
+    )
+
+    result = run_cli("clean", "--all", cwd=config_dir)
+
+    assert result.returncode != 0
+    assert "Traceback" not in result.stderr
+    assert victim.exists(), (
+        "a file outside the config directory was removed by `clean --all`: "
+        f"rc={result.returncode}, stdout={result.stdout!r}"
+    )
+
+
+def test_output_base_containment_runs_even_when_the_config_is_degraded(
+    tmp_path,
+):
+    """THE ORDERING TEST (M7) -- the one the whole fix rests on.
+
+    `clean`'s degraded path lets a package with its OWN manifest clean
+    anyway, precisely so a broken config does not strand files nobody can
+    remove (see CLEAN_DEGRADED_TRAILER's docstring). That is right for a
+    package's own manifest, and wrong for `output_base` itself: an escaping
+    top-level `output_dir` must be refused before ANY package -- manifest
+    or not -- gets a chance to clean, degraded or not.
+
+    This pins that `output_base` is computed (and refused, once the fix
+    lands) ABOVE `clean`'s degraded pre-flight. Move that computation BELOW
+    the pre-flight later -- stn-40a's OTHER suggested fix, quoted in this
+    epic's source -- and this is the only test that would notice: the
+    escaping output_dir would be re-enabled every time the rest of the
+    config also happens to be broken.
+
+    Setup: a config whose `demo` package is fine and already has its own
+    on-disk manifest at the escaped location, and whose `broken` package
+    fails `package_contexts` (whitespace in `docs`) -- so the CLI's
+    pre-flight is degraded, `config_readable` is False, and yet `demo`'s
+    directory carries a manifest naming it. TODAY, that manifest is enough
+    to authorize a delete outside the config directory anyway.
+    """
+    config_dir = tmp_path / "cfg"
+    config_dir.mkdir()
+    victim_base = tmp_path / "victim-base"
+    demo_dir = victim_base / "demo"
+    demo_dir.mkdir(parents=True)
+    victim = demo_dir / "Makefile"
+    victim.write_text("precious")
+
+    manifest = {
+        "manifest_version": MANIFEST_VERSION,
+        "stencil_version": stencil_version,
+        "package": "demo",
+        "dir": "demo",
+        "entries": ["Makefile"],
+    }
+    (demo_dir / MANIFEST_NAME).write_text(json.dumps(manifest))
+
+    write_config(
+        config_dir,
+        {
+            "output_dir": "../victim-base",
+            "templates": [{"src": "Makefile.j2"}],
+            "packages": {
+                "demo": package(),
+                "broken": package(docs=["a b.md"]),  # whitespace: unparseable
+            },
+        },
+    )
+
+    result = run_cli("clean", "--all", cwd=config_dir)
+
+    assert result.returncode != 0
+    assert "Traceback" not in result.stderr
+    assert victim.exists(), (
+        "a package's OWN manifest let clean delete a file outside the "
+        "config directory, even though the rest of the config was broken "
+        f"and a degraded warning was printed: rc={result.returncode}, "
+        f"stdout={result.stdout!r}, stderr={result.stderr!r}"
+    )
+    assert "Removed" not in result.stdout, (
+        "clean printed a removal despite the degraded warning: "
+        f"{result.stdout!r}"
+    )
