@@ -312,7 +312,9 @@ a destination used to hang `gen` forever. The check runs as one pass before the 
 refused run touches nothing, and the writes themselves use `O_NOFOLLOW`.
 
 What that makes symmetric is the **parent**: `gen` and `clean` now compute it with one function, so
-anything `gen` writes, `clean` can remove. The final component stays asymmetric on purpose — `gen`
+anything `gen` writes, `clean` can remove. `clean` also now removes a symlink standing where a
+generated file belongs even when it dangles or points at a directory — its type checks followed the
+link, so those were the two cases it silently skipped while reporting success. The final component stays asymmetric on purpose — `gen`
 refuses a link there because it would follow it, `clean` unlinks one without resolving it because
 removing the link is the only way such a package is ever cleanable again. `gen` is therefore
 slightly stricter than `clean`, never the reverse.

@@ -511,6 +511,34 @@ def check_package_output_dir(package_id: str, value) -> str | None:
         # about two characters.
         return None
     text = check_config_path(package_id, "output_dir", value, allow_parent=True)
+    # ':' SEPARATES A COMPOSE VOLUME, and this value is interpolated into
+    # one. Measured with `docker compose config` on a generated package,
+    # `output_dir: "a:b"` emits `- ../a:b:/out:z` and parses as
+    # source=<config_dir>/a, target=b:/out, with the `:z` flag SILENTLY
+    # DROPPED -- so /out is never mounted, pandoc writes into the
+    # container's own filesystem and the products vanish, while OUT_HOST
+    # names a third directory. That is the `#` harm again, through a
+    # character far likelier to appear by accident: `C:/build` from a
+    # Windows author lands here, since Path() does not read it as absolute
+    # on POSIX.
+    if ":" in text:
+        raise ValueError(
+            f"Package {package_id}: output_dir {text!r} contains ':', which "
+            "separates the parts of the generated compose file's volume "
+            "mount. The output directory would not be mounted at all, and "
+            "the build's products would be written inside the container."
+        )
+    # A quote cannot chain a command here -- `;`, `$` and backtick are all
+    # refused above -- but it truncates one. Measured: `output_dir: "a'b"`
+    # generates at exit 0 and `make doc` dies with `unexpected EOF while
+    # looking for matching '`. Still a filename quietly doing something
+    # other than naming a file, which is the whole class.
+    if "'" in text or '"' in text:
+        raise ValueError(
+            f"Package {package_id}: output_dir {text!r} contains a quote "
+            "character, which would truncate the shell word the generated "
+            "Make recipe expands it into."
+        )
     if "#" in text:
         raise ValueError(
             f"Package {package_id}: output_dir {text!r} contains '#', which "
@@ -2075,9 +2103,16 @@ def template_destinations(template_defs: list, context: dict) -> list[tuple[str,
         # `where` names the key the AUTHOR wrote, not the one stencil
         # derived, so the message points at the line to edit.
         dest = declared if declared is not None else template_dest(src)
-        check_config_path(
-            "config", "dest" if declared is not None else "src", dest
-        )
+        where = "dest" if declared is not None else "src"
+        check_config_path("config", where, dest)
+        # AND the glob refusal, which is opt-in rather than part of
+        # `_UNSAFE_IN_PATH` (globs are the point of a `package_sources`
+        # pattern) and was wired to docs, slides, dir and both output_dirs
+        # -- and not to this one. Measured: `dest: "*.txt"` generated at
+        # exit 0, went into the manifest verbatim, and `clean` then refused
+        # it as "not a recognized glob shape" forever. stn-9rn's harm again,
+        # through the very channel this function was added to close.
+        check_no_glob("config", where, dest)
         destinations.append((src, dest))
     return destinations
 
@@ -2279,15 +2314,36 @@ def checked_write_target(
             # absolute path -- a first draft of this one explained itself at
             # length and had the recovery advice, the part the reader needs,
             # cut off the end.
+            # WHERE THE LINK GOES decides the advice, because `clean`'s
+            # rule is about the resolved PARENT rather than about links.
+            # A final-component link, and an intermediate one that lands
+            # back inside the package, are both removable by `clean`; only
+            # one resolving outside is not. Saying "clean cannot remove it"
+            # for all three was false for two of them.
+            try:
+                inside = current.resolve().is_relative_to(pkg_path)
+            except OSError:
+                inside = False
             recovery = (
-                "`stencil clean` removes it."
-                if last
-                else "`clean` cannot remove it either; delete the link yourself."
+                "`stencil clean` removes it"
+                if last or inside
+                else "`clean` cannot remove it either, so delete the link "
+                "yourself"
             )
+            # THE PATH GOES LAST. `_safe` truncates at _MAX_PROBLEM_CHARS and
+            # this message carries a RESOLVED ABSOLUTE path, whose length
+            # belongs to the machine rather than to the author -- a GitHub
+            # Actions checkout reaches the limit on its own, and `_generate`
+            # spends another sixty characters re-prefixing the package id.
+            # An earlier version put the path in the middle and lost both
+            # the diagnosis and the recovery off the end, while still
+            # carrying a comment claiming it was kept short enough. Ordered
+            # so that what survives truncation is the part that tells the
+            # reader what to do.
             raise ValueError(
                 f"Package {package_id}: {where} {relative!r} passes through "
-                f"{current}, which is a symlink -- refusing to write through "
-                f"it. {recovery}"
+                f"a symlink -- refusing to write through it, "
+                f"{recovery}. The link is: {current}"
             )
 
         if not last:
@@ -2353,7 +2409,15 @@ def open_for_write_nofollow(path: Path):
     # effect, so this costs the ordinary path nothing.
     nonblock = getattr(os, "O_NONBLOCK", 0)
     flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC | nofollow | nonblock
-    return os.fdopen(os.open(path, flags, 0o666), "wb")
+    descriptor = os.open(path, flags, 0o666)
+    try:
+        return os.fdopen(descriptor, "wb")
+    except Exception:
+        # fdopen can raise between the open and the wrapper taking
+        # ownership, and the descriptor would leak for the life of the
+        # process. Every other failure path here closes itself.
+        os.close(descriptor)
+        raise
 
 
 def write_text_nofollow(path: Path, text: str, executable: bool = False) -> None:
@@ -2680,10 +2744,20 @@ def get_generated_files(config: dict) -> list[str]:
         package = config["packages"][package_id]
         pkg_dir = package.get("dir", package_id)
 
-        for entry in package_entries(package_id, package, context, config_templates):
-            entries.add(f"{prefix}{pkg_dir}/{entry}")
+        # NORMALIZED, exactly like the output_dir prefix above and for the
+        # identical reason -- the comment there stated the rule and the next
+        # statement did not apply it to the segment that also leads every
+        # line. Measured with git check-ignore: `dir: "./demo"` produced
+        # `out/./demo/Makefile`, `dir: "demo/"` produced `out/demo//Makefile`,
+        # and git matched NEITHER, so `install` printed every line and
+        # ignored nothing -- stn-jl3's own failure mode one segment down.
+        # A trailing slash is an ordinary typing habit.
+        pkg_segment = "/".join(Path(pkg_dir).parts)
 
-        entries.add(f"{prefix}{pkg_dir}/{MANIFEST_NAME}")
+        for entry in package_entries(package_id, package, context, config_templates):
+            entries.add(f"{prefix}{pkg_segment}/{entry}")
+
+        entries.add(f"{prefix}{pkg_segment}/{MANIFEST_NAME}")
 
     return sorted(entries)
 
@@ -3016,9 +3090,20 @@ def _remove_entries(
 
     removed = []
     for _, path in paths_with_depth:
-        if not path.exists():
+        # `is_symlink()` FIRST, and it is not decoration. `Path.exists()`
+        # follows a link (False for a dangling one) and `Path.is_file()`
+        # follows it too (False for a link to a directory), so the two
+        # symlink shapes this loop's `unlink()` was written to handle were
+        # the exact two it never reached. Measured on the branch that added
+        # gen's own symlink refusal: `gen` said "`stencil clean` removes
+        # it", `clean` then exited 0 with twelve Removed lines and the word
+        # Makefile in none of them, and the link -- pointing out of the
+        # tree, inside a directory AGENTS.md says is handed to someone as a
+        # project of their own -- survived, with the package locked out of
+        # regeneration forever.
+        if not (path.is_symlink() or path.exists()):
             continue
-        if path.is_file():
+        if path.is_symlink() or path.is_file():
             if dry_run:
                 print(f"Would remove {path}")
             else:
@@ -3026,8 +3111,7 @@ def _remove_entries(
                 # above. unlink() removes the directory entry itself and
                 # never follows a final-component symlink, so this is
                 # correct for an ordinary symlink living inside the package
-                # even though `path.is_file()` above followed it to check
-                # type.
+                # even though the type checks above follow it.
                 try:
                     path.unlink()
                 except OSError as error:
@@ -3119,8 +3203,12 @@ def _remove_path(path: Path, dry_run: bool, problems: list[str]) -> None:
     reports an ordinary entry -- kept separate so the manifest is always the
     LAST thing printed and removed for its package. Guarded the same way
     too: a manifest that cannot be unlinked is a named problem, never a
-    traceback after every file it named is already gone."""
-    if not path.exists():
+    traceback after every file it named is already gone.
+
+    The `is_symlink()` half is the same fix `_remove_entries` needed: a
+    manifest replaced by a dangling link would otherwise be skipped here and
+    survive a clean that reported success."""
+    if not (path.is_symlink() or path.exists()):
         return
     if dry_run:
         print(f"Would remove {path}")
@@ -3479,7 +3567,13 @@ def install_gitignore(config: dict, config_dir: Path, dry_run: bool = False):
     stencil_section += f"{GITIGNORE_END}\n"
 
     if gitignore_path.exists():
-        content = gitignore_path.read_text()
+        # errors="replace", because this content is only ever pattern-matched
+        # and re-emitted around the managed section -- and a `.gitignore`
+        # that is not valid UTF-8 (a latin-1 comment, say) used to end the
+        # run in a UnicodeDecodeError traceback. encoding is explicit for
+        # the reason write_text_nofollow's docstring gives: the locale
+        # default made these bytes depend on the shell that ran stencil.
+        content = gitignore_path.read_text(encoding="utf-8", errors="replace")
 
         # Pattern to find existing stencil section (including markers)
         pattern = re.compile(
@@ -3514,7 +3608,7 @@ def install_gitignore(config: dict, config_dir: Path, dry_run: bool = False):
         # symlink into a dotfiles repository is a thing people really do, and
         # refusing it would break a working setup to guard a file whose whole
         # content the author already controls.
-        gitignore_path.write_text(new_content)
+        gitignore_path.write_text(new_content, encoding="utf-8")
         print(f"{action} {gitignore_path}")
         for entry in entries:
             print(f"  {entry}")
@@ -3527,14 +3621,21 @@ def install_gitignore(config: dict, config_dir: Path, dry_run: bool = False):
     stale = Path.cwd() / ".gitignore"
     if stale != gitignore_path and stale.is_file():
         try:
-            if GITIGNORE_START in stale.read_text():
+            # UnicodeDecodeError is a ValueError, NOT an OSError, so the
+            # guard below used to let it through -- and this block runs
+            # AFTER the write, so a non-UTF-8 .gitignore in the working
+            # directory ended a successful `install` with a traceback and
+            # rc=1. Measured with a latin-1 comment in the file.
+            if GITIGNORE_START in stale.read_text(
+                encoding="utf-8", errors="replace"
+            ):
                 print(
                     f"Note: {stale} still holds a stencil section from an "
                     "older version, which stencil no longer maintains. "
                     "Delete that block; the managed section now lives beside "
                     "the config file."
                 )
-        except OSError:
+        except (OSError, UnicodeDecodeError):
             pass
 
 

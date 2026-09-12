@@ -425,6 +425,35 @@ def test_a_package_output_dir_with_a_make_comment_is_refused():
     assert "comment" in str(exc.value), str(exc.value)
 
 
+def test_a_package_output_dir_with_a_compose_separator_is_refused():
+    """`:` separates the parts of a compose volume, and this value is
+    interpolated into one.
+
+    Measured with `docker compose config` on a generated package:
+    `output_dir: "a:b"` emits `- ../a:b:/out:z`, which parses as
+    source=<config dir>/a, target=`b:/out`, with the `:z` flag SILENTLY
+    DROPPED -- so `/out` is never mounted at all, pandoc writes into the
+    container's own filesystem and the products vanish, while `OUT_HOST`
+    names a third directory. That is the `#` harm again through a character
+    far likelier to appear by accident: `C:/build` from a Windows author
+    lands here, because `Path()` does not read it as absolute on POSIX."""
+    with pytest.raises(ValueError, match="output_dir") as exc:
+        package_contexts(config(output_dir="a:b"))
+    assert "compose" in str(exc.value), str(exc.value)
+
+
+@pytest.mark.parametrize("value", ["a'b", 'a"b'])
+def test_a_package_output_dir_with_a_quote_is_refused(value):
+    """A quote cannot chain a command here -- `;`, `$` and backtick are all
+    refused -- but it truncates one. Measured: `output_dir: "a'b"` generated
+    at exit 0 and `make doc` died with `unexpected EOF while looking for
+    matching '`. Still a filename quietly doing something other than naming
+    a file, which is the class this check exists for."""
+    with pytest.raises(ValueError, match="output_dir") as exc:
+        package_contexts(config(output_dir=value))
+    assert "quote" in str(exc.value), str(exc.value)
+
+
 @pytest.mark.parametrize("value", ["build/*", "build/?x", "build/[a-z]"])
 def test_a_package_output_dir_with_a_glob_metacharacter_is_refused(value):
     """This names one directory, not a pattern -- the same argument

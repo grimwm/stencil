@@ -1550,3 +1550,142 @@ def test_a_template_dest_derived_from_src_is_checked_too(tmp_path):
     assert not (tmp_path / "demo" / "a b.txt").exists(), (
         "gen wrote a file clean would then refuse to remove"
     )
+
+
+@pytestmark_h5q
+@pytest.mark.parametrize("kind", ["dangling", "directory"])
+def test_clean_removes_a_symlink_standing_where_a_generated_file_goes(
+    tmp_path, kind
+):
+    """gen's refusal says "`stencil clean` removes it". It has to be TRUE.
+
+    `_remove_entries` gated its removal on `Path.exists()` and
+    `Path.is_file()`, and BOTH follow a symlink -- `exists()` is False for a
+    dangling one, `is_file()` is False for one pointing at a directory. So
+    the two shapes that loop's `unlink()` was written to handle were the
+    exact two it never reached.
+
+    Measured before the fix: `stencil clean demo` exited 0 with twelve
+    `Removed` lines and the word `Makefile` in none of them, the link
+    survived, and `gen` then refused forever -- a package locked out of
+    regeneration by a refusal whose own advice did not work. The link points
+    OUT of the tree, inside a directory AGENTS.md says is routinely handed
+    to someone as a project of their own, and `clean` had just reported the
+    package clean.
+
+    Both halves are asserted: the link is gone, and `gen` works again."""
+    config_dir, package_dir, target = _planted_package(tmp_path)
+    link = package_dir / "Makefile"
+    if kind == "dangling":
+        link.symlink_to(target.parent / "not-there.txt")
+    else:
+        link.symlink_to(target.parent)
+
+    assert run_cli("gen", "demo", cwd=config_dir).returncode != 0
+
+    cleaned = run_cli("clean", "demo", cwd=config_dir)
+
+    assert "Traceback" not in cleaned.stderr, cleaned.stderr
+    assert not link.is_symlink(), (
+        "clean left the link in place while reporting success: "
+        f"rc={cleaned.returncode}, stdout={cleaned.stdout[:400]!r}"
+    )
+    assert target.parent.exists(), "clean removed the link's TARGET"
+
+    again = run_cli("gen", "demo", cwd=config_dir)
+    assert again.returncode == 0, (
+        "the package is still locked out of regeneration after the clean "
+        f"its own refusal recommended: {again.stderr!r}"
+    )
+
+
+@pytestmark_h5q
+def test_the_recovery_advice_says_clean_for_a_link_that_lands_inside(tmp_path):
+    """`clean`'s rule is about the resolved PARENT, not about links, so an
+    intermediate symlink pointing back INSIDE the package is one it handles
+    happily. Telling the author "clean cannot remove it either; delete the
+    link yourself" was false for that case -- and for the final-component
+    case it was already right -- so the advice branches on where the link
+    resolves rather than on which component it is."""
+    config_dir, package_dir, _target = _planted_package(
+        tmp_path, templates=[{"src": "Makefile.j2", "dest": "sub/Makefile"}]
+    )
+    (package_dir / "real").mkdir()
+    (package_dir / "sub").symlink_to(package_dir / "real")
+
+    result = run_cli("gen", "demo", cwd=config_dir)
+
+    assert result.returncode != 0
+    assert "stencil clean" in result.stderr, result.stderr
+    assert "delete the link yourself" not in result.stderr, result.stderr
+
+
+@pytestmark_h5q
+def test_the_refusal_survives_truncation_when_the_path_is_long(tmp_path):
+    """`_safe` truncates a problem at `_MAX_PROBLEM_CHARS`, and this message
+    carries a RESOLVED ABSOLUTE path -- whose length belongs to the machine,
+    not to the author. A GitHub Actions checkout reaches the limit on its
+    own, and `_generate` spends another sixty characters re-prefixing the
+    package id.
+
+    An earlier version of this message put the path in the middle, lost both
+    the diagnosis and the recovery off the end, and carried a comment
+    claiming it was kept short enough. What has to survive is the part that
+    tells the reader what to do, so the path goes last and this pins it."""
+    long_id = "a-reasonably-long-course-directory-name-for-2026-spring"
+    config_dir = tmp_path / "cfg"
+    package_dir = config_dir / "out" / long_id
+    package_dir.mkdir(parents=True)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "target.txt").write_text("PRECIOUS\n")
+    write_config(
+        config_dir,
+        {
+            "output_dir": "out",
+            "templates": [{"src": "Makefile.j2"}],
+            "packages": {long_id: {"name": "Demo", "package_type": "none"}},
+        },
+    )
+    (package_dir / "Makefile").symlink_to(outside / "target.txt")
+
+    result = run_cli("gen", long_id, cwd=config_dir)
+
+    assert result.returncode != 0
+    assert "symlink" in result.stderr, (
+        f"the diagnosis was truncated away: {result.stderr!r}"
+    )
+    assert "stencil clean" in result.stderr, (
+        f"the recovery advice was truncated away: {result.stderr!r}"
+    )
+
+
+@pytest.mark.parametrize("dest", ["*.txt", "x?.txt", "[abc].txt"])
+def test_a_template_dest_with_a_glob_metacharacter_is_refused(tmp_path, dest):
+    """The glob refusal is opt-in rather than part of `_UNSAFE_IN_PATH` --
+    globs are the point of a `package_sources` pattern -- and it was wired
+    to `docs`, `slides`, `dir` and both `output_dir`s, and not to this one.
+
+    Measured: `dest: "*.txt"` generated at exit 0, went into the manifest
+    verbatim, and `clean` then refused it as "not a recognized glob shape"
+    on every run thereafter. stn-9rn's permanently-un-cleanable package,
+    arriving through the very channel the shared destination list was added
+    to close.
+
+    There is a second edge: `install` then wrote `demo/*.txt` into the
+    managed section, which made the author's own `demo/notes.txt`
+    git-invisible."""
+    write_config(
+        tmp_path,
+        {
+            "templates": [{"src": "Makefile.j2", "dest": dest}],
+            "packages": {"demo": {"name": "Demo", "package_type": "none"}},
+        },
+    )
+
+    result = run_cli("gen", "demo", cwd=tmp_path)
+
+    assert result.returncode != 0, (
+        f"rc={result.returncode}, stdout={result.stdout[:400]!r}"
+    )
+    assert "glob metacharacter" in result.stderr, result.stderr

@@ -495,6 +495,74 @@ def test_the_output_dir_prefix_is_normalized_before_it_becomes_a_pattern(
     _ignored(tmp_path, "out/demo/Makefile")
 
 
+@pytest.mark.parametrize("declared_dir", ["demo", "./demo", "demo/", "a//b"])
+def test_the_package_dir_segment_is_normalized_too(tmp_path, declared_dir):
+    """The same normalization, one segment down, and it was missed.
+
+    The comment on the output_dir prefix states the rule exactly -- a
+    leading `./` matches nothing at all in a gitignore pattern, which is a
+    silent way to ignore nothing -- and the next statement interpolated
+    `dir` raw. Measured with `git check-ignore`: `dir: "./demo"` produced
+    the line `out/./demo/Makefile`, `dir: "demo/"` produced
+    `out/demo//Makefile`, and git matched NEITHER, so `install` printed
+    every line and ignored none of them. That is stn-jl3's own failure mode
+    at the segment nobody normalized, reached by an ordinary typing habit."""
+    _git_init(tmp_path)
+    write_config(
+        tmp_path,
+        {
+            "output_dir": "out",
+            "templates": [{"src": "Makefile.j2"}],
+            "packages": {
+                "demo": {
+                    "name": "Demo",
+                    "package_type": "none",
+                    "dir": declared_dir,
+                }
+            },
+        },
+    )
+
+    assert run_cli("gen", "demo", cwd=tmp_path).returncode == 0
+    assert run_cli("install", cwd=tmp_path).returncode == 0
+
+    expected = "out/" + "/".join(Path(declared_dir).parts) + "/Makefile"
+    _ignored(tmp_path, expected)
+
+
+def test_install_does_not_traceback_on_a_gitignore_that_is_not_utf8(tmp_path):
+    """The stale-section note runs AFTER the write, and its guard was
+    `except OSError` -- but `UnicodeDecodeError` is a `ValueError`. So a
+    `.gitignore` holding a latin-1 comment in the working directory ended a
+    run that had already done its real work with a traceback and rc=1.
+
+    The content here is only ever substring-matched and re-emitted around
+    the managed section, so it is read with `errors="replace"` rather than
+    refused: a byte stencil does not understand in a file it does not own is
+    not a reason to fail."""
+    project = tmp_path / "project"
+    project.mkdir()
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    (elsewhere / ".gitignore").write_bytes(b"# caf\xe9 build\n")
+
+    config_path = write_config(
+        project,
+        {
+            "templates": [{"src": "Makefile.j2"}],
+            "packages": {"demo": {"name": "Demo", "package_type": "none"}},
+        },
+    )
+
+    result = run_cli("--config", str(config_path), "install", cwd=elsewhere)
+
+    assert "Traceback" not in result.stderr, result.stderr
+    assert result.returncode == 0, (
+        f"a successful install reported failure: {result.stderr!r}"
+    )
+    assert (project / ".gitignore").is_file()
+
+
 def test_install_cannot_un_ignore_a_file_the_author_already_ignores(tmp_path):
     """The managed section's lines are PATTERNS, and a leading `!` NEGATES
     one. `dir` and the top-level `output_dir` are the two config values that

@@ -19,11 +19,13 @@ How the version gets bumped is written down in
 
   **This is a behaviour change in five places.** A `dir: "."` or `dir: ""`
   generated and cleaned at exit 0 yesterday and is refused today; a package-level
-  `output_dir` carrying a metacharacter, whitespace, `~`, an absolute path, `#` or
-  a glob is refused; a `dir` or top-level `output_dir` starting with `!` or `#` is
-  refused; the managed `.gitignore` section's lines gain the top-level
-  `output_dir` prefix; and that section is now written beside the config file
-  rather than in the working directory.
+  `output_dir` carrying a metacharacter, whitespace, `~`, an absolute path, `#`,
+  `:`, a quote or a glob is refused; a `dir` or top-level `output_dir` starting
+  with `!` or `#`, **or containing a glob metacharacter anywhere**, is refused
+  (`dir: "hw[1]"` generated cleanly before); a template `dest` may no longer
+  contain a glob metacharacter either; the managed `.gitignore` section's lines
+  gain the top-level `output_dir` prefix; and that section is now written beside
+  the config file rather than in the working directory.
 
   **The consumer configs were not re-measured for this one**, unlike `stn-pe3`
   below — they are not in this checkout, and a claim to have checked them would
@@ -59,7 +61,15 @@ How the version gets bumped is written down in
     **What that makes symmetric is the parent.** `gen` and `clean` now compute it
     with one shared function, so anything `gen` writes, `clean` can remove — a
     second copy agreeing today and drifting later would have closed the symptom
-    and left the cause. The final component stays asymmetric deliberately: `gen`
+    and left the cause. Making that sentence *true* also took a fix on `clean`'s
+    own side: `_remove_entries` gated removal on `Path.exists()` and
+    `Path.is_file()`, and **both follow a symlink** — false for a dangling one,
+    false for one pointing at a directory — so the two shapes its `unlink()` was
+    written to handle were the exact two it never reached. `gen`'s new refusal
+    says "`stencil clean` removes it", and before this `clean` exited 0 with the
+    link untouched and the file's name in none of its output, leaving a pointer
+    out of the tree inside a folder it had just called clean and the package
+    locked out of regeneration. The final component stays asymmetric deliberately: `gen`
     refuses a link there because it would follow it, `clean` unlinks one without
     resolving it because that is the only way such a package is ever cleanable.
     So `gen` is at least as strict as `clean`, never the reverse.
