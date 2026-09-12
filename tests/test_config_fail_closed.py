@@ -31,6 +31,8 @@ import pytest
 
 from stencil.generate import brand_problem, get_generated_files, package_contexts
 
+from test_cli import run_cli, write_config
+
 
 def package(**overrides):
     """A minimal valid package, so every test overrides only what it breaks."""
@@ -236,6 +238,25 @@ def test_a_non_string_package_name_raises_valueerror_not_attributeerror():
     assert "demo" in str(exc.value)
 
 
+def test_a_non_string_package_name_names_the_key_too():
+    """The test above only asserts that 'demo' -- the package -- appears in
+    the message. This pins that the KEY, package_name, is named too: a
+    config with a dozen keys otherwise sends the author looking through all
+    of them for which one was the problem.
+
+    package_type "none" never CONSUMES package_name at all (unlike "doc"
+    above, which reaches it via `.endswith('.pdf')`) -- used deliberately so
+    this also pins that a non-string package_name is refused whenever the
+    key is PRESENT, not only for the doc/zip types that happen to read it.
+    """
+    config = {"packages": {"demo": package(package_type="none", package_name=42)}}
+    with pytest.raises(ValueError) as exc:
+        package_contexts(config)
+    message = str(exc.value)
+    assert "demo" in message, f"the broken package is not named: {message!r}"
+    assert "package_name" in message, f"the key is not named: {message!r}"
+
+
 def test_a_non_string_output_dir_raises_valueerror_not_typeerror():
     """output_dir: 5 hits `Path(raw_output)` before the try/except around
     os.path.relpath even starts, so today's TypeError -- 'argument should be
@@ -245,6 +266,65 @@ def test_a_non_string_output_dir_raises_valueerror_not_typeerror():
     with pytest.raises(ValueError) as exc:
         package_contexts(config)
     assert "demo" in str(exc.value)
+
+
+# --- stn-40a/stn-pe3: the CONFIG-level output_dir is unchecked too ----------
+#
+# The test above is about the PACKAGE-level key (`packages.demo.output_dir`).
+# This is its config-level twin (the top-level `output_dir` that `_main`
+# joins onto `config_dir` to compute `output_base`) -- named distinctly so
+# neither shadows the other.
+
+
+@pytest.mark.parametrize("value", [7, 0, False, True, [], {}, 1.5])
+def test_a_non_string_top_level_output_dir_raises_valueerror_not_typeerror(value):
+    """Before 0.39.0, `_main` computed
+    `output_base = (config_dir / output_dir_raw).resolve()` with no shape
+    check at all, and `package_contexts` raised nothing here -- the value
+    passed straight through. 0, False and [] are FALSY non-strings, which a
+    naive `if not value: return None` swallows into "output base is the
+    config directory", the same silent mis-read stn-40a exists to close --
+    which is why `check_output_dir` tests the type BEFORE falsiness.
+
+    `True` is in the matrix for the opposite reason to `False`: it is the
+    TRUTHY bool, the one a "falsiness first" reader assumes the falsiness
+    branch never sees, so it is the value most likely to be let through by
+    a later "simplification". `{}` covers the falsy non-list container and
+    `1.5` the numeric that is not an int. Only `None` and `""` fall
+    through to "the output base is the config directory", which is what a
+    blank key has always meant.
+    """
+    config = {"output_dir": value, "packages": {"demo": package()}}
+    with pytest.raises(ValueError, match="output_dir"):
+        package_contexts(config)
+
+
+@pytest.mark.parametrize(
+    "args",
+    [("gen", "--all"), ("clean", "--all"), ("install",)],
+    ids=["gen", "clean", "install"],
+)
+def test_cli_reports_a_non_string_top_level_output_dir_without_a_traceback(
+    tmp_path, args
+):
+    """stn-40a's other half. `_main` computes `output_base` before
+    `package_contexts`'s pre-flight ever runs, so before 0.39.0 `gen` and
+    `clean` tracebacked with a bare `TypeError` -- 'unsupported operand
+    type(s) for /: PosixPath and int' -- while `install`, which returns
+    above that line entirely, reported nothing at all and exited 0. All
+    three are now an ordinary, non-zero, traceback-free error.
+    """
+    write_config(
+        tmp_path,
+        {
+            "output_dir": 7,
+            "templates": [{"src": "Makefile.j2"}],
+            "packages": {"demo": package()},
+        },
+    )
+    result = run_cli(*args, cwd=tmp_path)
+    assert result.returncode != 0
+    assert "Traceback" not in result.stderr
 
 
 def test_a_list_valued_packages_key_raises_valueerror():

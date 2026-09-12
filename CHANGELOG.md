@@ -11,6 +11,88 @@ How the version gets bumped is written down in
 
 ## 0.39.0
 
+- **Every configured path that names the output side is now checked and
+  contained** (`stn-pe3`, `stn-vhr`, `stn-40a`, `stn-9rn`). The input side got
+  this in `stn-vhm`, `stn-c25` and `stn-k73`; three keys on the output side
+  were still exempt, and each was a different way out of the tree.
+
+  **This is a behaviour change**, in two places. A top-level `output_dir`
+  that escapes the config file's directory generated and cleaned at exit 0
+  yesterday and is refused today; and `package_name` is now checked for
+  every package type, where before it was read only by `zip` and `doc`, so
+  a `package_name: "handouts/x.zip"` that worked yesterday is refused.
+  Measured before the decision was taken: no consumer config sets the
+  top-level `output_dir` at all, across cs234's four configs and cs425's
+  three, and every `package_name` in them is a plain filename.
+
+  **Which check reaches which command.** The shape and string checks — not a
+  string, `..`, absolute, `~`, whitespace, a metacharacter — run in the
+  config pre-flight, so every command gets them. The *containment* check,
+  which is the only half that can see a symlinked `output_dir`, runs where
+  `output_base` is computed, which `gen` and `clean` reach and `install` and
+  `list` return above. So a string-clean `output_dir: out` whose `out` is a
+  symlink pointing outside is refused by `gen` and `clean`, and accepted by
+  `install` — which never writes through `output_base`, so nothing outside
+  the tree is touched either way; the refusal is deferred, not skipped.
+
+  What each of the four closes:
+
+  - `stn-pe3` — the resolved output base must stay under the config
+    directory. Every path `clean` unlinks is relative to it, so an escaping
+    value made it the ground a delete stood on: `output_dir: ../victim-base`
+    plus
+    `stencil clean --all` removed a file outside the config directory and
+    exited 0. The check also catches an `output_dir` whose *string* is
+    perfectly ordinary and which is itself a symlink pointing out, which no
+    string check can see. It runs above `clean`'s degraded path, so a
+    broken-config run cannot skip it.
+  - `stn-40a` — a non-string `output_dir` reached the terminal as a bare
+    `TypeError` traceback, because the output base was computed above the
+    pre-flight that turns config mistakes into readable messages. It is now
+    an ordinary config error with the usual heading and trailer. `0`, `false`
+    and `[]` are refused by naming the type rather than being read as "not
+    set", which is what a falsiness check would have done with them.
+  - `stn-vhr` — `gen` wrote through a symlinked package directory: every
+    rendered template landed outside the tree, at exit 0, with a success
+    message naming the path *inside* it, so nothing in the output hinted at
+    where the bytes went. The package directory is now contained before
+    anything is created, so a refused run touches nothing, and `--dry-run`
+    refuses too rather than previewing a write it would not perform. The
+    check is a snapshot taken before the writes, so "touches nothing" holds
+    absent concurrent modification of the output tree; anyone who can swap
+    a directory for a symlink mid-run can already write wherever the
+    running user can.
+    **What this closes is the package directory itself.** A symlinked
+    subdirectory below it, and a brand image's destination, still follow
+    links out of the tree; both are filed with reproductions as `stn-h5q`
+    and are not closed here.
+  - `stn-9rn` — `package_name` was the one package path key that never went
+    through any check, so `package_name: "../escape me.zip"` generated at
+    exit 0, word-split the Makefile's `PKG` line, and was recorded verbatim
+    as a manifest entry — after which `clean` refused that entry by name and
+    the package was permanently un-cleanable. It is now checked as what it
+    is: a filename in the package directory, with no separator, whitespace,
+    `..`, shell or glob metacharacter. It is validated whenever the key is
+    present, not only for the package types that consume it.
+
+  **Where to put build products instead, stated carefully.** The
+  package-level `output_dir` is the key for that, and its escape is
+  deliberate and untouched here — but it is not the same key doing the same
+  job from a different scope, so this is not a drop-in migration. It moves a
+  package's *build products* relative to the package directory; the
+  top-level key decides where *scaffolding is generated*. Anyone using the
+  top-level key to keep generated scaffolding out of the config directory
+  has no migration path and should move the config file instead. And the
+  package-level key is **not itself path-validated yet** — it reaches a Make
+  variable that recipes expand, so an unvalidated value there is worse than
+  the one just closed, not better (`stn-1a4`).
+
+  Also still outstanding, named so the boundary of this change is not
+  mistaken for the whole problem: the component-level writes below a
+  contained package directory (`stn-h5q`), and the managed `.gitignore`
+  section naming paths without the top-level `output_dir` prefix, so it
+  ignores nothing whenever that key is set (`stn-r5v`).
+
 - **`make format-md` now says why it refused a lockfile** (`stn-jjw`). The digest
   guard below piped `sha256sum -c` to `>/dev/null 2>&1`, so all four ways *that
   check* can end — a match, a mismatch, an absent file to check, and an absent

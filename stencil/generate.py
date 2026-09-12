@@ -19,6 +19,7 @@ import shutil
 import stat
 import sys
 from pathlib import Path
+from typing import NoReturn
 
 import yaml
 from jinja2 import Environment, FileSystemLoader, StrictUndefined, Undefined, meta, nodes
@@ -285,6 +286,61 @@ def check_config_path(package_id: str, where: str, value) -> str:
     return text
 
 
+def check_output_dir(config: dict) -> str | None:
+    """The top-level ``output_dir``'s shape check (stn-40a) and path check
+    (stn-pe3) -- the third member of the set ``dir`` (stn-vhm) and ``dest``
+    (stn-c25) belong to, and the only one still exempt from every path
+    check.
+
+    ORDER MATTERS, and this is deliberately not the obvious
+    ``if not value: return None`` first: ``output_dir: 0``, ``false`` and
+    ``[]`` are FALSY NON-STRINGS, and checking falsiness before checking the
+    type would swallow all three into "output base is the config
+    directory" -- the exact silent mis-read stn-40a exists to close. So the
+    type check runs first and refuses them by naming the type; only THEN
+    does an empty string fall through to today's behaviour.
+    """
+    value = config.get("output_dir")
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        # Same message shape as the `dest` check just above in
+        # package_contexts: "Package config: <key> <value> is <type>, not a
+        # string."
+        raise ValueError(
+            f"Package config: output_dir {value!r} is "
+            f"{type(value).__name__}, not a string. output_dir names the "
+            "directory everything else is generated under."
+        )
+    if not value:
+        # "" is what an empty-but-present key has always meant: the output
+        # base is the config directory. Preserved rather than refused.
+        return None
+    try:
+        return check_config_path("config", "output_dir", value)
+    except ValueError as error:
+        # check_config_path's messages all end "escapes the package
+        # directory. Paths are relative to it and must stay inside." --
+        # wrong here twice over: there is no package, and this key is
+        # relative to the CONFIG FILE's directory (see the comment at
+        # _main's output_base computation). One sentence appended rather
+        # than parameterising check_config_path itself, which would touch
+        # dir, dest, docs, slides, package_sources and pre_build and their
+        # tests -- outside this change's boundary.
+        #
+        # The appended sentence names no function. It is read by someone
+        # editing YAML, who has no reason to know which internal check
+        # produced the half above it -- the same argument package_contexts
+        # makes for keeping Python class names out of config messages. So
+        # it reads as a correction of the borrowed sentence instead.
+        raise ValueError(
+            f"{error} (There is no package here: the top-level output_dir "
+            "is relative to the config file's directory and must stay "
+            "under it. A package-level output_dir is the supported way to "
+            "send a package's build products somewhere else.)"
+        ) from error
+
+
 def check_no_glob(package_id: str, where: str, value: str) -> str:
     """Refuse a glob metacharacter in a config value that names ONE file.
 
@@ -308,6 +364,31 @@ def check_no_glob(package_id: str, where: str, value: str) -> str:
             "metacharacter (one of * ? [ ]). This names one file, not a "
             "pattern -- `clean` would have to expand it back out of the "
             "manifest, and would refuse to."
+        )
+    return value
+
+
+def check_no_separator(package_id: str, where: str, value: str) -> str:
+    """Refuse a path separator in a config value that names ONE file IN the
+    package directory, not a path.
+
+    Separate from `check_config_path` rather than a widening of it, because
+    the two disagree on purpose: `check_config_path` deliberately ALLOWS a
+    subdirectory -- `dest: .vscode/settings.json` is documented in
+    STENCIL.md -- while `package_name` names one file directly under the
+    package directory, so the same subdirectory is not a feature to permit
+    here, only a way to nest or escape.
+
+    Refuses '/' only, not backslash: `_UNSAFE_IN_PATH` (above) already
+    contains a backslash, and `check_config_path` runs before this check on
+    every caller, so a backslash branch here would be unreachable dead
+    code -- already refused upstream as a shell/Make metacharacter.
+    """
+    if "/" in value:
+        raise ValueError(
+            f"Package {package_id}: {where} {value!r} contains a path "
+            "separator. This names one file in the package directory, not "
+            "a path."
         )
     return value
 
@@ -394,8 +475,34 @@ def get_template_context(package_id: str, config: dict) -> dict:
             f"Package {package_id} has invalid package_type: {package_type}"
         )
 
-    # package_name is required for zip packages (not for doc or none)
+    # package_name is required for zip packages (not for doc or none), but
+    # validated whenever it is PRESENT (stn-9rn) -- not only for the
+    # package_type that consumes it. Measured safe: every package_name
+    # across the seven consumer configs on this machine is a plain filename,
+    # so this runs unconditionally rather than gated on package_type.
     package_name = package.get("package_name")
+    if package_name is not None:
+        # Checked before check_config_path, which str()s its argument: a
+        # non-string package_name would otherwise sail through as its str()
+        # form and only fail later at `.endswith('.pdf')` (doc packages) as
+        # an AttributeError that package_contexts' generic catch reports by
+        # class name rather than by which key was wrong.
+        if not isinstance(package_name, str):
+            raise ValueError(
+                f"Package {package_id}: package_name {package_name!r} is "
+                f"{type(package_name).__name__}, not a string. package_name "
+                "is the one file `pkg` builds, so it is a filename."
+            )
+        package_name = check_config_path(package_id, "package_name", package_name)
+        # check_config_path deliberately ALLOWS a subdirectory --
+        # `dest: .vscode/settings.json` is documented in STENCIL.md -- but
+        # package_name names one file IN the package directory, not a path,
+        # so a separator it lets through must still be refused here.
+        package_name = check_no_separator(package_id, "package_name", package_name)
+        # Recorded verbatim as a manifest entry, so a glob metacharacter is
+        # the same shape stn-2x4's check_no_glob exists to refuse for docs
+        # and slides.
+        package_name = check_no_glob(package_id, "package_name", package_name)
     if package_type == "zip" and not package_name:
         raise ValueError(
             f"Package {package_id} is missing required 'package_name' (required for zip type)"
@@ -1176,8 +1283,18 @@ CLEAN_DEGRADED_TRAILER = (
 )
 
 
-def _raise_config_problems(problems: list[str], trailer: str | None = None) -> None:
+def _raise_config_problems(
+    problems: list[str], trailer: str | None = None
+) -> NoReturn:
     """Turn collected config problems into the one ValueError callers print.
+
+    ``NoReturn``, not ``None``, and that is load-bearing rather than
+    decorative: every caller relies on this never returning, and
+    ``checked_output_base`` reads a name bound in the ``try`` immediately
+    after its ``except`` calls this. Spelled ``-> None``, that reads to a
+    type-checker -- and to a person -- as a possible ``UnboundLocalError``
+    rather than as the config error it actually is, and any future edit that
+    gave this function a non-raising path would turn that into a real one.
 
     Deliberately names no file: --config means the path is not always
     .config.yaml, and nothing down here is told which one it got. Every
@@ -1302,6 +1419,36 @@ def package_contexts(
                 check_config_path("config", "dest", declared)
             except ValueError as error:
                 problems.append(str(error))
+
+    # The top-level output_dir (stn-40a, stn-pe3), config-level like `dest`
+    # just above -- but this call is the SHAPE half only (check_output_dir).
+    # The containment half (checked_output_base) needs a real config_dir to
+    # resolve against, and package_contexts is called with none by
+    # get_generated_files, install_gitignore and clean_generated -- so it
+    # cannot run here.
+    #
+    # This still earns its place, for three reasons that are easy to mistake
+    # for one:
+    #  - `install` returns above _main's output_base computation entirely
+    #    (generate.py, the `install` branch), so this is the only pre-flight
+    #    a bad output_dir ever reaches on that command;
+    #  - a direct library caller of get_generated_files / install_gitignore /
+    #    clean_generated gets no output_base computation at all, only this;
+    #  - it stops `Path(config.get("output_dir") or ".")`, inside
+    #    get_template_context's package_root computation, from raising a bare
+    #    TypeError on a non-string value before a single package context is
+    #    built.
+    #
+    # It does NOT make gen or clean's report "aggregate with every other
+    # config problem" the way the `dest` check above does -- _main computes
+    # output_base (via checked_output_base) ABOVE gen's validate_config call
+    # and ABOVE clean's own package_contexts call, so for those two commands
+    # _main's check already raised and this line is never reached. Say so
+    # here, or the next reader deletes this as a duplicate of that one.
+    try:
+        check_output_dir(config)
+    except ValueError as error:
+        problems.append(str(error))
 
     # Shapes first, for EVERY package, before a single context is built.
     #
@@ -1728,6 +1875,21 @@ def generate_package(
 
     output_dir = output_base / context["package_dir"]
 
+    # stn-vhr: contain the package directory itself before anything is
+    # created. A non-existent directory resolves to itself under
+    # output_base, so this check is correct whether or not output_dir
+    # exists yet -- and running it above the mkdir means a refused run
+    # has touched nothing. Called for its refusal only: the return value
+    # is discarded, because contained_path returns the RESOLVED path, and
+    # every subsequent write and the "Generated: {output_path}" report
+    # must keep going through the DECLARED output_dir. This covers only
+    # the package directory itself, not a symlinked subdirectory nested
+    # inside it or copy_brand_image's destination -- that gap is filed
+    # separately as stn-h5q.
+    contained_path(
+        package_id, "dir", context["package_dir"], output_dir, output_base
+    )
+
     if not output_dir.exists():
         if dry_run:
             print(f"Would create directory: {output_dir}")
@@ -2008,6 +2170,112 @@ def _clean_scope(
     return scope
 
 
+def contained_path(
+    package_id: str, where: str, declared: str, candidate: Path, root: Path
+) -> Path:
+    """The stn-7t9 containment guarantee, in one place (stn-sl2.1): resolve
+    `candidate` and refuse it unless it stays under resolved `root`.
+
+    Lifted out of `_validated_package_dirs`, which used to be the only
+    caller and inlined this as two lines -- fine when there was one call
+    site, a duplicate spelling waiting to drift once `generate_package` and
+    `checked_output_base` need the same rule. `declared` is why this takes
+    five arguments rather than four: the message below names the STRING the
+    config declared (e.g. a relative `dir`), not `candidate` itself, because
+    `candidate` is usually built by joining that string onto a base the
+    caller already resolved once -- and resolving BOTH `candidate` and
+    `root` here, rather than trusting a pre-resolved `root`, is what lets a
+    direct library caller pass either one unresolved.
+
+    `resolve()` itself is guarded, though NOT for the symlink cases this
+    exists to catch -- measured on this interpreter, none of them raises. A
+    loop comes back unresolved, so it reports contained here and fails later
+    at the write with ELOOP; a broken link resolves to its DANGLING TARGET,
+    which is outside and is refused below; a path that does not exist yet
+    resolves lexically, which is what lets this run before `mkdir`. The
+    guard is for a genuine OSError -- a path component that is not a
+    directory, an unreadable ancestor -- which must fail closed rather than
+    propagate past every caller's own error handling, the way
+    `_remove_entries` already guards its own `resolve()` and this code did
+    not before it was lifted.
+    """
+    try:
+        candidate_resolved = candidate.resolve()
+        root_resolved = root.resolve()
+    except OSError as error:
+        raise ValueError(
+            f"Package {package_id}: {where} {declared!r} could not be "
+            f"resolved: {error} -- refusing to touch it"
+        ) from error
+    try:
+        candidate_resolved.relative_to(root_resolved)
+    except ValueError:
+        raise ValueError(
+            f"Package {package_id}: {where} {declared!r} resolves to "
+            f"{candidate_resolved}, outside the output directory "
+            f"{root_resolved} -- refusing to touch it"
+        ) from None
+    return candidate_resolved
+
+
+def checked_output_base(config: dict, config_dir: Path) -> Path:
+    """Resolve the top-level ``output_dir`` into ``output_base``, refusing
+    one that escapes ``config_dir`` (stn-pe3) -- catching a SYMLINKED
+    ``output_dir`` that ``check_output_dir``'s string check cannot see, the
+    same way a symlinked package ``dir`` is caught below.
+
+    Spells its own ``resolve()``/``relative_to()`` pair rather than routing
+    through ``contained_path``: that helper is rooted at an OUTPUT BASE and
+    its message says "outside the output directory", which is wrong here --
+    there is no output base yet, only a config directory, and this call is
+    what computes the very thing ``contained_path``'s other callers assume
+    already exists. Two lines is not a second rule.
+
+    Raises through ``_raise_config_problems`` rather than bare, so what the
+    terminal prints is shaped like every other config error: the same
+    heading, the same trailer saying nothing was generated, removed or
+    written, and the same ``_safe`` pass over a value that came out of a
+    config file. Without it this one key reported in a shape nothing else
+    uses -- and on `clean`, without the sentence that says the run touched
+    nothing, which is the part an author most needs to read.
+    """
+    try:
+        value = check_output_dir(config)
+    except ValueError as error:
+        _raise_config_problems([str(error)])
+
+    candidate = (config_dir / value) if value else config_dir
+    # Guarded for the same reason contained_path guards its own pair, and
+    # spelled here rather than inherited because this function deliberately
+    # does NOT route through that helper: an unguarded OSError would leave
+    # _main, which catches only ValueError around this call, printing the
+    # bare traceback stn-40a exists to remove -- from the very function that
+    # closes stn-40a. Measured on this interpreter, none of the symlink
+    # cases raises (a loop returns the path unresolved, a broken link
+    # resolves to its dangling target, a missing path resolves lexically);
+    # the guard is for a genuine OSError, such as an unreadable ancestor or
+    # a path component that is not a directory.
+    try:
+        resolved_config_dir = config_dir.resolve()
+        resolved_candidate = candidate.resolve()
+    except OSError as error:
+        _raise_config_problems(
+            [
+                f"Package config: output_dir {value!r} could not be "
+                f"resolved: {error}"
+            ]
+        )
+    if not resolved_candidate.is_relative_to(resolved_config_dir):
+        _raise_config_problems(
+            [
+                f"Package config: output_dir {value!r} resolves to "
+                f"{resolved_candidate}, outside the config directory "
+                f"{resolved_config_dir} -- refusing to touch it"
+            ]
+        )
+    return resolved_candidate
+
+
 def _validated_package_dirs(
     scope: dict[str, dict], output_base: Path, problems: list[str]
 ) -> dict[str, Path]:
@@ -2022,14 +2290,14 @@ def _validated_package_dirs(
     the manifest lookup, and the containment root, outside the output tree.
 
     The string check alone does not catch a symlinked package directory, so
-    `(output_base / pkg_dir).resolve()` is also required to stay under
-    `output_base.resolve()` -- this is the stn-7t9 containment guarantee,
-    applied at the one place every source (manifest or config-derived) goes
-    through before anything is touched.
+    `contained_path` (stn-sl2.1) is also required to place
+    `output_base / pkg_dir` under `output_base` once resolved -- this is
+    the stn-7t9 containment guarantee, applied at the one place every
+    source (manifest or config-derived) goes through before anything is
+    touched.
 
     A package failing either check is a named problem, not a silent drop.
     """
-    resolved_base = output_base.resolve()
     result: dict[str, Path] = {}
     for pid, package in scope.items():
         raw_dir = package.get("dir", pid)
@@ -2038,15 +2306,12 @@ def _validated_package_dirs(
         except ValueError as error:
             problems.append(str(error))
             continue
-        pkg_path = (output_base / raw_dir).resolve()
         try:
-            pkg_path.relative_to(resolved_base)
-        except ValueError:
-            problems.append(
-                f"Package {pid}: dir {raw_dir!r} resolves to {pkg_path}, "
-                f"outside the output directory {resolved_base} -- refusing "
-                "to touch it"
+            pkg_path = contained_path(
+                pid, "dir", raw_dir, output_base / raw_dir, output_base
             )
+        except ValueError as error:
+            problems.append(str(error))
             continue
         result[pid] = pkg_path
     return result
@@ -2803,8 +3068,30 @@ def _main():
     # added and two keys of the same name resolving against different bases is
     # a trap worth more than backwards compatibility with a behaviour nothing
     # used -- checked across cs234 and cs425: no config sets it.
-    output_dir_raw = config.get("output_dir")
-    output_base = (config_dir / output_dir_raw).resolve() if output_dir_raw else config_dir
+    #
+    # checked_output_base (stn-40a, stn-pe3) replaces a bare join-and-resolve
+    # with a shape check, a path check, and a containment check against
+    # config_dir -- so a non-string value is a readable error instead of a
+    # bare TypeError, and an escaping or symlinked value is refused instead
+    # of silently becoming the ground `clean` deletes from.
+    #
+    # This MUST stay here, above the `clean` branch below. A bad output_dir
+    # is FATAL for every command, including `clean` -- unlike a broken
+    # PACKAGE, which `clean` only warns about and still cleans around via its
+    # degraded path (see CLEAN_DEGRADED_TRAILER). That degraded path exists
+    # so a package with its OWN manifest can still be cleaned when the rest
+    # of the config does not parse; it has nothing to stand on without a
+    # trustworthy output_base, since every path clean unlinks -- manifest or
+    # config-derived -- is relative to it. Moving this below clean's
+    # degraded pre-flight would reopen exactly the destructive path stn-pe3
+    # closes: an escaping output_dir would work again any time the rest of
+    # the config also happens to be broken. test_path_containment.py's
+    # ordering test (M7) pins this and would be the only thing to notice.
+    try:
+        output_base = checked_output_base(config, config_dir)
+    except ValueError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(1)
 
     if args.command == "clean":
         if not args.all and not args.pkg:
@@ -2924,6 +3211,13 @@ def _main():
             # per package would be N copies of one install problem. main()
             # catches it and says what it actually is.
             raise
+        except ValueError as error:
+            # Narrower than the broad handler below, and must come first: a
+            # config-shaped refusal (e.g. stn-vhr's containment check)
+            # already reads as a config message, and the broad handler would
+            # prefix it with "ValueError: ", which package_contexts' own
+            # docstring argues at length a config message must never carry.
+            return f"{package_id}: {error}"
         except Exception as error:
             # Broad on purpose: this is the CLI boundary, and a traceback is
             # never the right report here. The type is kept in the message so
@@ -2942,7 +3236,20 @@ def _main():
         if failures:
             print(
                 "Error: these packages could not be generated:\n  "
-                + "\n  ".join(failures),
+                # _safe on every line, exactly as clean's sibling printer
+                # does it above, and for a sharper reason than a package id:
+                # generate_package's containment refusal (stn-vhr) puts a
+                # RESOLVED FILESYSTEM PATH in the message, and that path is
+                # the target of a symlink -- so the escape lives in the link
+                # target STRING, committed in the tree, with no control byte
+                # in any file and no need for the target to exist. Measured
+                # before this was added: `gen --dry-run` printed a raw ESC
+                # and repainted the terminal, while `clean` rendered the
+                # SAME string as `\x1b[2J`, because only this side was
+                # missing. check_config_path cannot help here -- it repr's
+                # what the CONFIG declared, and this is what the filesystem
+                # resolved to, which it never sees.
+                + "\n  ".join(_safe(failure) for failure in failures),
                 file=sys.stderr,
             )
             print(
@@ -2956,7 +3263,8 @@ def _main():
     package_id = args.pkg
     problem = _generate(package_id)
     if problem:
-        print(f"Error: {problem}", file=sys.stderr)
+        # _safe for the reason the --all printer above says at length.
+        print(f"Error: {_safe(problem)}", file=sys.stderr)
         if "nothing was generated" in problem:
             list_packages(config)
         sys.exit(1)
