@@ -11,6 +11,39 @@ How the version gets bumped is written down in
 
 ## 0.39.0
 
+- **`format-md` installs only the lockfile stencil generated** (`stn-qge`). The
+  service copied `format-package-lock.json` out of the mount — the consumer's
+  own package directory — and ran `npm ci` from it. `npm ci` fetches whatever
+  host each `resolved` names and checks `integrity` against a value in that same
+  file, so a consumer-editable file decided which bytes became the prettier that
+  then ran as uid 0 over that read-write mount. Neither `--ignore-scripts` nor
+  0.39.0's own `--no-config` touches it: nothing has to run at install time,
+  because the payload runs when prettier runs.
+
+  **Measured**, on the pinned node image, with one `resolved` host changed in a
+  generated package's lockfile and nothing else: npm requested that host. It now
+  fails before npm asks, with a message saying the file is stencil's, that
+  editing it has no supported effect, and that `stencil gen` restores it.
+
+  The entrypoint carries the sha256 of the lockfile `stencil gen` wrote and
+  checks the copy in `/tmp/fmt` — after the `cp`, before the install, so what
+  was hashed is what npm reads rather than a file the host could still rewrite.
+  The digest is derived from the vendored bytes at generation time, never
+  written down, so re-vendoring moves the lockfile and its digest together and
+  bumping a pin stays the same two steps it was.
+
+  **What it proves, exactly.** A checksum is not a signature: it shows that two
+  files in the package agree, and both are files whoever edited the lockfile
+  could edit. It refuses every edit that touches only the lockfile — a script, a
+  dependency bot, a bad merge, a half-finished hand edit — and it turns the
+  collusive case into something visible: the digest in `docker-compose.yml`
+  moves without stencil having been re-run.
+
+  Nothing a consumer does legitimately changes that file, so no build that was
+  working stops. If you had edited your package's copy — there was never a
+  supported reason to — run `stencil gen` and the package goes back to the
+  lockfile stencil ships.
+
 - **A stray `npm install` in a package directory can no longer decide which
   puppeteer renders your handouts** (`stn-86y`). The generated
   `html-to-pdf.js` runs inside the browser image but lives in the mounted
