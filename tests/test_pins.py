@@ -51,6 +51,8 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import shutil
+import subprocess
 
 import pytest
 import yaml
@@ -612,6 +614,104 @@ def test_format_md_verifies_the_lockfile_it_installs_from(doc_package):
     assert f'"{digest}  {copied}"' in script, (
         "the checksum line does not name the copy in the two-space form "
         f"`<sha256>  <path>` that both sha256sum implementations read:\n{script}"
+    )
+
+
+def _guard_block(script: str) -> str:
+    """The `if ! ... fi` the digest check lives in, lifted out of the script.
+
+    From the `if` to its `fi`, dropping the `&& \\` that chains it to the
+    install -- so what comes back is a complete shell command that can be run
+    on its own.
+    """
+    start = script.index("if ! echo")
+    end = script.index("fi &&", start) + len("fi")
+    return script[start:end]
+
+
+def test_the_guard_refuses_on_mismatch_rather_than_on_match(doc_package, tmp_path):
+    """The polarity, RUN rather than read -- and no container needed.
+
+    Dropping one `!` inverts this guard: stencil's own lockfile is refused and
+    a tampered one is installed from. Every other assertion in this file
+    survives that edit, because `sha256sum -c` is still present, still between
+    the cp and the npm ci, and still carrying the right digest and path. An
+    adversarial review found it by mutating the template and watching this
+    tier stay green.
+
+    So the check is executed here against two files, which is what makes a
+    reversed condition fail: the digest's own file must pass and a changed one
+    must not. Only the path literal is substituted -- /tmp/fmt does not exist
+    on the host and is not this test's to create -- so the `if !`, the
+    pipeline, the redirection and the `exit 1` are the template's own text.
+
+    THE CONTAINER TIER IS NOT A SUBSTITUTE, and neither is this for it. That
+    tier runs the real busybox against the real service and skips where there
+    is no compose; this runs the real shell condition anywhere sha256sum -c
+    works, which includes CI. Both, because the failure this is about is a
+    one-character regression in a file nobody runs locally.
+    """
+    script = _format_md_script(doc_package)
+    block = _guard_block(script)
+
+    target = tmp_path / "package-lock.json"
+    shutil.copyfile(doc_package / pipeline.FORMAT_LOCKFILE, target)
+    runnable = block.replace(f"{pipeline.FORMAT_TOOLS_DIR}/package-lock.json", str(target))
+    assert str(target) in runnable, (
+        f"the guard no longer names the copy it checks:\n{block}"
+    )
+
+    # PROBED SEPARATELY, and it has to be. Darwin's sha256sum takes no -c and
+    # prints its usage; the guard sends both streams to /dev/null, so on that
+    # host a missing -c and a refused lockfile are the same exit code and the
+    # same silence. Asking the tool directly, outside the guard, is the only
+    # way to tell "this host cannot run the check" from "the check says no".
+    probe = subprocess.run(
+        ["sh", "-c", f'echo "{hashlib.sha256(target.read_bytes()).hexdigest()}  '
+         f'{target}" | sha256sum -c'],
+        capture_output=True, text=True, timeout=60,
+    )
+    if probe.returncode != 0:
+        pytest.skip(
+            "sha256sum -c does not work here, so the guard cannot be executed "
+            f"on this host: {(probe.stderr or probe.stdout).strip()[:200]}"
+        )
+
+    def run() -> subprocess.CompletedProcess:
+        return subprocess.run(
+            ["sh", "-c", runnable], capture_output=True, text=True, timeout=60
+        )
+
+    accepted = run()
+    assert accepted.returncode == 0, (
+        "the guard refuses the lockfile whose digest it carries, so a package "
+        f"stencil generated would not build:\n{accepted.stderr}"
+    )
+
+    target.write_bytes(target.read_bytes().replace(b"registry.npmjs.org", b"evil.invalid.host"))
+    refused = run()
+    assert refused.returncode != 0, (
+        "the guard accepted a lockfile that is not the one it carries the "
+        "digest of -- a dropped `!` reads exactly like this, and every other "
+        f"assertion here survives it:\n{refused.stdout}{refused.stderr}"
+    )
+    assert "is not the file stencil generated" in refused.stderr, (
+        f"it refused, but said nothing the reader can act on:\n{refused.stderr}"
+    )
+
+
+def test_the_guard_is_written_as_a_refusal(doc_package):
+    """The same polarity, asserted textually, for where the test above skips.
+
+    One character, and the executed test cannot run on a host whose sha256sum
+    has no -c. This one runs everywhere and says the same thing about the
+    shape: the condition is negated, so the branch that fires is the failure.
+    """
+    script = _format_md_script(doc_package)
+    assert "if ! echo" in script, (
+        "the digest guard is not written as `if ! echo ... | sha256sum -c`. If "
+        "it was rewritten, make sure the new shape still refuses on MISMATCH "
+        f"and update the executed test above with it:\n{script}"
     )
 
 
