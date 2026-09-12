@@ -248,19 +248,39 @@ def test_the_scaffolding_names_one_node_image_and_it_is_pinned(doc_package):
         f"{pipeline.NODE_IMAGE!r}"
     )
 
-    tag = pipeline.NODE_IMAGE.rpartition(":")[2]
+    # stn-8vi appended `@sha256:<64 hex>` after the tag, so the tag can no
+    # longer be read with a bare rpartition(":") -- the digest's own ":" (the
+    # one inside "sha256:<hex>") is now the LAST one in the string, and a bare
+    # rpartition hands the version check 64 hex characters instead of a
+    # version. Split the digest off first.
+    reference, _, digest = pipeline.NODE_IMAGE.partition("@")
+    tag = reference.rpartition(":")[2]
     assert re.fullmatch(r"\d+\.\d+\.\d+-alpine\d+\.\d+", tag), (
         f"{tag!r} does not pin both a Node version and an Alpine branch. "
         "The Alpine branch is what decides which Chromium `apk add` installs "
         "and which font packages are available, so a floating one moves the "
         "browser several majors at a time."
     )
+    assert re.fullmatch(r"sha256:[0-9a-f]{64}", digest), (
+        f"pipeline.NODE_IMAGE carries no digest pin: {pipeline.NODE_IMAGE!r}"
+    )
 
 
 def test_every_image_the_scaffolding_pulls_carries_a_version_tag(doc_package):
     """`lts` and `latest` both float. A service that BUILDS its image is exempt:
     `localhost/<pkg>_browser:latest` is a local tag for the image the Dockerfile
-    beside it produces, not something pulled from a registry."""
+    beside it produces, not something pulled from a registry.
+
+    stn-8vi appended `@sha256:<64 hex>` after every pulled image's tag. A
+    64-character hex digest satisfies `any(c.isdigit() for c in tag)` for
+    essentially any digest at all, so extracting "the tag" with a bare
+    `rpartition(":")` -- as this test used to -- made the version-tag check
+    below pass no matter what the human-readable tag said, the moment a
+    digest was appended. That is a silent regression, not a fix: split the
+    digest off FIRST, then check the tag by itself, and also require the
+    digest to be there at all so a package with no pin cannot pass this by
+    virtue of having no digest to mis-parse.
+    """
     compose = yaml.safe_load((doc_package / "docker-compose.yml").read_text())
 
     for name, service in compose["services"].items():
@@ -268,7 +288,11 @@ def test_every_image_the_scaffolding_pulls_carries_a_version_tag(doc_package):
             continue
         image = service["image"]
         assert ":" in image, f"service {name} names {image!r} with no tag at all"
-        tag = image.rpartition(":")[2]
+        reference, _, digest = image.partition("@")
+        assert re.fullmatch(r"sha256:[0-9a-f]{64}", digest), (
+            f"service {name} runs {image!r} with no digest pin"
+        )
+        tag = reference.rpartition(":")[2]
         # "contains a digit" rather than a deny-list of the floating names.
         # `lts-alpine` is not `lts`, and a deny-list written the obvious way
         # passes against it -- which is how the defect this file is about
@@ -277,6 +301,187 @@ def test_every_image_the_scaffolding_pulls_carries_a_version_tag(doc_package):
             f"service {name} runs {image!r}: the tag names no version, so it "
             "floats onto whatever that name points at on the day of the build"
         )
+
+
+# ---------------------------------------------------------------------------
+# stn-8vi: pinning the three images themselves by manifest digest.
+#
+# A registry TAG is mutable -- docker.io/pandoc/core:3.10.0.0 can be repushed,
+# and every rebuild after that silently gets different bytes under a name that
+# says otherwise. A digest (@sha256:<64 hex>) cannot. The tag stays what a
+# maintainer edits; the digest is a vendored answer keyed by that exact tag, in
+# stencil/assets/image-digests.json, resolved by scripts/resolve_image_digests.py
+# -- the same request/answer shape stn-5hv already gave the npm pins and their
+# lockfiles.
+
+
+# <repo>:<tag>@sha256:<64 lowercase hex>. Anchored full-string so a reference
+# that merely CONTAINS a well-formed digest somewhere -- appended to a comment,
+# say -- does not satisfy it.
+_REPO = r"[A-Za-z0-9](?:[A-Za-z0-9._/-]*[A-Za-z0-9])?"
+_TAG = r"[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?"
+DIGEST_PINNED_IMAGE = re.compile(rf"^{_REPO}:{_TAG}@sha256:[0-9a-f]{{64}}$")
+
+
+def test_every_image_the_scaffolding_pulls_is_pinned_by_digest(doc_package):
+    """The acceptance criterion stn-8vi's ticket asks for, literally: "a test
+    asserts the digest form for every image the scaffolding pulls".
+
+    Three places name an image the scaffolding does not build itself, and each
+    has its own syntax for it: a compose service's `image:` key, a Dockerfile's
+    `FROM`, and a `$(call ensure_image,<image>,...)` site in the generated
+    Makefile. A test that checked only one of them would leave the other two
+    free to keep floating -- which is exactly how NODE_IMAGE stayed a tag while
+    PANDOC_IMAGE and VERAPDF_IMAGE were pinned, the state this ticket exists to
+    end. `pdf` and `check-access` are excluded because they `build:` their
+    image from Dockerfile.browser rather than pulling one; that Dockerfile's
+    own `FROM` is what is checked instead.
+    """
+    compose = yaml.safe_load((doc_package / "docker-compose.yml").read_text())
+    named = {
+        f"docker-compose.yml service {name!r}": service["image"]
+        for name, service in compose["services"].items()
+        if "build" not in service
+    }
+    assert named, "no compose service pulls an image any more"
+
+    dockerfile = (doc_package / "Dockerfile.browser").read_text()
+    from_lines = [
+        line.removeprefix("FROM ").strip()
+        for line in dockerfile.splitlines()
+        if line.startswith("FROM ")
+    ]
+    assert from_lines, "Dockerfile.browser names no base image any more"
+    for index, image in enumerate(from_lines):
+        named[f"Dockerfile.browser FROM #{index}"] = image
+
+    makefile = (doc_package / "Makefile").read_text()
+    call_sites = re.findall(r"\$\(call ensure_image,([^,]+),", makefile)
+    assert call_sites, "no ensure_image call sites in the generated Makefile"
+    for index, image in enumerate(call_sites):
+        named[f"ensure_image call site #{index}"] = image
+
+    for source, image in named.items():
+        assert DIGEST_PINNED_IMAGE.fullmatch(image), (
+            f"{source} names {image!r}, which is not <repo>:<tag>@sha256:<64 hex>"
+        )
+
+
+# node and pandoc are multi-arch OCI indexes; verapdf is a single-arch v2
+# manifest with no index at all, named here explicitly so a future multi-arch
+# veraPDF release is a deliberate edit to this set rather than a silent pass
+# over a check that quietly stopped checking anything.
+INDEX_MEDIA_TYPES = {
+    "application/vnd.oci.image.index.v1+json",
+    "application/vnd.docker.distribution.manifest.list.v2+json",
+}
+SINGLE_ARCH_MEDIA_TYPES = {
+    "application/vnd.docker.distribution.manifest.v2+json",
+    "application/vnd.oci.image.manifest.v1+json",
+}
+
+
+def test_the_pinned_digests_cover_the_architectures_we_build_on():
+    """The ticket's "verify on both arm64 and amd64" requirement, expressed as
+    something CI can hold rather than something a maintainer promises to have
+    done by hand.
+
+    Pinning a SINGLE-ARCH image digest for node or pandoc would build correctly
+    on whichever architecture that digest happens to be, and silently produce
+    the wrong bytes -- or refuse to build at all -- on the other. The manifest
+    LIST digest resolves per-architecture and is what has to be pinned instead,
+    which is only checkable if something records which architectures the
+    pinned digest actually covers. `platforms` in image-digests.json is that
+    record.
+
+    veraPDF genuinely has no manifest list to pin -- measured, not assumed --
+    so it is named here as the one exception rather than silently exempted by
+    "skip whatever isn't an index", which would also skip a node or pandoc
+    entry that regressed to a single-arch pin without anyone noticing.
+    """
+    digests = json.loads((ASSETS / "image-digests.json").read_text())
+
+    for tag in (pipeline.NODE_TAG, pipeline.PANDOC_TAG):
+        entry = digests[tag]
+        assert entry["media_type"] in INDEX_MEDIA_TYPES, (
+            f"{tag} is recorded as {entry['media_type']!r}, not a multi-arch "
+            "manifest index -- the pin may resolve to only one architecture"
+        )
+        platforms = set(entry["platforms"])
+        assert any(platform.startswith("linux/amd64") for platform in platforms), (
+            f"{tag}'s recorded platforms {sorted(platforms)} do not cover linux/amd64"
+        )
+        assert any(platform.startswith("linux/arm64") for platform in platforms), (
+            f"{tag}'s recorded platforms {sorted(platforms)} do not cover linux/arm64"
+        )
+
+    verapdf_entry = digests[pipeline.VERAPDF_TAG]
+    assert verapdf_entry["media_type"] in SINGLE_ARCH_MEDIA_TYPES, (
+        f"veraPDF is recorded as {verapdf_entry['media_type']!r}; if it has "
+        "gained a manifest list, pin that and cover it above like the others "
+        "instead of widening this set"
+    )
+
+
+def test_the_recorded_digests_are_exactly_the_tags_the_scaffolding_pins():
+    """`platforms` and `media_type` are RECORDS of what the registry answered
+    on the day someone ran the resolver, not facts a test can re-derive and
+    check -- there is no unit-tier way to know they are still true today. What
+    IS checkable is that the file was produced FROM the tags currently in
+    pipeline.py: that every tag stencil pins has an entry, and every entry is
+    for a tag stencil still pins.
+
+    That single equality catches three different mistakes at once: a
+    hand-edited JSON entry for a tag nothing pins any more, a tag bumped in
+    pipeline.py without re-running the resolver, and an entry the resolver
+    never wrote at all. Any of the three otherwise looks fine right up until
+    someone reads the diff closely.
+    """
+    digests = json.loads((ASSETS / "image-digests.json").read_text())
+    assert set(digests) == set(pipeline.IMAGE_TAGS.values()), (
+        "stencil/assets/image-digests.json does not match the tags in "
+        "pipeline.IMAGE_TAGS -- re-resolve it: "
+        "python3 scripts/resolve_image_digests.py"
+    )
+
+
+def test_a_tag_with_no_recorded_digest_fails_loudly():
+    """A tag bumped in pipeline.py without re-running the resolver must not
+    silently fall back to the tag alone -- that would quietly re-float the
+    exact input this ticket exists to fix. It must fail, and name the fix.
+    """
+    with pytest.raises(pipeline.VendoredAssetError, match="resolve_image_digests"):
+        pipeline.pinned_image("docker.io/library/node:0.0.0-not-a-real-release")
+
+
+def test_the_tags_are_readable_without_resolving_them(monkeypatch):
+    """The regression guard for the bootstrap deadlock (stn-e72.2).
+
+    scripts/resolve_image_digests.py has to read pipeline.IMAGE_TAGS to learn
+    which references to resolve -- necessarily BEFORE image-digests.json holds
+    an entry for any of them. If IMAGE_TAGS were ever built from the resolved
+    NODE_IMAGE / PANDOC_IMAGE / VERAPDF_IMAGE constants instead of the plain
+    tags, reading it would require the very file the resolver has not written
+    yet: a deadlock a bootstrap script cannot break on its own.
+
+    Without this test, the first person to "simplify" IMAGE_TAGS into
+    `{"node": NODE_IMAGE, ...}` -- which reads as a harmless dedup -- silently
+    reintroduces exactly that. Forcing pinned_image() to blow up and confirming
+    IMAGE_TAGS is unaffected is what makes the mistake fail here, on a
+    fully-resolved image-digests.json, rather than only on the day the file is
+    incomplete.
+    """
+
+    def explode(tag):
+        raise AssertionError(f"reading IMAGE_TAGS must not resolve {tag!r}")
+
+    monkeypatch.setattr(pipeline, "pinned_image", explode)
+
+    assert pipeline.IMAGE_TAGS == {
+        "node": pipeline.NODE_TAG,
+        "pandoc": pipeline.PANDOC_TAG,
+        "verapdf": pipeline.VERAPDF_TAG,
+    }
 
 
 def test_the_browser_image_installs_from_the_pinned_manifest_and_lockfile(doc_package):
