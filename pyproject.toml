@@ -29,6 +29,17 @@ dev = [
     # upgrade with a test run behind it rather than a silent change in what the
     # accessibility guards are sensitive to.
     "pypdf>=4.0,<7",
+    # The container tier runs under `-n auto --dist loadfile` in CI (stn-vda).
+    # `filelock` is what serializes the browser-image build across workers, and
+    # it is declared here rather than leaned on: it already arrives
+    # transitively through pre-commit -> virtualenv, and depending on something
+    # by accident is how a transitive dependency becomes a breakage.
+    #
+    # Neither is pinned. These are test-harness tooling, not the supply chain
+    # `stencil/pipeline.py` governs -- tests/test_pins.py is about what a
+    # GENERATED PACKAGE installs, and nothing here reaches one.
+    "pytest-xdist",
+    "filelock",
 ]
 
 [project.scripts]
