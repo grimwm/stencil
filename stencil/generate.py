@@ -12,6 +12,7 @@ Usage:
 """
 
 import argparse
+import json
 import os
 import re
 import shutil
@@ -31,6 +32,13 @@ SCRIPT_DIR = Path(__file__).parent
 # Gitignore markers
 GITIGNORE_START = "# >>> stencil >>>"
 GITIGNORE_END = "# <<< stencil <<<"
+
+# The per-package manifest gen writes at the end of a successful
+# generate_package (stn-2x4). MANIFEST_VERSION is an integer so a later,
+# hardened reader (stn-2x4.4) can refuse a manifest whose version it does
+# not recognize by name rather than guess at its shape.
+MANIFEST_NAME = ".stencil-manifest.json"
+MANIFEST_VERSION = 1
 
 
 def load_config(config_path: Path) -> dict:
@@ -1334,6 +1342,49 @@ def injected_templates(context: dict) -> list[dict]:
     return [{"src": src} for src in injected_sources(context)]
 
 
+def write_manifest(
+    output_dir: Path,
+    package_id: str,
+    pkg_dir: str,
+    entries: set[str] | list[str],
+    dry_run: bool = False,
+) -> None:
+    """Write ``<output_dir>/MANIFEST_NAME``, recording exactly what this
+    generate_package call produced for one package.
+
+    ``entries`` must come from ``package_entries`` -- see its docstring for
+    why a second derivation of the same list is the drift bug this exists to
+    avoid. Never written under ``--dry-run``: a preview's manifest would tell
+    a later, manifest-driven `clean` about files that were never actually
+    produced.
+    """
+    manifest_path = output_dir / MANIFEST_NAME
+    if dry_run:
+        print(f"Would write: {manifest_path}")
+        return
+
+    document = {
+        "manifest_version": MANIFEST_VERSION,
+        "stencil_version": __version__,
+        "package": package_id,
+        "dir": pkg_dir,
+        "entries": sorted(entries),
+    }
+    manifest_path.write_text(json.dumps(document, sort_keys=True, indent=2) + "\n")
+    print(f"Generated: {manifest_path}")
+
+
+def read_manifest(path: Path) -> dict:
+    """Parse a per-package manifest file and return the parsed document.
+
+    A minimal reader for this ticket only -- json.loads and nothing more.
+    The hardened parser stencil/clean needs (ManifestError, a size cap,
+    duplicate-key rejection, manifest_version checking) is stn-2x4.4's job,
+    not this one's.
+    """
+    return json.loads(Path(path).read_text())
+
+
 def generate_package(
     env: Environment,
     config: dict,
@@ -1358,6 +1409,16 @@ def generate_package(
             output_dir.mkdir(parents=True)
             print(f"Created directory: {output_dir}")
 
+    # Before the first render, and never a stale manifest left behind: a
+    # regeneration that fails partway must leave NO manifest, so a
+    # manifest-driven `clean` falls back to deriving from the config --
+    # today's behaviour exactly -- instead of trusting a list that names the
+    # old files while whatever the failed run half-wrote sits unnamed on
+    # disk.
+    manifest_path = output_dir / MANIFEST_NAME
+    if not dry_run and manifest_path.exists():
+        manifest_path.unlink()
+
     config_templates = list(config.get("templates", []))
     template_defs = injected_templates(context) + config_templates
     if not template_defs:
@@ -1376,6 +1437,19 @@ def generate_package(
             output_dir,
             dry_run,
         )
+
+    # Last of all, from the same derivation get_generated_files uses (see
+    # package_entries) -- so the manifest cannot name a file this call did
+    # not itself just produce.
+    write_manifest(
+        output_dir,
+        package_id,
+        context["package_dir"],
+        package_entries(
+            package_id, config["packages"][package_id], context, config_templates
+        ),
+        dry_run,
+    )
 
     return output_dir
 
@@ -1436,6 +1510,85 @@ def list_packages(config: dict):
         print(f"  {package_id:8} - {name:20} ({dir_name})")
 
 
+def package_entries(
+    package_id: str, package: dict, context: dict, config_templates: list
+) -> set[str]:
+    """Every file (or build-artifact glob pattern) one package generates,
+    relative to that package's own directory -- no ``<pkg_dir>/`` prefix.
+
+    Extracted from what used to be get_generated_files' per-package loop
+    body. This is the point of the change, not a tidy-up: get_generated_files
+    feeds both `install`'s managed .gitignore section and `clean`, and the
+    per-package manifest (see write_manifest) needs the exact same list. A
+    manifest built by a second, parallel walk of the config would be a THIRD
+    instance of a drift bug this repository has already paid for twice --
+    `injected_sources` exists because the injected-template list and the
+    clean list drifted, and stn-8wt exists because `copy_brand_image` and
+    `get_generated_files` named the same file two different ways. One walk,
+    two consumers (get_generated_files prefixes with the package dir;
+    write_manifest records these entries verbatim), so drift is no longer
+    possible between them.
+
+    This does NOT unify everything that names a generated file.
+    `render_templates` still computes `tdef.get('dest', template_dest(src))`
+    on its own, and `copy_brand_image` still names the copied logo from the
+    (unresolved) config string it was given rather than from this function's
+    output -- those two remain separate spellings of the same fact, guarded
+    by test_package_sources.py's and tests/test_manifest.py's rglob
+    assertions rather than by a shared derivation.
+    """
+    entries = set()
+
+    # Check each template's `when` condition against this package's context
+    for tdef in config_templates:
+        if not when_holds(tdef, context):
+            continue
+        dest = tdef.get("dest", template_dest(tdef.get("src", "")))
+        if dest:
+            entries.add(dest)
+
+    # What stencil injects, from the one list generate_package renders
+    # from, on the same predicates -- spelling them twice is what left a
+    # package_sources-only doc package with five generated files that clean
+    # could not see.
+    for src in injected_sources(context):
+        entries.add(template_dest(src))
+
+    if context["has_pages"]:
+        # The copied brand image, which `clean` should be able to see and
+        # git should not. Named by its basename, which is what it is
+        # copied to. Not a template, so it is not in the list above.
+        # `context["config_brand"]` is already that basename (or the config
+        # string unchanged, when brand names something other than a local
+        # image) -- get_template_context computed it the same way
+        # copy_brand_image names its destination, from the unresolved config
+        # string, so reading it back here cannot drift from either.
+        brand_image = brand_image_path(context.get("config_brand"))
+        if brand_image:
+            entries.add(Path(brand_image).name)
+
+    # docs and slides generate .html files from .md files, and `make pdf`
+    # prints each of those to a .pdf beside it (glob for feature variants)
+    for md in list(package.get("docs", [])) + list(package.get("slides", [])):
+        if md.endswith(".md"):
+            entries.add(f"{md.removesuffix('.md')}*.html")
+            entries.add(f"{md.removesuffix('.md')}*.pdf")
+
+    # package_name is the zip file created by pkg target
+    package_name = package.get("package_name")
+    if package_name and package.get("package_type") == "zip":
+        entries.add(package_name)
+
+    # A doc package's pkg target concatenates package_sources into
+    # <stem>.html and prints that to <stem>.pdf (glob for feature variants)
+    if package.get("package_type") == "doc" and package_name:
+        stem = package_name.removesuffix(".pdf")
+        entries.add(f"{stem}*.html")
+        entries.add(f"{stem}*.pdf")
+
+    return entries
+
+
 def get_generated_files(config: dict) -> list[str]:
     """Determine what files stencil will generate based on templates config.
 
@@ -1450,6 +1603,10 @@ def get_generated_files(config: dict) -> list[str]:
     with its own get_template_context loop, which would double the work
     every `install` and `clean` do. No config_dir is passed: the brand
     file-existence check is gen-only (see package_contexts).
+
+    Each package's own entries come from `package_entries` -- see there for
+    why. The per-package manifest name is added on top, here, rather than in
+    `package_entries`: the manifest does not list itself.
     """
     entries = set()
     config_templates = config.get("templates", [])
@@ -1460,47 +1617,10 @@ def get_generated_files(config: dict) -> list[str]:
         package = config["packages"][package_id]
         pkg_dir = package.get("dir", package_id)
 
-        # Check each template's `when` condition against this package's context
-        for tdef in config_templates:
-            if not when_holds(tdef, context):
-                continue
-            dest = tdef.get("dest", template_dest(tdef.get("src", "")))
-            if dest:
-                entries.add(f"{pkg_dir}/{dest}")
+        for entry in package_entries(package_id, package, context, config_templates):
+            entries.add(f"{pkg_dir}/{entry}")
 
-        # What stencil injects, from the one list generate_package renders
-        # from, on the same predicates -- spelling them twice is what left a
-        # package_sources-only doc package with five generated files that clean
-        # could not see.
-        for src in injected_sources(context):
-            entries.add(f"{pkg_dir}/{template_dest(src)}")
-
-        if context["has_pages"]:
-            # The copied brand image, which `clean` should be able to see and
-            # git should not. Named by its basename, which is what it is
-            # copied to. Not a template, so it is not in the list above.
-            brand_image = brand_image_path(brand_of(package, config)[0])
-            if brand_image:
-                entries.add(f"{pkg_dir}/{Path(brand_image).name}")
-
-        # docs and slides generate .html files from .md files, and `make pdf`
-        # prints each of those to a .pdf beside it (glob for feature variants)
-        for md in list(package.get("docs", [])) + list(package.get("slides", [])):
-            if md.endswith(".md"):
-                entries.add(f"{pkg_dir}/{md.removesuffix('.md')}*.html")
-                entries.add(f"{pkg_dir}/{md.removesuffix('.md')}*.pdf")
-
-        # package_name is the zip file created by pkg target
-        package_name = package.get("package_name")
-        if package_name and package.get("package_type") == "zip":
-            entries.add(f"{pkg_dir}/{package_name}")
-
-        # A doc package's pkg target concatenates package_sources into
-        # <stem>.html and prints that to <stem>.pdf (glob for feature variants)
-        if package.get("package_type") == "doc" and package_name:
-            stem = package_name.removesuffix(".pdf")
-            entries.add(f"{pkg_dir}/{stem}*.html")
-            entries.add(f"{pkg_dir}/{stem}*.pdf")
+        entries.add(f"{pkg_dir}/{MANIFEST_NAME}")
 
     return sorted(entries)
 
