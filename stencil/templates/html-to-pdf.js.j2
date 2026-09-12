@@ -46,6 +46,13 @@ if (!input || !output) {
 // sibling service, and the identical repair: one path, built from the argument,
 // rather than two that have to agree.
 //
+// THE PARITY IS ABOUT THE PREFIX, NOT THE ENCODING. check-access still builds
+// its URL by concatenation -- `pa11y "file://$f"` -- so the two services have
+// diverged on the paragraph below this one: a page named `Lecture 1#draft.html`
+// now prints to PDF and still fails `make check-access`. That is pre-existing
+// and belongs to that service, not to this line; do not read the sentence above
+// as a claim that the two encode alike.
+//
 // The two names below are kept for MESSAGES -- `input` and `output` are what
 // the caller typed, and echoing those back reads better than an absolute path
 // nobody wrote.

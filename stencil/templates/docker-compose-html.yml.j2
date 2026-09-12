@@ -201,9 +201,11 @@
   # THE BUILD IS PART OF THE INVOCATION NOW, not a one-off setup step. The
   # driver script is baked into the image (see the entrypoint below), so a bare
   # `compose run` executes whichever html-to-pdf.js was baked the last time this
-  # image was built -- and the image tag is shared by every package in the
-  # config. `make pdf` already runs `$(DC) build pdf` first; this line is for
-  # anyone typing the command by hand.
+  # image was built -- and the tag, `localhost/<package_id>_browser:latest`,
+  # carries no repository qualifier, so a package of the same id in ANOTHER
+  # checkout shares it. (Within one config the tag is per package, so packages
+  # here do not collide with each other.) `make pdf` already runs
+  # `$(DC) build pdf` first; this line is for anyone typing the command by hand.
   pdf:
     build:
       context: .

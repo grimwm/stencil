@@ -35,6 +35,15 @@ process wrote it -- and writing into the bind-mounted course repository, as root
 is precisely the capability the ticket is about, so the sentinel demonstrates the
 defect rather than standing in for it.
 
+WHAT THIS FILE DOES NOT COVER, so nobody reads it as covering everything. Every
+pdf case here goes through ``pipeline.html_to_pdf``, which builds its own
+``docker run`` and never reads the generated compose file -- so reverting ONLY
+the compose ``entrypoint`` back to the mounted script would leave this whole file
+green. That revert is caught, just not here: by
+``test_the_pdf_driver_is_baked_into_the_image_at_the_pinned_path`` in
+``tests/test_pins.py`` (fast tier) and by the compose-driven override test in
+``tests/test_compose_check_access.py``.
+
 NEITHER TEST USES ``pdf_workspace`` AS ITS MOUNT. That fixture is session-scoped
 and shared by every container test in the suite; a ``.puppeteerrc.cjs`` or a
 ``package.json`` planted in it would leak into all of them. The image it builds
@@ -338,4 +347,47 @@ def test_check_access_refuses_when_it_cannot_leave_the_mount(tmp_path, rendered_
     assert pipeline.BROWSER_TOOLS_DIR in result.stderr, (
         "the refusal does not name the directory it could not reach, so a "
         f"reader cannot act on it:\nstderr: {result.stderr[-2000:]}"
+    )
+
+
+def test_pa11y_still_launches_through_the_puppeteer_wrapper(pdf_workspace):
+    """The claim the check-access half of this file rests on, asserted.
+
+    ``test_check_access_ignores_a_workspace_puppeteerrc`` proves a decoy does
+    not execute, but pa11y is what launches the browser there -- and the CONTROL
+    at the top of this file proves the decoy fires against a DIRECT
+    ``puppeteer.launch()``. The two are only connected because pa11y requires
+    the puppeteer WRAPPER rather than puppeteer-core, which is also the whole
+    reason that half could not be fixed by swapping the module. If a pa11y bump
+    ever switched it to puppeteer-core, the control would keep passing while the
+    check-access test quietly stopped measuring anything -- it would be asserting
+    that a config which was never going to be read was not read.
+
+    So the link gets its own assertion, in the image, against the pinned pa11y.
+    """
+    # Substring tests rather than a regex: a JavaScript `\(` inside a Python
+    # string is a SyntaxWarning today and an error under -W error, which is the
+    # trap stn-ay5 was filed for. Both quote styles, because which one pa11y
+    # ships is not a property worth depending on.
+    script = """
+const { createRequire } = require("node:module");
+const fromTools = createRequire("%s/package.json");
+const source = require("node:fs").readFileSync(
+  fromTools.resolve("pa11y"),
+  "utf8",
+);
+const wraps =
+  source.includes('require("puppeteer")') ||
+  source.includes("require('puppeteer')");
+console.log("<<<WRAPPER>>>" + wraps);
+""" % pipeline.BROWSER_TOOLS_DIR
+
+    result = pipeline.run_in_browser(script, workdir=pdf_workspace, timeout=120)
+
+    assert "<<<WRAPPER>>>true" in result.stdout, (
+        "the pinned pa11y no longer requires the puppeteer wrapper by name. If "
+        "it moved to puppeteer-core, the check-access isolation test above is "
+        "now vacuous -- puppeteer-core reads no cwd configuration at all, so it "
+        "would pass whether or not this change were present.\n"
+        f"stdout: {result.stdout[-2000:]}\nstderr: {result.stderr[-2000:]}"
     )

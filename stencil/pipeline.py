@@ -387,25 +387,6 @@ exit $failed
 # THE FIRST LINE IS THE WHOLE stn-jeq FIX FOR THIS SERVICE, and it is one `cd`
 # only because everything below it was already written in absolute paths.
 #
-# pa11y requires the puppeteer WRAPPER (lib/pa11y.js) and calls launch() inside
-# it, so this half cannot be closed by resolving a different module -- the
-# configuration puppeteer executes is found by searching upward from
-# process.cwd(), which was /workspace, the consumer's own package directory.
-# Measured on the pinned pa11y and puppeteer: a one-line .puppeteerrc.cjs there
-# ran as uid 0 on every `make check-access`, and the check then printed its usual
-# "No issues found!".
-#
-# pa11y ALSO resolves three things of its own from process.cwd() -- loadConfig's
-# `./pa11y.json` default, loadReporter's path.join(process.cwd(), name) and
-# loadRunnerFile's. None is reachable as this service is invoked, because the
-# --config below is absolute and the reporter and runner are built-ins. Moving
-# the working directory closes them by construction instead of leaving them one
-# flag change away.
-#
-# Nothing after this line is cwd-relative: $directory arrives absolute in both
-# layouts and the file:// URL is built from it, which is the property the rest of
-# this comment block already argues for. Do not add a relative path below without
-# revisiting this.
 # IT REFUSES RATHER THAN CARRYING ON, and that matters more here than the `cd`
 # itself. This script runs under `sh -c` with no `set -e`, so a bare `cd` that
 # fails prints one line to stderr and CONTINUES from /workspace -- which reopens
@@ -414,6 +395,31 @@ exit $failed
 # same shape of silent-guard failure the doubled-`$` comment in
 # docker-compose-html.yml.j2 already argues about for the zero-file check: a
 # guard that stops guarding without saying so.
+#
+# pa11y requires the puppeteer WRAPPER (lib/pa11y.js) and calls launch() inside
+# it, so this half cannot be closed by resolving a different module -- the
+# configuration puppeteer executes is found by searching upward from
+# process.cwd(), which was /workspace, the consumer's own package directory.
+# Measured on the pinned pa11y and puppeteer: a one-line .puppeteerrc.cjs there
+# ran as uid 0 on every `make check-access`, and the check then printed its usual
+# "No issues found!".
+#
+# pa11y ALSO resolves FOUR things of its own from process.cwd(): loadConfig's
+# `./pa11y.json` default (bin/pa11y.js), loadReporter's
+# path.join(process.cwd(), name), loadRunnerFile's (lib/pa11y.js), and
+# sanitizeUrl's `file://${path.resolve(process.cwd(), url)}` (lib/option.js),
+# whose own reachability test calls fs.existsSync on a cwd-relative path. None
+# is reachable as this service is invoked -- the --config below is absolute, the
+# reporter and runner are built-ins, and the URL passed in already carries a
+# file:// scheme. The count is spelled out because it is what a future reader
+# will diff against when someone changes what this script hands pa11y. Moving
+# the working directory closes all four by construction instead of leaving them
+# one flag change away.
+#
+# Nothing after this line is cwd-relative: $directory arrives absolute in both
+# layouts and the file:// URL is built from it, which is the property the rest of
+# this comment block already argues for. Do not add a relative path below without
+# revisiting this.
 CHECK_ACCESS_SCRIPT = f"""\
 cd {BROWSER_TOOLS_DIR} || {{
   echo "check-access: {BROWSER_TOOLS_DIR} is not there, so this cannot move out" >&2

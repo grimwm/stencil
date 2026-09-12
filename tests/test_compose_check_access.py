@@ -379,6 +379,36 @@ def test_the_service_checks_an_output_directory(
     )
 
 
+def test_the_rendered_check_access_script_round_trips_the_dollar_doubling(
+    doc_package,
+):
+    """What compose ships must be CHECK_ACCESS_SCRIPT with every `$` doubled.
+
+    THE FAST TIER, for the reason the port test below is. Compose substitutes
+    `$VAR` in a service definition before the shell ever sees it, so the
+    template doubles every `$` on the way in -- and the zero-file guard's own
+    comment records what a missed doubling costs: `$found` reaches the script as
+    the empty string and `[ "" -eq 0 ]` is not a comparison that fails safely.
+    The only thing that would otherwise catch a doubling mistake is the
+    compose-driven tests in this file, and those SKIP when no compose
+    implementation is present. AGENTS.md is explicit that a tier which silently
+    stops running is the failure this repository already learned from its
+    pre-push hook, so the round-trip is asserted where it always runs.
+
+    It is an equality, not a search for a needle: that is what catches a `$`
+    doubled where it should not have been as well as one that was missed, and
+    it covers the leading `cd` stn-jeq added along with everything below it.
+    """
+    rendered = yaml.safe_load((doc_package / "docker-compose.yml").read_text())
+    script = rendered["services"]["check-access"]["entrypoint"][2]
+
+    assert script.replace("$$", "$") == pipeline.CHECK_ACCESS_SCRIPT, (
+        "the rendered check-access script is not pipeline.CHECK_ACCESS_SCRIPT "
+        "with its dollars doubled -- either a `$` was missed on the way in, or "
+        "one was doubled that should not have been"
+    )
+
+
 def test_no_generated_service_binds_a_host_port(doc_package):
     """Nothing a generated package starts may take a port someone is using.
 
@@ -441,12 +471,21 @@ def test_a_templates_dir_override_of_the_pdf_driver_reaches_the_service(
     write a tagged PDF. A stub that only printed the marker would prove the
     COPY happened and nothing about whether what got copied still works.
     """
-    source = Path("stencil/templates/html-to-pdf.js.j2").resolve()
+    source = (
+        Path(__file__).parent.parent / "stencil" / "templates" / "html-to-pdf.js.j2"
+    )
     directory = tmp_path / "templates"
     directory.mkdir()
-    (directory / "html-to-pdf.js.j2").write_text(
-        f'console.log("{OVERRIDE_MARKER}");\n' + source.read_text()
-    )
+    # AFTER the "use strict" directive, not before it. A directive is only a
+    # directive when it is the first statement in the file, so prepending the
+    # console.log would demote it to an ordinary expression and this test would
+    # be driving a NON-STRICT variant of the script -- while its docstring
+    # claims the service still has to do the whole job.
+    body = source.read_text()
+    marker_call = f'console.log("{OVERRIDE_MARKER}");\n'
+    head, sep, tail = body.partition('"use strict";\n')
+    assert sep, "html-to-pdf.js.j2 no longer opens with a \"use strict\" directive"
+    (directory / "html-to-pdf.js.j2").write_text(head + sep + marker_call + tail)
 
     config = demo_config
     config["templates_dir"] = "templates"
