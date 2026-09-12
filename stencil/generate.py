@@ -244,8 +244,17 @@ def show_download_default(package: dict, config: dict, package_id: str = "") -> 
     return True
 
 
-def check_config_path(package_id: str, where: str, value) -> str:
-    """Refuse a configured path that would not behave like a filename."""
+def check_config_path(
+    package_id: str, where: str, value, *, allow_parent: bool = False
+) -> str:
+    """Refuse a configured path that would not behave like a filename.
+
+    `allow_parent` keeps every clause except the `..` refusal, for the one
+    key whose escape is a documented feature rather than a mistake: a
+    package-level `output_dir` (stn-1a4). Keyword-only and defaulting to
+    False, so all six existing callers are byte-identical -- the escape has
+    to be asked for by name, at the one call site entitled to it.
+    """
     text = str(value)
     if _UNSAFE_IN_PATH.search(text):
         raise ValueError(
@@ -278,7 +287,7 @@ def check_config_path(package_id: str, where: str, value) -> str:
             f"Package {package_id}: {where} {text!r} is absolute. Paths are "
             "relative to the package directory."
         )
-    if ".." in Path(text).parts:
+    if not allow_parent and ".." in Path(text).parts:
         raise ValueError(
             f"Package {package_id}: {where} {text!r} escapes the package "
             "directory. Paths are relative to it and must stay inside."
@@ -364,6 +373,85 @@ def check_package_dir(package_id: str, value) -> str:
             "it removes under this one."
         )
     return text
+
+
+def check_package_output_dir(package_id: str, value) -> str | None:
+    """The package-level ``output_dir``'s check (stn-1a4) -- the last package
+    path key with no validation of any kind, and the only one that lands in a
+    Make VARIABLE rather than a recipe word.
+
+    ``OUT_HOST := <value>`` is expanded by four recipes, so a metacharacter
+    here is a second command rather than a bad filename: the ticket's
+    ``"../../../../../../tmp/pwn; echo OWNED"`` made ``make doc`` run
+    ``mkdir -p .../tmp/pwn`` and then ``echo OWNED``.
+
+    ``..`` IS PERMITTED, deliberately and by operator ruling. STENCIL.md
+    documents a package-level ``output_dir`` that puts build products outside
+    the package directory as the supported way to build somewhere else, and a
+    consumer may depend on it -- so this is `check_config_path` with
+    `allow_parent=True` rather than a verbatim call. Worth knowing why that
+    distinction needed a ruling at all: the only `..` the test suite pinned
+    was in the DERIVED ``package_output_dir`` (``../../build/demo``, which
+    `get_template_context` computes), never in a DECLARED value, so a
+    verbatim call would have kept the whole suite green while removing the
+    feature. There is a test that declares the `..` now.
+
+    TWO REFUSALS BEYOND `check_config_path`'s class, both because of where
+    this value lands rather than what it is:
+
+    - ``#``. It introduces a comment in a Make ``:=`` assignment, and nothing
+      else stencil checks sits in one. Measured on GNU Make 3.81:
+      ``build#x`` makes ``OUT_HOST`` read as ``build``, so the Makefile
+      creates and ``rm -f``s one directory while the compose file's mount --
+      YAML keeps the ``#`` mid-scalar -- sends the container's output to
+      another. It is NOT added to `_UNSAFE_IN_PATH`, which every other path
+      key shares: ``#`` is harmless in a recipe word and in a filename, and
+      refusing ``notes#1.md`` would be a regression for no gain.
+    - A glob metacharacter. This names one directory, the argument
+      `check_no_glob` already makes for `docs` and `slides` -- and here a
+      value beginning with ``*`` or ``!`` additionally makes the generated
+      compose file unparseable YAML, since those are the alias and tag
+      indicators.
+
+    WHAT THIS KEY IS NOT CONTAINED AGAINST, said plainly because the
+    convenient version of this sentence is false. `stencil` itself writes
+    nothing there and `clean` deliberately removes nothing there (STENCIL.md
+    records that limit). The PACKAGE IT GENERATES is another matter: the
+    Makefile ``mkdir -p``s and ``rm -f``s under ``OUT_HOST`` and the compose
+    file bind-mounts it into a container that runs as root. That is what the
+    documented escape means, and it is the consumer's own build rather than
+    a containment gap in stencil -- but it must not be described as "nothing
+    writes there".
+    """
+    if value is None:
+        return None
+    # TYPE BEFORE FALSINESS, the ordering check_output_dir's docstring spends
+    # a paragraph on and for the identical reason: `0`, `False` and `[]` are
+    # falsy NON-STRINGS, and `if raw_output:` at the call site reads all
+    # three as "not set". The type check therefore has to run above that
+    # guard, not inside it.
+    if not isinstance(value, str):
+        raise ValueError(
+            f"Package {package_id}: output_dir {value!r} is "
+            f"{type(value).__name__}, not a string. output_dir names the "
+            "directory this package's build products go to."
+        )
+    if not value:
+        # "" is what an empty-but-present key has always meant here, and
+        # what check_output_dir preserves it as for the top-level key:
+        # products land beside the sources. The two keys must not disagree
+        # about two characters.
+        return None
+    text = check_config_path(package_id, "output_dir", value, allow_parent=True)
+    if "#" in text:
+        raise ValueError(
+            f"Package {package_id}: output_dir {text!r} contains '#', which "
+            "starts a comment in the generated Makefile's OUT_HOST "
+            "assignment. Make would read the part before it and the compose "
+            "file's mount would keep the whole string, so the build would "
+            "write to one directory and clean another."
+        )
+    return check_no_glob(package_id, "output_dir", text)
 
 
 def check_no_glob(package_id: str, where: str, value: str) -> str:
@@ -679,7 +767,7 @@ def get_template_context(package_id: str, config: dict) -> dict:
     # directory. Declared relative to the .config.yaml the way `dir` is, and
     # turned into a package-relative path here because every generated path
     # is package-relative.
-    raw_output = package.get("output_dir")
+    raw_output = check_package_output_dir(package_id, package.get("output_dir"))
     if raw_output:
         # The package directory is <top-level output_dir>/<dir>, so the path
         # back out to a config-relative output directory has to climb BOTH.
