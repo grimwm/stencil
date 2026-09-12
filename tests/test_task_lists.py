@@ -108,7 +108,7 @@ def test_the_ordinal_survives(render_soup):
 def margin_sides(declarations: str) -> list[str]:
     """The shorthand margin's four sides, in CSS order: top right bottom left.
 
-    Read positionally rather than by pattern. `margin(-right)?:\s*[\d.]`
+    Read positionally rather than by pattern. `margin(-right)?:\\s*[\\d.]`
     looks like it asserts a right-hand gap and does not: against
     `margin: 0 0.45em 0 0.35em` it matches the *top* value, so it passes just
     as happily on `margin: 0 0 0 0.35em` -- no gap beside the text, which is
