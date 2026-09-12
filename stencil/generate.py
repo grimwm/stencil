@@ -695,6 +695,15 @@ def get_template_context(package_id: str, config: dict) -> dict:
         ),
         "browser_lockfile": pipeline.read_lockfile(pipeline.BROWSER_LOCKFILE),
         "format_lockfile": pipeline.read_lockfile(pipeline.FORMAT_LOCKFILE),
+        # And the digest of the file the line above renders, so the format-md
+        # entrypoint can refuse a lockfile that is not the one stencil wrote.
+        # The service reads its lockfile out of the mount, and `npm ci` fetches
+        # whatever host each `resolved` names -- so without this, a
+        # consumer-editable file chose which bytes became the prettier that
+        # runs as uid 0 over that same mount (stn-qge). Derived from the same
+        # call the file is rendered from, never written down, so a re-vendor
+        # moves both at once.
+        "format_lockfile_digest": pipeline.lockfile_digest(pipeline.FORMAT_LOCKFILE),
         # The names those two land under in the package, which the Dockerfile
         # COPYs and the format-md entrypoint cps, and the directories each
         # install is rooted at.

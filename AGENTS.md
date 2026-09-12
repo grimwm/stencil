@@ -537,6 +537,17 @@ A generated package therefore carries two files it did not before —
 needs is derived from the pins and written inline by the Dockerfile and the format-md
 entrypoint, so there is still one place a version is written down.
 
+Those two files land in a directory the consumer owns, and `npm ci` fetches whatever host
+each `resolved` names — so the format-md entrypoint checks the copy it is about to install
+from against the sha256 of the lockfile `stencil gen` wrote, and refuses anything else
+(`stn-qge`). **That digest is derived, not stored**: `pipeline.lockfile_digest()` hashes
+what `read_lockfile()` returns plus the newline the template restores, which is the file
+the package receives. Re-vendoring therefore stays the two steps above — the lockfile and
+its digest move together, and there is nothing extra to keep in sync by hand. A checksum
+is not a signature, and the comment above the service in `docker-compose-html.yml.j2` says
+what it does and does not prove. The browser image installs its lockfile the same way, out
+of the same directory, and does not check it yet — `stn-egv`.
+
 The one thing not pinned is Chromium, and that is a decision rather than an oversight —
 `stn-s5b`, with the measurements, in `Dockerfile.browser.j2`'s comment. Alpine keeps one
 version of a package per branch and drops it when superseded, so a pin there is a
