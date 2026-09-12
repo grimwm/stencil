@@ -74,6 +74,22 @@ How the version gets bumped is written down in
   to force the rotation while the run is still starting. Proven by two real
   pytest runs overlapping in time, the first already past a `tmp_path`.
 
+  Two runs starting *simultaneously* are a second case, and the marker alone
+  never covered it: checking for an owner and writing one are two steps, so
+  both runs read an empty directory and both claimed it. Claiming is now
+  atomic under a lock keyed on the resolved basetemp path, held only across
+  that check-and-write and across the rotation — and living outside the
+  basetemp, since a lock inside it would be deleted by the rotation it
+  covers. Measured: four simultaneous starters leave exactly one survivor,
+  15 runs out of 15; with the lock removed the same test fails 2 runs in 6.
+
+  Forcing the rotation introduced a failure of its own, now closed.
+  `getbasetemp()` does `rm_rf` and then `mkdir` with no `exist_ok`, so a
+  directory recreated underneath it raised `FileExistsError` out of a session
+  hook — an `INTERNALERROR` whose traceback never names a basetemp, which is
+  worse than the corruption being guarded against. It retries once and then
+  refuses in the guard's own words.
+
 ## 0.38.0
 
 - **Two test runs at once no longer corrupt each other** (`stn-zim`). The
