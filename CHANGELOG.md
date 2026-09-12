@@ -11,6 +11,42 @@ How the version gets bumped is written down in
 
 ## 0.38.0
 
+- **A link in front matter is legible on a deck's title slide, and still
+  looks like a link** (`stn-c0b`). Two halves, because one alone would not
+  have done it.
+
+  The light palette never mapped Bootstrap's link token — the dark block has
+  since it was written — so a light-theme link was the one colour on the page
+  this project did not choose: Bootstrap's own `#0d6efd`, measuring **4.50:1**
+  on white. That passes AA by rounding, on the easiest surface there is.
+  `--accent` is 9.85:1 on the same surface and is what every other themed
+  element already uses.
+
+  Mapping it is not enough, though, and that is the interesting half: a
+  themed light link **is** `--accent`, which is the same colour as
+  `--deck-accent-from` — 1.00:1 against the fill it would sit on. Any link
+  colour good on a pale prose surface is bad on a dark accent fill, exactly
+  the bind `stn-7i8` found for inline code. So the title slide scopes it the
+  same way, and the inherited ink measures 9.85:1 and 6.32:1 across the
+  gradient against `#0d6efd`'s 2.19:1 and 1.40:1.
+
+  The underline is not decoration. Inheriting the surrounding ink is precisely
+  what removes the colour difference that marked the link as a link, and
+  WCAG **1.4.1** is a separate criterion from 1.4.3 — fixing contrast by
+  deleting the only cue would trade one failure for another.
+
+- **A backticked front-matter title no longer puts literal markup in the
+  browser tab** (`stn-myk`). Pandoc renders `$title$` as inline markdown,
+  which is what makes a backticked title render as inline code on the page.
+  The same variable is interpolated into `<title>`, where an element has
+  nowhere to go — so pandoc escaped it and the tab, the bookmark and the
+  PDF's document title read literally `The <code>foo</code> protocol`.
+  `frontmatter-filter.lua` now stringifies `title`, `program`, `section` and
+  `term` alongside the other derived keys, and the head partial reads the
+  plain-text twin. Both templates share that partial, so it is one fix rather
+  than two — asserted rather than assumed, since the ticket flagged the
+  document side as needing checking.
+
 - **Inline code on an accent fill takes the fill's own ink, so a backticked
   front-matter title is legible on a deck's title slide** (`stn-7i8`). Every
   field the title slide renders is parsed as inline markdown — measured, all
