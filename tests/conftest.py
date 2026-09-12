@@ -178,6 +178,33 @@ def _pid_alive(pid: int) -> bool:
     return True
 
 
+def _claim_basetemp(basetemp: Path) -> None:
+    """Refuse a basetemp a live pytest already owns, then claim it.
+
+    Called twice per run, which is the fix for stn-6fs and not belt-and-
+    braces. See the two hooks below.
+    """
+    marker = basetemp / RUN_OWNER
+    if marker.exists():
+        pid = marker.read_text().strip().partition("-")[0]
+        # A run that crashed leaves its marker behind, and refusing forever
+        # afterwards would teach people to delete the guard rather than the
+        # file. Only a LIVE owner blocks.
+        #
+        # And never our own: the second call below can find the marker the
+        # first one wrote, and a run that refuses itself is a worse failure
+        # than the one being guarded against.
+        if pid.isdigit() and int(pid) != os.getpid() and _pid_alive(int(pid)):
+            raise pytest.UsageError(
+                f"--basetemp {basetemp} is in use by a running pytest "
+                f"(pid {pid}). Two runs sharing one basetemp delete each "
+                f"other's fixture trees at startup, and the failures do not "
+                f"name the cause. Pass a different --basetemp."
+            )
+    basetemp.mkdir(parents=True, exist_ok=True)
+    marker.write_text(_run_id())
+
+
 def pytest_configure(config):
     if not os.environ.get(pipeline.BROWSER_IMAGE_TAG_ENV):
         # An explicit tag wins: a CI job that builds the image once and reuses
@@ -191,21 +218,43 @@ def pytest_configure(config):
         # pytest's own default is already per-run.
         return
 
-    marker = Path(basetemp) / RUN_OWNER
-    if marker.exists():
-        pid = marker.read_text().strip().partition("-")[0]
-        # A run that crashed leaves its marker behind, and refusing forever
-        # afterwards would teach people to delete the guard rather than the
-        # file. Only a LIVE owner blocks.
-        if pid.isdigit() and _pid_alive(int(pid)):
-            raise pytest.UsageError(
-                f"--basetemp {basetemp} is in use by a running pytest "
-                f"(pid {pid}). Two runs sharing one basetemp delete each "
-                f"other's fixture trees at startup, and the failures do not "
-                f"name the cause. Pass a different --basetemp."
-            )
-    Path(basetemp).mkdir(parents=True, exist_ok=True)
-    marker.write_text(_run_id())
+    # The CHECK belongs here and nowhere later, because the thing that makes
+    # a shared basetemp catastrophic is pytest's own rotation: the first call
+    # to `TempPathFactory.getbasetemp()` rmtree()s the directory. A guard that
+    # refused AFTER that point would have already destroyed the run it was
+    # about to protect.
+    _claim_basetemp(Path(basetemp))
+
+
+def pytest_sessionstart(session):
+    """Claim the basetemp again, on the far side of pytest's own rotation.
+
+    stn-6fs: the claim in `pytest_configure` cannot survive. `getbasetemp()`
+    rmtree()s the given basetemp on FIRST use and recreates it, and
+    `pytest_configure` runs strictly before that -- so a run deleted its own
+    marker the moment any test asked for `tmp_path`, and the window in which
+    the guard could fire was milliseconds. It was dead rather than racy: two
+    concurrent runs on one --basetemp both passed, with no marker on disk
+    while the first was mid-test.
+
+    Touching `getbasetemp()` here forces the rotation to happen now, while
+    the run is still starting and nothing has been written that could be
+    lost, so the marker written after it is the one a second run reads. The
+    configure-time claim is kept because it closes the gap between the two:
+    for those few milliseconds a marker that will shortly be deleted is
+    still better than no marker at all.
+
+    tests/test_tmp_footprint.py proves this with two real overlapping runs.
+    The older hand-written-marker test cannot: it plants the marker in a
+    directory no pytest rotates, so it passed throughout the years this guard
+    did nothing.
+    """
+    basetemp = session.config.getoption("basetemp")
+    if not basetemp:
+        return
+
+    session.config._tmp_path_factory.getbasetemp()
+    _claim_basetemp(Path(basetemp))
 
 
 def pytest_collection_modifyitems(config, items):
