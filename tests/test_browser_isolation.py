@@ -294,3 +294,48 @@ def test_make_pdf_survives_both_decoys_at_once(tmp_path, rendered_page):
         "the pdf service exited 0 but wrote no document.pdf"
     )
     _assert_untouched(workdir, result)
+
+
+def test_check_access_refuses_when_it_cannot_leave_the_mount(tmp_path, rendered_page):
+    """THE `cd` MUST REFUSE, and this is what proves it does.
+
+    CHECK_ACCESS_SCRIPT runs under `sh -c` with no `set -e`, so a bare leading
+    `cd` that fails prints one line to stderr and CARRIES ON from /workspace --
+    which reopens stn-jeq in full while the service goes on to report "Checked 1
+    HTML file(s) at WCAG 2.1 AA, light and dark." and exit 0. Measured on this
+    image before the guard was written that way:
+
+        sh: cd: can't cd to /opt/tools-typo: No such file or directory
+        STILL RUNNING cwd=/workspace
+        script rc=0
+
+    A guard that silently stops guarding is the failure AGENTS.md says settles
+    arguments in this repository -- it is the third of the three things the
+    export drift guard caught, and the reason that file is as large as it is.
+    So the refusal gets a test rather than a comment.
+
+    THE PLAIN NODE IMAGE IS THE HONEST WAY TO MAKE THE TOOLS DIRECTORY ABSENT.
+    It is the base the generated Dockerfile.browser starts FROM, before anything
+    is installed under it, so this is "a consumer overrode Dockerfile.browser
+    and installed the tools elsewhere" made real rather than simulated. The same
+    move tests/test_pins.py makes for the pdf driver's own missing-tools guard.
+    """
+    workdir = _mount(tmp_path, rendered_page, config=False)
+
+    result = pipeline.check_access(
+        workdir=workdir, tag=pipeline.NODE_IMAGE, timeout=120
+    )
+
+    assert result.returncode != 0, (
+        "check-access exited 0 with no {} to move into, so it ran pa11y from "
+        "the mount -- which is stn-jeq, reopened, reporting success.\n"
+        "stdout: {}".format(pipeline.BROWSER_TOOLS_DIR, result.stdout[-2000:])
+    )
+    assert "Checked" not in result.stdout, (
+        "check-access carried on past the failed cd and measured pages anyway:\n"
+        f"{result.stdout[-2000:]}"
+    )
+    assert pipeline.BROWSER_TOOLS_DIR in result.stderr, (
+        "the refusal does not name the directory it could not reach, so a "
+        f"reader cannot act on it:\nstderr: {result.stderr[-2000:]}"
+    )

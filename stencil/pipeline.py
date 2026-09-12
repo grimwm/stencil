@@ -996,6 +996,18 @@ def run_in_browser(
 
     The script is written into the workdir rather than piped, so a failure
     leaves it on disk beside the page it was driving.
+
+    IT RUNS FROM THE MOUNT, DELIBERATELY, AND IS THE ONE THING HERE THAT STILL
+    DOES. Writing the script into the workdir and running `node <name>` from
+    /workspace is exactly the shape the pdf service had before stn-jeq -- so
+    this helper still sees a `.puppeteerrc.cjs` planted in the workdir, and a
+    consumer package.json still decides whether its script is an ES module.
+    That is not an oversight to finish tidying up: this is test
+    instrumentation rather than shipped scaffolding, and
+    tests/test_browser_isolation.py's CONTROL depends on it -- the control's
+    whole job is to prove a planted decoy WOULD execute, so that the tests
+    asserting it does not are measuring the fix rather than a malformed
+    fixture. Harden this and that control can no longer fail.
     """
     tag = tag or browser_image_tag()
     runtime = runtime or container_runtime()

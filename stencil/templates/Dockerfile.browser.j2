@@ -166,6 +166,15 @@ RUN for theme in light dark; do \
 # that file as root -- baking it changes which phase reads it, not who may write
 # it. What it closes is the separate question of what ELSE in that directory
 # gets to decide how the script is parsed.
+#
+# WHY {{ browser_tools_dir }} IS A SAFE PLACE TO STAND. The script chdir()s here
+# before puppeteer loads, which makes this directory and its ancestors --
+# {{ browser_tools_dir }}, /opt, / -- the whole of puppeteer's configuration
+# search (stn-jeq). They are safe because NOTHING IS MOUNTED OVER THEM: the
+# generated compose file declares one bind at /workspace and, for a package with
+# an output_dir, one at /out. Neither is under /opt. That is the property to
+# check before adding a volume to the pdf or check-access service -- it is no
+# longer merely a question of where files are written.
 COPY html-to-pdf.js {{ browser_tools_dir }}/html-to-pdf.js
 
 WORKDIR /workspace

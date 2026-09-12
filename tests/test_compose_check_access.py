@@ -402,3 +402,84 @@ def test_no_generated_service_binds_a_host_port(doc_package):
         "a generated service publishes a host port, which takes it from "
         f"whoever is already listening on it: {published}"
     )
+
+
+# --- the pdf service, through compose, for the first time (stn-7ki) --------
+#
+# Everything above drives check-access. The pdf service has never been run
+# through compose by anything in this repository -- tests/test_pdf.py and
+# tests/test_pins.py call pipeline.html_to_pdf, which assembles its own
+# `docker run` and never builds an image.
+#
+# That gap stopped being survivable when stn-7ki moved html-to-pdf.js out of the
+# mount and into the image. The script now reaches the running service through
+# a chain nothing measured end to end: rendered by `stencil gen` into the
+# package directory (from a consumer's templates_dir, if they override it) ->
+# COPYd out of the build context by Dockerfile.browser -> executed from
+# {{ browser_tools_dir }} by the entrypoint. Break any link and every existing
+# pdf test still passes, because they all bypass the first two.
+
+OVERRIDE_MARKER = "<<<OVERRIDDEN-DRIVER>>>"
+
+
+@integration
+def test_a_templates_dir_override_of_the_pdf_driver_reaches_the_service(
+    demo_config, generate_package, install_sources, compose, compose_runtime,
+    tmp_path,
+):
+    """A consumer's own html-to-pdf.js must be the one the image runs.
+
+    This is the single claim baking the script rests on: AGENTS.md promises
+    that templates resolve through a search path so a consuming project can
+    override one template without vendoring the set, and moving this file into
+    the image is only safe because `build.context` IS the package directory the
+    override renders into.
+
+    THE MARKER IS ADDED, NOT SUBSTITUTED. The override is stencil's own
+    template with one `console.log` prepended, so the service still has to do
+    the whole job -- wait for window.__mermaidReady, refuse a failed asset,
+    write a tagged PDF. A stub that only printed the marker would prove the
+    COPY happened and nothing about whether what got copied still works.
+    """
+    source = Path("stencil/templates/html-to-pdf.js.j2").resolve()
+    directory = tmp_path / "templates"
+    directory.mkdir()
+    (directory / "html-to-pdf.js.j2").write_text(
+        f'console.log("{OVERRIDE_MARKER}");\n' + source.read_text()
+    )
+
+    config = demo_config
+    config["templates_dir"] = "templates"
+    config["packages"] = {"override": config["packages"].pop("demo")}
+    package = generate_package(config, "override")
+    install_sources(package)
+
+    assert OVERRIDE_MARKER in (package / "html-to-pdf.js").read_text(), (
+        "the override did not even reach the generated package, so this test "
+        "would be measuring the search path rather than the image"
+    )
+
+    run = compose(package)
+
+    built = run("build", "pdf", timeout=2400)
+    assert built.returncode == 0, outcome("compose build pdf", built)
+
+    rendered = run("run", "--rm", "-T", "doc", SOURCE, "-o", f"./{RENDERED}",
+                   timeout=900)
+    assert rendered.returncode == 0, outcome("compose run doc", rendered)
+
+    printed = run("run", "--rm", "-T", "pdf", f"./{RENDERED}", "./document.pdf",
+                  timeout=900)
+    output = printed.stdout + printed.stderr
+
+    assert printed.returncode == 0, outcome("compose run pdf", printed)
+    assert (package / "document.pdf").is_file(), (
+        "the pdf service reported success and the PDF is not in the package -- "
+        "which is what resolving only the INPUT argument against the mount "
+        f"looks like, the output having landed beside the script:\n{output[-4000:]}"
+    )
+    assert OVERRIDE_MARKER in output, (
+        "the service ran a pdf driver that is not this package's. The COPY in "
+        "Dockerfile.browser, the build context, or the entrypoint path is "
+        f"wrong -- or the image was not rebuilt:\n{output[-4000:]}"
+    )

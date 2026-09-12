@@ -11,6 +11,7 @@
 const { createRequire } = require("node:module");
 const fs = require("node:fs");
 const nodePath = require("node:path");
+const { pathToFileURL } = require("node:url");
 
 const [input, output] = process.argv.slice(2);
 
@@ -48,6 +49,14 @@ if (!input || !output) {
 // The two names below are kept for MESSAGES -- `input` and `output` are what
 // the caller typed, and echoing those back reads better than an absolute path
 // nobody wrote.
+//
+// pathToFileURL() BUILDS THE URL, rather than pasting the path after `file://`.
+// A path is not a URL: measured on this image, `file:///workspace/Lecture 1.html`
+// survives because Chromium percent-encodes the space, and
+// `file:///workspace/Lecture 1#draft.html` does NOT -- the `#` starts a fragment
+// and the request goes out for `Lecture%201`, which is not there. pathToFileURL
+// encodes it to %23. The old hard-coded-prefix form had the same bug; this line
+// was being rewritten anyway, and the correct spelling is one identifier.
 const inputPath = nodePath.resolve(input);
 const outputPath = nodePath.resolve(output);
 
@@ -1294,7 +1303,7 @@ async function main() {
       failures.push(`uncaught page error: ${error.message}`);
     });
 
-    await page.goto(`file://${inputPath}`, {
+    await page.goto(pathToFileURL(inputPath).href, {
       waitUntil: "networkidle0",
       timeout: TIMEOUT_MS,
     });

@@ -996,6 +996,31 @@ rather than how, so exclude anything `format-md` should keep its hands off. If y
 yourself as well — format-on-save, a pre-commit hook, a `--check` job — give it the same flags, or
 exclude this directory from it; otherwise the two take turns rewriting each other's output.
 
+## Your package's JavaScript files do not configure the build
+
+The same rule as `--no-config` above, in the two services that drive a browser. **`make pdf` and
+`make check-access` ignore your package's own `package.json`, its `.puppeteerrc` and the twelve
+other names puppeteer reads (`.puppeteerrc.cjs`, `puppeteer.config.js`, `.config/puppeteerrc` and
+so on), and its `node_modules`.** Keep any of them for your own tooling; none of them reaches these
+two targets.
+
+That is not tidiness. Both services run as root over a read-write mount of your directory, and
+puppeteer *executes* the JavaScript forms of its config file — so a `.puppeteerrc.cjs` sitting in a
+package used to be the package choosing what code the build runs, exactly as a `.prettierrc` was
+above. They are ignored now because the two services run from a working directory inside the image
+rather than from your package, and because the script driving `make pdf` is built into that image
+instead of being read out of your directory. The second half also fixes a `package.json` declaring
+`"type": "module"`, which used to stop `make pdf` running at all.
+
+Two things this does **not** say, because they would be the wrong lesson:
+
+- It is about what these targets *read while they run*, not about what goes into the image they run
+  in. `make pdf` builds that image from your package directory, so `Dockerfile.browser` and
+  `browser-package-lock.json` — both files stencil generates — still decide what gets installed
+  into it. Leave them to `stencil gen`.
+- It says nothing about your markdown. A document is still parsed with raw HTML enabled, so a
+  `<script>` in a `.md` file still runs in the page the build renders.
+
 ## Do not run mdformat over this markdown
 
 Prettier is the formatter the pipeline runs, and the fenced-div rule above is the only concession
