@@ -69,6 +69,7 @@ import pytest
 import yaml
 
 from stencil import pipeline
+from stencil.generate import build_environment, get_template_context
 
 integration = pytest.mark.integration
 
@@ -194,7 +195,10 @@ def compose_driving_package(request):
 # --- (a)+(b): the make -n sweep --------------------------------------------
 
 
-def test_every_compose_invocation_names_its_file(require_make, compose_driving_package):
+@pytest.mark.parametrize("os_name", ["Darwin", "Windows_NT"])
+def test_every_compose_invocation_names_its_file(
+    require_make, compose_driving_package, os_name
+):
     """Every `$(DC)`-turned-`$(STENCIL_COMPOSE)` invocation must pin `-f`.
 
     Reads the EXPANSION (`make -n DC=<sentinel>`), not the template text, so a
@@ -203,6 +207,15 @@ def test_every_compose_invocation_names_its_file(require_make, compose_driving_p
     `ensure_image`'s `image inspect` probe derives from DC and which the
     ticket's own investigation flags as indistinguishable from a plain
     substring search for "docker".
+
+    PARAMETRIZED OVER OS, on the make command line (the same idiom
+    tests/test_pipeline.py, tests/test_pdf_ua_gate.py and
+    tests/test_package_sources.py already use for the same reason): a sweep
+    that only ever runs `make -n` on the host it happens to execute on expands
+    just one arm of Makefile-base.j2's `ifeq ($(OS),Windows_NT)` in
+    `ensure_image` -- on any POSIX CI runner that is forever the `else` arm,
+    and a `${DC}`-spelled or otherwise unpinned mutation of the Windows arm
+    would pass this sweep with 566 tests green and nothing here to say so.
     """
     makefile_text = (compose_driving_package / "Makefile").read_text()
     targets = derived_targets(makefile_text)
@@ -210,23 +223,24 @@ def test_every_compose_invocation_names_its_file(require_make, compose_driving_p
 
     seen_any_invocation = False
     for target in targets:
-        result = make_n(compose_driving_package, target)
+        result = make_n(compose_driving_package, target, f"OS={os_name}")
         # A Makefile that dies partway through can still have printed some
         # matching lines before it did -- checking those alone would let a
         # broken Makefile pass.
-        assert result.returncode == 0, outcome(f"make -n {target}", result)
+        assert result.returncode == 0, outcome(f"make -n {target} OS={os_name}", result)
 
         for match in re.finditer(re.escape(SENTINEL), result.stdout):
             seen_any_invocation = True
             tail = result.stdout[match.end() : match.end() + len(PIN)]
             assert tail == PIN, (
-                f"target {target!r} ran the compose sentinel without pinning "
-                f"a file immediately after it (got {tail!r}):\n{result.stdout}"
+                f"target {target!r} (OS={os_name}) ran the compose sentinel "
+                f"without pinning a file immediately after it (got {tail!r}):"
+                f"\n{result.stdout}"
             )
 
     assert seen_any_invocation, (
-        "the sentinel never appeared in any target's expansion -- the sweep "
-        "checked nothing, which proves nothing about the pin"
+        f"the sentinel never appeared in any target's expansion for OS={os_name} "
+        "-- the sweep checked nothing, which proves nothing about the pin"
     )
 
 
@@ -254,27 +268,112 @@ def test_empty_compose_files_is_a_hard_error(require_make, compose_driving_packa
     )
 
 
+def test_compose_files_from_the_environment_is_a_hard_error(
+    require_make, compose_driving_package
+):
+    """The `origin(COMPOSE_FILES) == environment` guard, exercised for real.
+
+    This module's own `clean_env()` scrubs COMPOSE_FILES from every `make_n`
+    subprocess precisely so a developer's shell cannot make this whole tier
+    pass vacuously -- which means no other test here ever puts COMPOSE_FILES
+    into the environment at all, and a deleted guard would look satisfied.
+    This test reintroduces it deliberately, into the child process's
+    environment rather than its command line, to prove the guard fires on
+    that origin specifically.
+    """
+    env = {**clean_env(), "COMPOSE_FILES": "evil.yml"}
+    result = subprocess.run(
+        ["make", "--no-print-directory", "-n", "format-md", f"DC={SENTINEL}"],
+        cwd=compose_driving_package,
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+    combined = result.stdout + result.stderr
+    assert result.returncode != 0, outcome(
+        "make -n format-md (COMPOSE_FILES=evil.yml in the environment)", result
+    )
+    assert "COMPOSE_FILES" in combined, (
+        f"the failure does not name COMPOSE_FILES, so a consumer would not "
+        f"know what to fix:\n{combined}"
+    )
+
+
+# --- the DC guard: DC may carry an implementation, never a flag -------------
+
+
+def test_dc_carrying_a_flag_is_a_hard_error(require_make, compose_driving_package):
+    """DC names a compose implementation only; a flag inside it is prepended
+    ahead of the pin by `STENCIL_COMPOSE = $(DC) $(addprefix -f ,...)`, so it
+    MERGES with the pinned file rather than being overridden by it -- see
+    Makefile-base.j2's own comment on this guard, and STENCIL.md's Compose
+    File Pinning section. MEASURED: `ifneq ($(filter -%,$(DC)),)` rejects
+    `-f`, `--file`, `--project-directory` and `--env-file` alike, because the
+    check is "any word starting with a dash", not a list of known flags.
+    """
+    result = make_n(
+        compose_driving_package, "format-md", dc="docker compose -f evil.yml"
+    )
+    combined = result.stdout + result.stderr
+    assert result.returncode != 0, outcome(
+        "make -n format-md DC='docker compose -f evil.yml'", result
+    )
+    assert "DC" in combined, f"the failure does not name DC:\n{combined}"
+
+
+@pytest.mark.parametrize(
+    "spelling", ["docker compose", "podman compose", "docker-compose", "podman-compose"]
+)
+def test_every_legitimate_dc_spelling_passes_the_flag_guard(
+    require_make, compose_driving_package, spelling
+):
+    """The other direction of the same guard: none of the four spellings
+    `pipeline.compose_command()` falls through has a word beginning with a
+    dash -- `docker-compose` and `podman-compose` begin with a letter and are
+    one word each -- so the guard above must let all four through untouched.
+    """
+    result = make_n(compose_driving_package, "format-md", dc=spelling)
+    assert result.returncode == 0, outcome(f"make -n format-md DC={spelling!r}", result)
+
+
 # --- (d): the template scan, as an allowlist --------------------------------
 
-# Everywhere a bare $(DC) is allowed to appear in any *.j2 template: deriving
-# CONTAINER from it, and the STENCIL_COMPOSE definition itself. Deliberately
-# NOT a subcommand denylist ("run", "build", "pull") -- that would miss exec,
-# ps, cp, logs, and whatever compose adds next.
+# `$(DC)` AND `${DC}` ALIKE -- make treats the two bracket spellings of a
+# variable reference identically, so a scan that only recognizes `$(DC)`
+# leaves a `${DC}`-spelled call site invisible to it. MEASURED: mutating the
+# Windows arm of `ensure_image` to `${DC} pull $(2)` left all 566 tests
+# passing before this pattern was widened.
+_DC_REFERENCE_RE = re.compile(r"\$[({]DC[)}]")
+
+# Everywhere a bare $(DC) (or ${DC}) is allowed to appear in any *.j2
+# template: deriving CONTAINER from it, and the STENCIL_COMPOSE definition
+# itself. Deliberately NOT a subcommand denylist ("run", "build", "pull") --
+# that would miss exec, ps, cp, logs, and whatever compose adds next.
 _ALLOWED_DC_WINDOWS = (
-    re.compile(r"\$\(firstword \$\(subst -, ,\$\(DC\)\)\)"),
+    re.compile(r"\$\(firstword \$\(subst -, ,\$[({]DC[)}]\)\)"),
     re.compile(
-        r"^STENCIL_COMPOSE\s*=\s*\$\(DC\)\s*"
+        r"^STENCIL_COMPOSE\s*=\s*\$[({]DC[)}]\s*"
         r"\$\(addprefix -f ,\$\(COMPOSE_FILES\)\)\s*$",
         re.MULTILINE,
     ),
+    # The DC flag guard's own reference. `ifneq ($(filter -%,$(DC)),)` reads
+    # DC to VALIDATE it -- before STENCIL_COMPOSE is even defined -- rather
+    # than to invoke anything. MEASURED: without this entry, the guard's own
+    # definition line flags itself as an offender and this test fails
+    # against the real templates, which is a false positive rather than a
+    # bug: the guard is what closes the sibling hole $(DC) carrying a flag
+    # would open, documented at length in Makefile-base.j2 itself.
+    re.compile(r"^ifneq \(\$\(filter -%,\$[({]DC[)}]\),\)\s*$", re.MULTILINE),
 )
 
 
 def test_bare_dc_only_appears_in_the_two_sanctioned_forms():
     """A future compose call site must go through $(STENCIL_COMPOSE) or fail here.
 
-    Globs `*.j2` rather than naming Makefile-base/doc/pkg.j2, so a future
-    Makefile-check.j2 is covered without anyone remembering to list it.
+    Recurses (`rglob`, not `glob`) rather than naming Makefile-base/doc/pkg.j2,
+    so a future Makefile-check.j2 -- including one nested under a subdirectory
+    such as templates/make/ -- is covered without anyone remembering to list
+    it.
 
     This reads the raw template TEXT rather than a rendered Makefile, which is
     the only way to see both branches of `ifeq ($(OS),Windows_NT)` --
@@ -283,7 +382,7 @@ def test_bare_dc_only_appears_in_the_two_sanctioned_forms():
     unreachable by any test in this repository.
     """
     offenders: dict[str, list[str]] = {}
-    for template in sorted(TEMPLATES_DIR.glob("*.j2")):
+    for template in sorted(TEMPLATES_DIR.rglob("*.j2")):
         text = template.read_text()
         sanctioned = {
             span
@@ -291,7 +390,7 @@ def test_bare_dc_only_appears_in_the_two_sanctioned_forms():
             for span in (m.span() for m in allowed.finditer(text))
         }
         lines = text.splitlines()
-        for match in re.finditer(r"\$\(DC\)", text):
+        for match in _DC_REFERENCE_RE.finditer(text):
             if any(start <= match.start() < end for start, end in sanctioned):
                 continue
             line = text[: match.start()].count("\n") + 1
@@ -307,8 +406,53 @@ def test_bare_dc_only_appears_in_the_two_sanctioned_forms():
             )
 
     assert not offenders, (
-        "a bare $(DC) reaches compose outside $(STENCIL_COMPOSE), so a "
+        "a bare $(DC)/${DC} reaches compose outside $(STENCIL_COMPOSE), so a "
         f"consumer's override/.env can still unpin it there: {offenders}"
+    )
+
+
+# Every spelling of a compose implementation itself -- as opposed to $(DC),
+# which the scan above already covers -- that a recipe could name literally
+# and bypass $(DC)/$(STENCIL_COMPOSE) entirely.
+_LITERAL_COMPOSE_IMPLEMENTATIONS = (
+    "docker compose",
+    "podman compose",
+    "docker-compose",
+    "podman-compose",
+)
+
+
+def test_no_recipe_spells_out_a_compose_implementation_literally():
+    """Neither scan above catches a call site that spells the implementation
+    out by name instead of going through $(DC) at all -- there is no `$(DC)`
+    reference in `docker compose run --rm doc ...` for either of them to see.
+
+    Scoped to RECIPE lines (tab-indented -- the only lines make ever hands to
+    a shell) rather than every line in every template: Makefile-base.j2's own
+    comments and its `$(error ...)` guard messages name all four spellings
+    (e.g. `DC="podman compose"` in the DC-guard's own error text) to explain
+    what DC is and is not for, and its `COMPOSE_FILES ?= docker-compose.yml`
+    default names a compose FILE, not an implementation -- none of those
+    lines make ever runs as a command, so none of them are the hole this
+    closes, and a scan over every line would flag them as false offenders.
+    MEASURED: no template's recipe lines contain any of the four spellings
+    today, so this starts green against the real templates.
+    """
+    offenders: dict[str, list[str]] = {}
+    for template in sorted(TEMPLATES_DIR.rglob("*.j2")):
+        for lineno, line in enumerate(template.read_text().splitlines(), start=1):
+            if not line.startswith("\t"):
+                continue
+            if line.lstrip().startswith("#"):
+                continue
+            if any(impl in line for impl in _LITERAL_COMPOSE_IMPLEMENTATIONS):
+                offenders.setdefault(template.name, []).append(
+                    f"line {lineno}: {line.strip()}"
+                )
+
+    assert not offenders, (
+        "a recipe line spells out a compose implementation literally, "
+        f"bypassing $(DC)/$(STENCIL_COMPOSE) entirely: {offenders}"
     )
 
 
@@ -343,7 +487,11 @@ def test_the_pinned_file_is_one_the_package_actually_has(compose_driving_package
     separate literals with nothing tying them together, so this is the
     assertion that keeps them equal. Rename the compose template's output and
     forget this line, and every generated package gets a Makefile whose every
-    target dies with `no configuration file provided`.
+    target dies with `open .../docker-compose.yml: no such file or directory`
+    -- the error an explicit `-f` naming an absent file produces. MEASURED:
+    `no configuration file provided` is the auto-DISCOVERY failure, printed
+    only when compose is given no `-f` at all and finds nothing to fall back
+    on; a pinned-but-missing file fails differently.
 
     THE `dest:` CASE IS A DOCUMENTED LIMITATION, NOT A BUG THIS CATCHES.
     STENCIL.md:187 lets a consumer render `docker-compose.yml.j2` under
@@ -363,9 +511,83 @@ def test_the_pinned_file_is_one_the_package_actually_has(compose_driving_package
     missing = [name for name in names if not (compose_driving_package / name).is_file()]
     assert not missing, (
         f"COMPOSE_FILES names {missing}, which this package does not contain, "
-        "so every compose target would die with `no configuration file "
-        f"provided`. Package contains: "
+        "so every compose target would die with `open .../"
+        f"{missing[0] if missing else ''}: no such file or directory`. "
+        f"Package contains: "
         f"{sorted(p.name for p in compose_driving_package.iterdir())}"
+    )
+
+
+# --- the two Makefile-doc.j2 / Makefile-pkg.j2 STENCIL_COMPOSE guards -------
+
+
+@pytest.fixture
+def env(tmp_path):
+    return build_environment({}, tmp_path)
+
+
+def _run_make_on_rendered_partial(env, tmp_path, template_name: str, context: dict):
+    """Render one Makefile partial ALONE -- the way a consumer's own
+    Makefile.j2 could `{% include %}` it without Makefile-base.j2 first, per
+    AGENTS.md -- write it as a real Makefile, and run `make` on it directly.
+
+    No target is passed: the guard each partial carries is a top-level
+    `ifeq`/`$(error ...)`, evaluated while make READS the file, before any
+    goal is even chosen -- so this fails during parsing regardless of which
+    target a caller would have picked.
+    """
+    text = env.get_template(template_name).render(context)
+    (tmp_path / "Makefile").write_text(text)
+    return subprocess.run(
+        ["make", "--no-print-directory", "-n"],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+    )
+
+
+def test_makefile_doc_guard_fires_without_makefile_base(require_make, env, tmp_path):
+    """Makefile-doc.j2's own `STENCIL_COMPOSE` guard, run for real rather than
+    merely existing in the source text. MEASURED by deleting the guard: this
+    test goes red while the other 566 stay green.
+    """
+    context = get_template_context(
+        "demo", {"packages": {"demo": {"name": "Demo", "package_type": "none"}}}
+    )
+    result = _run_make_on_rendered_partial(env, tmp_path, "Makefile-doc.j2", context)
+    combined = result.stdout + result.stderr
+    assert result.returncode != 0, outcome("make -n (Makefile-doc.j2 alone)", result)
+    assert "STENCIL_COMPOSE" in combined, (
+        f"the failure does not name STENCIL_COMPOSE:\n{combined}"
+    )
+
+
+def test_makefile_pkg_guard_fires_without_makefile_base(require_make, env, tmp_path):
+    """Makefile-pkg.j2's own `STENCIL_COMPOSE` guard, run for real. Needs
+    package_type "doc" with package_sources: that is the only arm of
+    Makefile-pkg.j2 that calls compose at all (the zip arm archives with tar
+    or zip, and package_type "none" renders nothing here but clean-pkg), and
+    is the arm the guard actually sits in. MEASURED by deleting this guard:
+    this test goes red while the other 566 stay green.
+    """
+    context = get_template_context(
+        "demo",
+        {
+            "packages": {
+                "demo": {
+                    "name": "Demo",
+                    "package_type": "doc",
+                    "package_name": "hs2.pdf",
+                    "package_sources": ["md/*.md"],
+                }
+            }
+        },
+    )
+    result = _run_make_on_rendered_partial(env, tmp_path, "Makefile-pkg.j2", context)
+    combined = result.stdout + result.stderr
+    assert result.returncode != 0, outcome("make -n (Makefile-pkg.j2 alone)", result)
+    assert "STENCIL_COMPOSE" in combined, (
+        f"the failure does not name STENCIL_COMPOSE:\n{combined}"
     )
 
 

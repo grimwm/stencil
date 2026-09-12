@@ -2,6 +2,48 @@
 # Override to use another Compose implementation, e.g. DC="podman compose"
 DC ?= docker compose
 
+# DC NAMES AN IMPLEMENTATION, AND NOTHING ELSE. STENCIL_COMPOSE below puts
+# $(DC) FIRST and the pinned -f after it, so anything DC carries is prepended
+# to the file list -- and a file named earlier is not overridden by the pin, it
+# is MERGED WITH it. MEASURED against a real generated package:
+#
+#   $ DC='docker compose -f evil.yml' make -n format-md
+#   docker compose -f evil.yml -f docker-compose.yml run --rm format-md
+#
+# and `config` on that pair keeps the pinned image -- so the service still
+# LOOKS right -- while `privileged: true` and a `/:/hostfs` mount out of
+# evil.yml land intact, because compose's merge only resolves keys that
+# collide. That is the whole of stn-qli reopened through the sibling variable,
+# so DC is checked rather than trusted.
+#
+# The check is "no word starting with a dash", not a list of known flags:
+# `-f` and `--file` are the obvious smuggling routes, but `--project-directory`
+# moves the base every relative volume source resolves against and
+# `--env-file` re-points the variable file, and neither is a compose file by
+# name. All four spellings pipeline.compose_command() falls through --
+# "docker compose", "podman compose", "docker-compose", "podman-compose" --
+# pass it, because none of them has a word beginning with a dash;
+# "docker-compose" begins with a letter and is one word.
+#
+# LIKE THE COMPOSE_FILES GUARDS BELOW, THIS IS HONEST-MISTAKE PROTECTION AND
+# NOT AN ATTACKER BOUNDARY. DC names the command make runs, so anyone who can
+# set it can already run anything -- `DC='env COMPOSE_FILE=evil.yml docker
+# compose'` carries no dash and passes this check (inert, as it happens: an
+# explicit `-f` makes compose ignore COMPOSE_FILE entirely, measured). What
+# the check is for is the realistic case: a consumer who read "override DC to
+# use another implementation", reached for the nearest variable to add a
+# compose file too, and would otherwise get a silent merge rather than an
+# error.
+#
+# ORIGIN IS DELIBERATELY NOT CHECKED HERE, unlike COMPOSE_FILES below.
+# `export DC="podman compose"` is a legitimate thing to have in a shell profile
+# on a podman-only machine, and the line above advertises the override without
+# saying "command line only". Refusing it would break a working setup to
+# prevent something this check already prevents directly.
+ifneq ($(filter -%,$(DC)),)
+$(error DC names a compose implementation only, e.g. DC="podman compose"; compose files belong in COMPOSE_FILES)
+endif
+
 # The compose file(s) every invocation below pins, so that a
 # docker-compose.override.yml or a .env COMPOSE_FILE sitting in the package
 # directory is never auto-discovered and merged by compose's own resolution
