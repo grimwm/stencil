@@ -22,9 +22,67 @@ import yaml
 from bs4 import BeautifulSoup
 from filelock import FileLock
 
+import stencil
 from stencil import generate, pipeline
 
 FIXTURES = Path(__file__).parent / "fixtures"
+
+# --- the tests must be testing THIS checkout (stn-2et) ---------------------
+#
+# AGENTS.md tells every contributor and every agent to work in a git worktree,
+# and the `pip install -e .` that makes `stencil` importable points at exactly
+# ONE checkout. pytest's `prepend` import mode puts `<checkout>/tests` on
+# sys.path -- never `<checkout>` -- so `import stencil` used to fall through
+# to that editable install's finder and resolve, by absolute path, to whoever
+# owned it. A worktree then graded another tree's source and said nothing.
+#
+# `pythonpath = ["."]` in [tool.pytest.ini_options] is what fixes it. This is
+# the witness that it worked. It is not redundant with the fix: a setting can
+# be deleted in a merge, overridden by a different rootdir, or defeated by an
+# arrangement nobody has thought of yet, and every one of those failures is
+# silent. The repository has already paid for that lesson once, with a
+# pre-push hook that was gated on `command -v pre-commit` and failed open.
+#
+# The comparison is against THIS FILE's checkout rather than against
+# `config.rootpath`, deliberately. Several tests here run an inner pytest that
+# loads this conftest as a plugin against a throwaway rootdir
+# (tests/test_parallel_harness.py, tests/test_tmp_footprint.py); a
+# rootdir-based rule fires on all of them, which is a guard that breaks
+# legitimate runs. The question worth asking is narrower and exact: does the
+# `stencil` being imported belong to the same tree as the tests being run?
+
+CHECKOUT = Path(__file__).resolve().parent.parent
+
+
+def foreign_stencil_note(checkout: Path, stencil_file: Path, rootdir: Path) -> str | None:
+    """The refusal, or None when the import belongs to `checkout`.
+
+    Split out from the hook so the message can be asserted directly and so a
+    positive control can prove the guard is capable of saying yes --
+    tests/test_worktree_imports.py does both.
+
+    Both sides are resolved: on macOS a checkout reached through /tmp is a
+    symlink to /private/tmp, and comparing one resolved path against one
+    unresolved path would refuse a perfectly good run.
+    """
+    package = stencil_file.resolve().parent
+    if package.parent == checkout.resolve():
+        return None
+    return (
+        "pytest is testing one checkout and importing stencil from another.\n"
+        f"    tests being run:  {checkout}\n"
+        f"    stencil imported: {package}\n"
+        f"    rootdir:          {rootdir}\n"
+        "\n"
+        "Every result from this run would describe source you did not change.\n"
+        "This usually means a git worktree is borrowing another checkout's\n"
+        "virtualenv, where `pip install -e .` points at that other checkout.\n"
+        "\n"
+        "Fix it either way round:\n"
+        "    python3 -m venv .venv && ./.venv/bin/pip install -e '.[dev]'\n"
+        "        -- in THIS checkout, then use that venv; or\n"
+        "    run the tests from the checkout that owns the venv you are using.\n"
+    )
 
 DEMO_CONFIG = {
     "output_dir": "out",
@@ -288,6 +346,12 @@ def inner_pytest_env(**overrides) -> dict[str, str]:
 
 
 def pytest_configure(config):
+    # First, before anything else in this file has a chance to report on a
+    # source tree nobody is editing.
+    note = foreign_stencil_note(CHECKOUT, Path(stencil.__file__), config.rootpath)
+    if note:
+        raise pytest.UsageError(note)
+
     if not os.environ.get(pipeline.BROWSER_IMAGE_TAG_ENV):
         # An explicit tag wins: a CI job that builds the image once and reuses
         # it across invocations should be able to say so.

@@ -11,6 +11,36 @@ How the version gets bumped is written down in
 
 ## 0.39.0
 
+- **pytest in a git worktree now tests that worktree** (`stn-2et`). A run
+  started inside a worktree, using a venv whose `pip install -e .` points at
+  another checkout, imported THAT checkout's `stencil` while running the
+  worktree's tests — and said nothing. Measured: the console script imported
+  `<main>/stencil/__init__.py` from a `<worktree>` whose own version was a
+  minor ahead, and the same suite differed by two tests depending only on
+  `PYTHONPATH`.
+
+  `pythonpath = ["."]` in `[tool.pytest.ini_options]` fixes it by putting the
+  rootdir on `sys.path` before `tests/conftest.py` is imported. Resolved
+  relative to rootdir rather than the cwd, and it reaches xdist workers — both
+  verified rather than assumed.
+
+  Why it stayed hidden: `python -m pytest` was always right, because `-m`
+  puts the cwd on `sys.path` first, so the obvious sanity check passed. And
+  stn-12v's CLI guard passes either way — it derives `REPO_ROOT` from the
+  imported module, so it pins the subprocess to whatever the in-process import
+  chose. That is consistency, not correctness; under this bug both halves
+  agreed on the wrong tree. Fixing the in-process import is what makes
+  stn-12v's guarantee point somewhere useful.
+
+  `tests/conftest.py` now refuses a run whose `stencil` belongs to a different
+  checkout, naming both trees and the two ways out, because a setting can be
+  deleted in a merge and every failure here is silent — the lesson this
+  repository already paid for with a pre-push hook that failed open. It
+  compares against the conftest's own checkout rather than `config.rootpath`,
+  which would have refused the inner pytest runs `test_parallel_harness.py`
+  and `test_tmp_footprint.py` legitimately make against a throwaway rootdir.
+  AGENTS.md records what a contributor in a worktree should expect.
+
 - **The container tier now runs in parallel** (`stn-vda`). CI's integration job
   ran a single `pytest -v`; it now runs `pytest -v -n auto --dist loadfile`.
   `loadfile`, not xdist's default `load`: nine test files carry module- or

@@ -47,6 +47,31 @@ stencil = "stencil.generate:main"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+# The repository ROOT on sys.path, so `import stencil` finds the tree whose
+# tests are running (stn-2et).
+#
+# pytest's default `prepend` import mode inserts the first directory ABOVE a
+# test file that has no `__init__.py`. `tests/` has none, so what lands on
+# sys.path is `<checkout>/tests` and never `<checkout>` itself -- and `import
+# stencil` fell through to whatever `pip install -e .` had registered, which
+# is ONE checkout by absolute path. AGENTS.md tells everyone to work in a git
+# worktree, so the documented arrangement is several trees sharing one
+# install, and a worktree's suite silently graded the other tree's source.
+#
+# Measured, from a worktree using the main checkout's venv: without this the
+# console script imports `<main>/stencil/__init__.py`; with it, the
+# worktree's. `python -m pytest` was right all along because `-m` puts the cwd
+# on sys.path first, which is why the obvious sanity check never caught it.
+#
+# Resolved relative to ROOTDIR, not the cwd -- verified by running from
+# `<checkout>/tests` and from an unrelated directory with an absolute target.
+# Applied from `pytest_load_initial_conftests(tryfirst=True)`, so it is in
+# place before tests/conftest.py is imported, which is what makes it
+# sufficient given that conftest imports stencil at module scope. It reaches
+# xdist workers. tests/conftest.py carries the guard that says so when any of
+# that stops being true.
+pythonpath = ["."]
 markers = [
     "integration: needs a container runtime; deselect with -m 'not integration'",
 ]

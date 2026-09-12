@@ -312,6 +312,46 @@ git worktree add .claude/worktrees/<branch> -b <branch>
 
 `.claude/worktrees/` is gitignored for exactly this purpose.
 
+**A worktree run tests the worktree, and that took fixing** (`stn-2et`). Several
+source trees sharing one `pip install -e .` is the arrangement this section
+asks for, and pytest resolved it wrongly: `prepend` import mode puts
+`<checkout>/tests` on `sys.path` and never `<checkout>`, so `import stencil`
+fell through to the editable install's finder and resolved, by absolute path,
+to whichever checkout owned it. A worktree's suite graded the main checkout's
+source and reported a confident pass or fail about code nobody had touched.
+
+Measured, from a worktree using the main checkout's venv: `pytest` imported
+`<main>/stencil/__init__.py`, while `PYTHONPATH=$(pwd) pytest` over the same
+tree differed by two tests. The failing direction is the lucky one. The
+dangerous one is a broken change passing green because main's code is fine —
+or, with several worktrees in flight as there usually are here, one worktree
+quietly grading another's state.
+
+Two things hid it, and both are worth knowing because they are why the obvious
+check did not catch it:
+
+- `python -m pytest` was right all along — `-m` puts the cwd on `sys.path`
+  first. Only the console script, the one this file documents, was wrong.
+- `tests/test_cli.py`'s stn-12v guard passes either way. It derives
+  `REPO_ROOT` from `generate.__file__`, so it pins the CLI subprocess to
+  whatever the in-process import already chose: consistency, which is what it
+  was for, and not correctness. Under this bug both halves agreed on the wrong
+  tree.
+
+`pythonpath = ["."]` in `[tool.pytest.ini_options]` is the fix — the rootdir on
+`sys.path`, before `tests/conftest.py` is imported. **So a worktree needs no
+venv of its own**, and borrowing the main checkout's is fine.
+
+What to expect if it ever stops working: `tests/conftest.py` refuses the run
+rather than reporting on it, naming the checkout whose tests are running, the
+`stencil` that got imported, and the two ways out. It compares against the
+conftest's own checkout rather than against `config.rootpath`, because this
+suite deliberately runs inner pytests that load this conftest against a
+throwaway rootdir and a rootdir rule would refuse those. `tests/test_worktree_imports.py`
+holds the guard's tests, including a control that the scaffolding still lands
+on the wrong tree when the setting is removed — without which the whole file
+could pass while measuring nothing.
+
 Roll forward from a mistake: `git revert`, or a follow-up commit that fixes it. Never
 `git reset --hard`, and never rewrite a branch that has already been pushed.
 
