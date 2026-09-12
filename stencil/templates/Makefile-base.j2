@@ -162,11 +162,14 @@ STENCIL_COMPOSE = $(_stencil_pin_check)$(DC) $(addprefix -f ,$(COMPOSE_FILES))
 # runs the result as a BARE COMMAND, an exported CONTAINER was executed by
 # four targets, in the package directory, with both streams sent to
 # /dev/null. MEASURED against a real generated package: with CONTAINER naming
-# a planted script, `make format-md` ran it and exited 0 with nothing on
-# either stream. The first attempt at that reproduction looked clean for
-# exactly the reason this is dangerous -- the probe's output is discarded, so
-# a marker printed to stdout proves nothing and the planted command had to
-# write a file to be seen at all.
+# a planted script, `make format-md` ran it and exited 0. The PLANTED
+# COMMAND's own stdout and stderr were both discarded, so it left no trace in
+# the build output -- which is not the same as the build being silent, and an
+# earlier draft of this comment wrongly said the build printed nothing at all.
+# The compose line below carries no `@`, so make echoes it either way. The
+# first attempt at that reproduction looked clean for exactly the reason this
+# is dangerous: a marker printed to stdout proves nothing here, and the
+# planted command had to write a file to be seen at all.
 #
 # It also silently disabled the pull guard below, which is the consequence a
 # maintainer would not guess: the probe's EXIT STATUS is what decides whether
@@ -188,30 +191,53 @@ STENCIL_COMPOSE = $(_stencil_pin_check)$(DC) $(addprefix -f ,$(COMPOSE_FILES))
 # WHY `override` AND NOT A PLAIN `=`. MEASURED, GNU Make 3.81 (macOS) and 4.3
 # (CI); "loses" means the assignment here loses and the injected value wins:
 #
-#                     env    make -e   command line   MAKEFLAGS   GNUMAKEFLAGS
-#   X ?= ...          loses  loses     loses          loses       loses (4.3)
-#   X = ...           wins   loses     loses          loses       loses (4.3)
-#   override X = ...  wins   wins      wins           wins        wins
+#                     env    make -e   cmd line   MAKEFLAGS=V=x   GNUMAKEFLAGS=V=x
+#   X ?= ...          loses  loses     loses      loses           loses (4.x)
+#   X = ...           wins   loses     loses      loses           loses (4.x)
+#   override X = ...  wins   wins      wins       wins            wins
 #
-# MAKEFLAGS is the route the COMPOSE_FILES origin guard above explicitly
-# cannot close -- it reports origin "command line" and slips straight past.
-# `override` closes it rather than inheriting that caveat. GNUMAKEFLAGS is a
-# live injection route on 4.3 and inert on 3.81, so a green local run on
-# macOS proves nothing about it and the test that covers it skips here and
-# runs in CI. The assignment stays RECURSIVE, so a DC assigned later -- or
-# built from a second variable, the deferred case _stencil_pin_check above
-# exists for -- is still read where it is used.
+# `MAKEFLAGS=VAR=value` is the route the COMPOSE_FILES origin guard above
+# explicitly cannot close -- it reports origin "command line" and slips
+# straight past. `override` closes THAT spelling rather than inheriting the
+# caveat. GNUMAKEFLAGS is a live injection route on 4.x and inert on 3.81, so
+# a green local run on macOS proves nothing about it and the test covering it
+# skips here and runs in CI.
+#
+# THE TABLE'S LAST TWO COLUMNS ARE `MAKEFLAGS=VAR=value` SPECIFICALLY, AND
+# THAT QUALIFIER IS LOAD-BEARING. GNU Make 4.0+ also honours `--eval` inside
+# MAKEFLAGS, and `--eval` can carry a PATTERN-SPECIFIC assignment, which beats
+# a global `override` -- so a value still arrives from the environment alone,
+# with no consuming makefile. MEASURED on 4.3:
+#
+#   MAKEFLAGS='--eval %: STENCIL_CONTAINER = x'   ->  probe runs `x`
+#
+# An earlier draft of this comment claimed `override` closed MAKEFLAGS
+# outright. It does not, and a guard that overclaims is the failure this
+# comment itself warns about, so the claim is narrowed rather than repeated.
+# The route is filed as stn-2je with its reproduction; `--eval` injects
+# arbitrary makefile text, so there is no clean defence to reach for here.
+#
+# The assignment stays RECURSIVE, so a DC assigned later -- or built from a
+# second variable, the deferred case _stencil_pin_check above exists for --
+# is still read where it is used.
 #
 # WHAT `override` DOES NOT CLOSE, stated because a guard that overclaims is
 # worse than none. A TARGET-SPECIFIC or PATTERN-SPECIFIC assignment in the
 # consuming makefile beats it -- `doc: STENCIL_CONTAINER = x` for that target,
 # `%: STENCIL_CONTAINER = x` for every one -- while a GLOBAL plain assignment
-# loses. MEASURED on 3.81 and 4.3, and MAKEFILES (an environment variable
-# naming makefile text to read first) carries that form in from the
-# environment. This is the same resolve-after-parse fact _stencil_pin_check
-# above was written for. None of it is defensible in make, and none of it is
-# an attacker route: every one needs the consuming makefile, which can
-# already run anything.
+# loses. MEASURED on 3.81 and 4.3. This is the same resolve-after-parse fact
+# _stencil_pin_check above was written for, and none of it is defensible in
+# make.
+#
+# Two of these reach further than the consuming makefile, so the convenient
+# dismissal "they all need a makefile you control anyway" is NOT true and is
+# not made here. MAKEFILES (an environment variable naming makefile text to
+# read first) carries the pattern-specific form in with an environment
+# variable plus a file -- MEASURED on 3.81 and 4.3 -- and MAKEFLAGS=--eval
+# above carries it with an environment variable and nothing else. What stays
+# true is that all of this is honest-mistake territory rather than an attacker
+# boundary: anyone who can set MAKEFLAGS or MAKEFILES in your environment can
+# generally set PATH too.
 #
 # THE ESCAPE HATCH, and it has a real customer. A composition needing a
 # differently-named runtime writes, after the include:

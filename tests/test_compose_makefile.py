@@ -712,16 +712,23 @@ def test_makefile_pkg_guard_fires_without_makefile_base(require_make, env, tmp_p
 
 # === (g): the image probe's runtime cannot be repointed -------------------
 #
-# stn-9o5. `ensure_image`'s `image inspect` probe reads
+# stn-9o5. `ensure_image`'s `image inspect` probe USED TO READ
 # `CONTAINER ?= $(firstword $(subst -, ,$(DC)))` -- an environment value, a
-# `make -e`, a command-line assignment, or a `MAKEFLAGS=` all win over `?=`,
-# so the probe runs whatever binary name was planted, with the package
-# directory as cwd, regardless of what DC/STENCIL_COMPOSE actually pull.
-# THE SPELLING UNDER TEST, once stn-9o5's fix lands, is
-# `override STENCIL_CONTAINER = $(firstword $(subst -, ,$(DC)))`, with both
-# `ensure_image` arms repointed at `$(STENCIL_CONTAINER)`. Both names are
-# checked below: CONTAINER because it is the live bug today, STENCIL_CONTAINER
-# because it is what must stay closed once the rename lands.
+# `make -e`, a command-line assignment or a `MAKEFLAGS=VAR=value` all win over
+# `?=`, so the probe ran whatever binary name was planted, with the package
+# directory as cwd, regardless of what DC/STENCIL_COMPOSE actually pulled.
+# IT NOW READS `override STENCIL_CONTAINER = $(firstword $(subst -, ,$(DC)))`,
+# with both `ensure_image` arms on `$(STENCIL_CONTAINER)`.
+#
+# Both names are checked below, and they carry different weight now that the
+# rename has landed. STENCIL_CONTAINER is the LIVE invariant: it is the name
+# the template reads, and every route below is a real assertion about it.
+# CONTAINER is a REGRESSION PIN: the template no longer reads that name, so
+# those instances pass because nothing looks at it, and they exist to fail if
+# the old spelling ever comes back. They are deliberately kept and
+# deliberately not load-bearing -- said plainly here because this module's
+# standing rule is that a test which cannot fail is decoration, and the honest
+# answer is which half is which.
 
 # Every route by which a value can reach a make variable without editing the
 # Makefile text itself. GNUMAKEFLAGS is included deliberately even though it
@@ -833,26 +840,27 @@ def test_a_planted_runtime_never_reaches_the_probe(
 ):
     """A planted CONTAINER/STENCIL_CONTAINER must never reach `ensure_image`.
 
-    RED TODAY for name="CONTAINER" on every live route (environment,
-    environment_dash_e, command_line, MAKEFLAGS -- GNUMAKEFLAGS on a `make`
-    that honors it): Makefile-base.j2 still reads
-    `CONTAINER ?= $(firstword $(subst -, ,$(DC)))`, and `?=` only skips
-    assignment when the variable is ALREADY defined -- which an exported, -e,
-    command-line, or MAKEFLAGS-delivered CONTAINER is, before make ever
-    reaches the derivation. MEASURED directly against a real generated
-    package: each of those four routes prints the planted value immediately
-    before ` image inspect`, in place of the DC-derived runtime. Goes green
-    the moment Makefile-base.j2 reads
-    `override STENCIL_CONTAINER = $(firstword $(subst -, ,$(DC)))` and both
-    `ensure_image` arms are repointed at `$(STENCIL_CONTAINER)` -- `override`
-    beats every one of these origins, including MAKEFLAGS, unlike `?=` or a
-    plain `=`.
+    name="STENCIL_CONTAINER" IS THE LIVE HALF. The template reads that name,
+    and `override` beats every origin below -- environment, `make -e`, the
+    command line, `MAKEFLAGS=VAR=value` and `GNUMAKEFLAGS=VAR=value`.
+    MEASURED: mutating the template's `override` back to a plain `=` turns
+    the environment_dash_e, command_line and MAKEFLAGS instances red on both
+    OS arms, so this is asserting `override` specifically and not merely the
+    rename.
 
-    name="STENCIL_CONTAINER" is expected GREEN today for the opposite
-    reason: nothing in the current template reads that name at all, so
-    planting it has no effect on anything. It stays in this parametrization
-    so the same test starts proving the invariant the day the rename lands,
-    rather than needing a second copy of itself written later.
+    name="CONTAINER" IS A REGRESSION PIN, and passes because the template no
+    longer reads that name at all. Before the rename these were the red ones:
+    `?=` only skips assignment when the variable is ALREADY defined, which an
+    exported, -e, command-line or MAKEFLAGS-delivered CONTAINER is before make
+    reaches the derivation, and each route printed the planted value
+    immediately before ` image inspect`. They are kept so that restoring the
+    old spelling fails here rather than silently reopening stn-3y8.
+
+    NOT CLOSED, and deliberately not asserted here: `MAKEFLAGS='--eval %:
+    STENCIL_CONTAINER = x'` beats `override` on every GNU Make 4.x, because
+    `--eval` can carry a pattern-specific assignment. Filed as stn-2je with
+    its reproduction. It is absent from _INJECTION_ROUTES because it would be
+    red, not because it does not exist.
 
     EVERY ROUTE CARRIES ITS OWN POSITIVE CONTROL, in the same test instance,
     and this is the finding that matters most for this tier. make_n() builds
@@ -896,6 +904,16 @@ def test_a_planted_runtime_never_reaches_the_probe(
         f"probe line did not run at all, which would make the assertion "
         f"above vacuous:\n{planted.stdout}"
     )
+    # THE POSIX MARKER IS A SUBSTRING OF THE WINDOWS ONE, so the assertion
+    # above cannot tell the arms apart on its own. MEASURED: inverting
+    # `ifeq ($(OS),Windows_NT)` in Makefile-base.j2 left every Darwin instance
+    # GREEN with the PowerShell line rendered, and only the Windows arms went
+    # red. Asserting the other arm is ABSENT is what closes that.
+    if os_name != "Windows_NT":
+        assert "powershell" not in planted.stdout, (
+            f"OS={os_name} rendered the Windows arm of ensure_image -- the "
+            f"ifeq is inverted:\n{planted.stdout}"
+        )
 
     control = _deliver(
         pages_package, route, "format-md", "COMPOSE_FILES", "", os_name=os_name
@@ -963,12 +981,11 @@ def test_a_composition_may_override_the_runtime_with_an_override_directive(
     `override STENCIL_CONTAINER = ...`, written after including
     Makefile-base.j2, must win.
 
-    RED TODAY: Makefile-base.j2 does not define STENCIL_CONTAINER at all yet,
-    so this consumer override is inert and `ensure_image` still runs whatever
-    CONTAINER derives to from DC's default ("docker"), not "nerdctl". MEASURED
-    against the unfixed template via this exact harness. Goes green once
-    Makefile-base.j2 defines `override STENCIL_CONTAINER = ...` and
-    `ensure_image` reads `$(STENCIL_CONTAINER)`.
+    LIVE, not decoration: MEASURED, reverting either `ensure_image` arm to
+    `$(CONTAINER)` turns this red on the matching OS arm, because the
+    consumer's override then reaches a name the recipe no longer reads. It was
+    red before the rename too, when Makefile-base.j2 defined no
+    STENCIL_CONTAINER at all and the consumer's override was simply inert.
 
     Renders Makefile-base.j2 ALONE, via _run_make_on_rendered_partial's
     `appendix`, the same a-la-carte composition AGENTS.md documents a
@@ -1003,6 +1020,54 @@ def test_a_composition_may_override_the_runtime_with_an_override_directive(
     assert expected in result.stdout, (
         f"the consumer's `override STENCIL_CONTAINER = nerdctl` (OS={os_name}) "
         f"did not reach the probe:\n{result.stdout}"
+    )
+
+
+@pytest.mark.parametrize("os_name", ["Darwin", "Windows_NT"])
+def test_the_runtime_is_reread_when_dc_is_assigned_later(
+    require_make, env, tmp_path, os_name
+):
+    """`override STENCIL_CONTAINER =` must stay RECURSIVE, not `:=`.
+
+    Makefile-base.j2's comment claims a DC assigned after the include is still
+    read where the probe is used. MEASURED, and the reason this test exists:
+    mutating that `=` to `:=` left the ENTIRE suite green -- 737 passed --
+    while the generated probe silently froze on DC's default. This is the
+    composition path AGENTS.md documents, so the claim is reachable and now
+    pinned.
+
+    Goes red against `:=`, which derives "docker" from the default
+    `DC ?= docker compose` at the point of definition rather than "podman"
+    from the consumer's later assignment.
+    """
+    context = get_template_context(
+        "demo", {"packages": {"demo": {"name": "Demo", "package_type": "none"}}}
+    )
+    appendix = (
+        "\n\nDC = podman-compose\n\n"
+        "probe: ## probe target\n"
+        "\t$(call ensure_image,test-image,probe)\n"
+    )
+    result = _run_make_on_rendered_partial(
+        env,
+        tmp_path,
+        "Makefile-base.j2",
+        context,
+        appendix=appendix,
+        targets=("probe", f"OS={os_name}"),
+    )
+    assert result.returncode == 0, outcome(
+        f"make -n probe (DC assigned after the include, OS={os_name})", result
+    )
+    expected = (
+        '"podman image inspect \''
+        if os_name == "Windows_NT"
+        else "podman image inspect '"
+    )
+    assert expected in result.stdout, (
+        f"a DC assigned AFTER the include was not re-read (OS={os_name}) -- "
+        f"the derivation is simply-expanded rather than recursive:\n"
+        f"{result.stdout}"
     )
 
 
@@ -1048,6 +1113,11 @@ def test_a_target_specific_assignment_still_wins(require_make, tmp_path):
         cwd=tmp_path,
         capture_output=True,
         text=True,
+        # clean_env() like every other make call in this module: harmless
+        # today because `override` wins anyway, but this test is about
+        # precedence, and a developer's own STENCIL_CONTAINER is precisely the
+        # thing that must not be able to steer a precedence test.
+        env=clean_env(),
     )
     assert result.returncode == 0, outcome("make -n direct patterned-x plain", result)
     assert "VALUE=direct_value" in result.stdout, (

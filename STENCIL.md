@@ -396,16 +396,30 @@ make doc COMPOSE_FILES="docker-compose.yml docker-compose.override.yml"
 
   If your `DC` is not a bare implementation name, the derivation reads its first word and gets
   this wrong: `sudo docker compose` probes with `sudo`, `env FOO=1 docker compose` with `env`,
-  `/opt/my-tools/docker compose` with `/opt/my`. The probe then always fails, which costs a
-  pull on every build rather than breaking it. `podman-remote compose` is quieter and worse:
-  it probes the *local* image store while compose pulls to the remote. On any of those hosts,
-  name the runtime in your own composition, after the include:
+  `/opt/my-tools/docker compose` with `/opt/my` (the `-` split reaches into the path too). The
+  probe then always fails, which costs a pull on every build rather than breaking it — except
+  for `sudo` on a host with no cached credential and a tty, where `sudo` opens `/dev/tty` for a
+  password prompt that the probe's `>/dev/null 2>&1` does **not** suppress, so the build stalls
+  on a prompt instead. `podman-remote compose` is quieter and worse: it probes the *local*
+  image store while compose pulls to the remote.
+
+  On any of those hosts, name the runtime in your own composition, after the include:
 
   ```make
   override STENCIL_CONTAINER = nerdctl
   ```
 
   The `override` is required — a plain assignment there loses to the Makefile's own.
+
+  **This costs you a vendored template, and that is the real price of the change.** `Makefile.j2`
+  is four `{% include %}`s with no extension point, and `stencil gen` overwrites the generated
+  `Makefile`, so "your own composition" means overriding `Makefile.j2` through `templates_dir`.
+  If you have not done that, there is now **no** way to set the probe's runtime — `make doc STENCIL_CONTAINER=docker` is ignored by design. The old `CONTAINER ?=` was a working
+  one-liner for exactly the `sudo docker compose` case above, and it is gone; that is the
+  deliberate trade for a probe that cannot be repointed by a stray export. Do not reach for a
+  `GNUmakefile` beside the generated `Makefile` as a cheaper workaround: that it silently
+  replaces the generated `Makefile` at all is itself a filed defect (`stn-bux`), not a
+  supported extension point.
 
 - **Bare paths, not flags.** `COMPOSE_FILES` is a space-separated list of compose files, not a
   string of compose arguments — the Makefile adds each file's `-f` itself. Writing

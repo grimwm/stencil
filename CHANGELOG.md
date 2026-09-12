@@ -19,10 +19,12 @@ How the version gets bumped is written down in
   four targets, in the package directory, with both streams sent to `/dev/null`.
 
   **Measured**, 2026-09-12, against a real generated package: with `CONTAINER` naming a
-  planted script, `make format-md` ran it and **exited 0 with nothing on either stream**. The
+  planted script, `make format-md` ran it and **exited 0, with the planted command's own
+  stdout and stderr both discarded** — so it left no trace in the build output. (The build
+  itself is not silent; the compose line carries no `@` and make echoes it either way.) The
   first attempt at that reproduction looked clean for exactly the reason this was dangerous —
-  the probe's output is discarded, so a marker printed to stdout proves nothing and the
-  planted command had to write a file to be observed at all.
+  a marker printed to stdout proves nothing here, and the planted command had to write a file
+  to be observed at all.
 
   **It also silently disabled the pull guard added in this same release**, which is the
   consequence a maintainer would not guess: the probe's *exit status* is what decides whether
@@ -32,10 +34,10 @@ How the version gets bumped is written down in
 
   It is now `override STENCIL_CONTAINER = $(firstword $(subst -, ,$(DC)))` — derived from
   `DC`, and only from `DC`. `override` was chosen over an origin guard like the one
-  `COMPOSE_FILES` carries because it also closes `MAKEFLAGS=`, which that guard explicitly
-  cannot, and `GNUMAKEFLAGS=`, which is a live injection route on GNU Make 4.3 (what CI runs)
-  and inert on 3.81 (what macOS ships) — measured on both, which is why the test covering that
-  route skips locally and runs in CI.
+  `COMPOSE_FILES` carries because it also closes `MAKEFLAGS=VAR=value`, which that guard
+  explicitly cannot, and `GNUMAKEFLAGS=VAR=value`, which is a live injection route on GNU Make
+  4.x (what CI runs) and inert on 3.81 (what macOS ships) — measured on both, which is why the
+  test covering that route skips locally and runs in CI.
 
   **What it costs a consumer:** `make doc CONTAINER=podman` is now silently ignored, because
   make does not warn about an unused command-line variable. The rename is safe to make hard
@@ -46,15 +48,20 @@ How the version gets bumped is written down in
 
   **What `override` does not close**, stated because a guard that overclaims is worse than
   none: a target- or pattern-specific assignment in the consuming Makefile still wins
-  (`%: STENCIL_CONTAINER = x`), and `MAKEFILES=` carries that form in from the environment.
-  Neither is defensible in make, and neither is an attacker boundary — both need the consuming
-  Makefile, which can already run anything.
+  (`%: STENCIL_CONTAINER = x`). Two routes carry that form in without a makefile you control —
+  `MAKEFILES=` (an environment variable plus a file) and, on every GNU Make 4.x,
+  `MAKEFLAGS='--eval %: STENCIL_CONTAINER = x'` with nothing but an environment variable. The
+  second was found by this PR's second adversarial review, proven executing a planted binary,
+  and is filed as `stn-2je`: `--eval` injects arbitrary makefile text, so there is no clean
+  defence, and an earlier draft of this entry wrongly claimed `override` closed `MAKEFLAGS`
+  outright. All of it remains honest-mistake territory rather than an attacker boundary —
+  anyone who can set `MAKEFLAGS` can generally set `PATH` too.
 
   Two further defects were found while reproducing this one and are filed rather than fixed
   here, so that nobody reads the above as "that file is clean now": an empty `DC` makes the
   probe run a bare `image` command from `PATH` and the build exit 0 having produced nothing
   (`stn-mbq`), and `BUILD_DATE`/`WITH` interpolate into a recipe unquoted, so an exported value
-  injects shell (`stn-cb8`). Both carry their reproductions.
+  injects shell (`stn-cb8`). With `stn-2je` above, all three carry their reproductions.
 
 - **The browser image no longer installs from a lockfile it has not checked**
   (`stn-egv`). `Dockerfile.browser` copied `browser-package-lock.json` out of the

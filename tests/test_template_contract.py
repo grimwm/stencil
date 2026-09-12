@@ -540,10 +540,24 @@ _MAKE_CALL_TARGET_RE = re.compile(r"(?<!\$)\$[({]call\s+([A-Za-z_][A-Za-z0-9_-]*
 # of this failure to diagnose. `export` is recognized alongside `override`
 # (in either order, and repeated) because it is the same shape of directive;
 # leaving it out would plant the identical landmine for whoever reaches for
-# it next. MEASURED: no bundled partial begins a line with either directive
-# today, so widening changes no recorded residual for any of the three
-# partials across all three MAKE_CONTRACT_CONFIGS shapes -- it closes the
-# hole before something walks into it.
+# it next. The `override` half IS exercised, loudly and by name: narrowing
+# this pattern back makes
+# test_a_makefile_partial_requires_only_the_recorded_make_variables
+# [Makefile-base.j2] fail with `assert {'STENCIL_CONTAINER'} == set()`. An
+# earlier draft of this comment claimed the widening changed no recorded
+# residual, which was true of the templates it was written against and false
+# by the time it landed in the same commit as the `override` it exists for.
+# The `export` half has no such cover -- no bundled partial begins a line with
+# it -- which is what the direct test below is for.
+#
+# STILL INVISIBLE TO THIS PATTERN, so the "identical landmine" list is honest
+# rather than implied-complete: `define FOO =` / `endef`, `override define`,
+# `X ::= 1`, `X != echo 1`, and `private FOO = 1`. All of those fail LOUDLY --
+# the name surfaces as an unrecorded residual -- which is the tolerable
+# direction. The one wrong-direction case is a `define` BODY: its lines are
+# recipe text, so an `export SHELLVAR=1` inside one is recorded as a make
+# definition and silently subtracts a real requirement. No bundled partial
+# uses `define` today; add handling here before one does.
 #
 # THE LEADING CLASS IS `[ ]*`, NOT `[ \t]*`, AND THAT NARROWING IS
 # LOAD-BEARING. A make variable definition cannot be tab-indented -- a leading
@@ -622,12 +636,15 @@ def test_a_definition_is_recognized_through_its_leading_directives():
     """`override STENCIL_CONTAINER = ...` is a definition, and a tab-indented
     shell `export` is not.
 
-    Nothing else exercises either half: MEASURED, no bundled Makefile partial
-    begins a line with `override` or `export` today, so the widened branch of
-    _MAKE_DEFINITION_RE has no other coverage and a later "simplification"
-    back to the narrow pattern would surface only as
-    MAKE_CONTRACT["Makefile-base.j2"] going red with a residual that appears
-    in no recipe.
+    The `override` half has other cover: narrowing _MAKE_DEFINITION_RE back
+    makes test_a_makefile_partial_requires_only_the_recorded_make_variables
+    [Makefile-base.j2] fail with `assert {'STENCIL_CONTAINER'} == set()`,
+    since that partial now begins a line with `override`. The `export` half
+    and the `[ ]*` NARROWING have none -- no bundled partial begins a line
+    with `export`, and MEASURED, restoring `[ \t]*` in front of the
+    directives is caught by NOTHING in this suite except the SHELLVAR
+    assertion below. That narrowing is the piece of this test that earns its
+    place.
 
     Goes red against the narrow pattern on the first assertion (STENCIL_CONTAINER
     missing), and red against a pattern that keeps `[ \t]*` in front of the
