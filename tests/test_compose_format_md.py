@@ -309,7 +309,16 @@ def digest_guard(script: str) -> str:
     rather than a broken test. tests/test_pins.py's ``_guard_block`` learned the
     same lesson in stn-egv and takes its terminator as a parameter for it.
     """
+    assert "if ! echo" in script, (
+        "the digest guard lost its `if ! echo` opening, so this helper cannot "
+        "find it. If the guard was rewritten, make sure the new shape still "
+        f"refuses on MISMATCH and update the tests below with it:\n{script}"
+    )
     start = script.index("if ! echo")
+    assert "fi &&" in script[start:], (
+        "the digest guard no longer ends `fi &&`, so it is either unterminated "
+        f"or no longer chains into the install:\n{script[start:]}"
+    )
     return script[start : script.index("fi &&", start) + len("fi")]
 
 
@@ -721,8 +730,14 @@ def test_the_guard_says_which_of_the_four_things_went_wrong(doc_package, tmp_pat
 
         match           nothing on either stream                  guard exit 0
         mismatch        'WARNING: ... did NOT match' on stderr     guard exit 1
-        file absent     "can't open '<path>'" on stderr           guard exit 1
+        file absent     "can't open '<path>'" AND that WARNING    guard exit 1
         sha256sum gone  'sh: sha256sum: not found' on stderr      guard exit 1
+
+    THE THIRD ROW OVERLAPS THE SECOND, which is why the assertions below key on
+    `can't open` rather than on the WARNING: busybox prints the WARNING for a
+    missing file too, so it is diagnostic of "the check did not pass" and not of
+    tampering. There is deliberately no converse assertion that the absent case
+    lacks the mismatch marker -- it has it, and that is correct.
 
     All four are fail-closed -- the fourth is forced with ``PATH=/nonexistent``
     and still refuses -- so the guard never passes for the wrong reason. What
@@ -745,7 +760,16 @@ def test_the_guard_says_which_of_the_four_things_went_wrong(doc_package, tmp_pat
         pytest.skip("no container runtime found (docker, podman)")
 
     block = digest_guard(format_md_script(doc_package))
-    checked = tmp_path / "package-lock.json"
+    # Its own directory, not `tmp_path` itself: `doc_package` is `tmp_path/out/
+    # demo`, so mounting `tmp_path` would put the whole generated package and
+    # the config under a read-write mount in a root container. Nothing in the
+    # sliced block writes, so that was harmless -- but the four cases below are
+    # only independent if the only thing at /guard is the file each one sets,
+    # and this makes that true by construction rather than by reasoning about
+    # which subtree `unlink()` reached.
+    mount = tmp_path / "guard"
+    mount.mkdir()
+    checked = mount / "package-lock.json"
     runnable = block.replace(
         f"{pipeline.FORMAT_TOOLS_DIR}/package-lock.json", "/guard/package-lock.json"
     )
@@ -760,11 +784,16 @@ def test_the_guard_says_which_of_the_four_things_went_wrong(doc_package, tmp_pat
         [runtime, "pull", pipeline.NODE_IMAGE],
         capture_output=True, text=True, timeout=1800,
     )
-    if pulled.returncode != 0:
-        pytest.skip(
-            f"could not pull {pipeline.NODE_IMAGE}: "
-            f"{(pulled.stderr or pulled.stdout).strip()[-300:]}"
-        )
+    # A FAILED PULL FAILS, it does not skip. The skip above is for a machine
+    # with no container runtime at all, which is the promise this tier makes to
+    # a contributor. A runtime that HAS the image's registry and cannot fetch it
+    # is a different thing, and skipping there would turn a supply-chain test
+    # green on a Docker Hub 429 -- the same shape as the pre-push hook that
+    # failed open on `command -v`, which this repository has already paid for.
+    assert pulled.returncode == 0, (
+        f"could not pull {pipeline.NODE_IMAGE}, so the guard was never run:\n"
+        f"{outcome('pull', pulled)}"
+    )
 
     def run(*, path: str | None = None) -> subprocess.CompletedProcess:
         # `--entrypoint /bin/sh`, ABSOLUTE, and both halves are load-bearing.
@@ -779,7 +808,7 @@ def test_the_guard_says_which_of_the_four_things_went_wrong(doc_package, tmp_pat
         env = ["--env", f"PATH={path}"] if path is not None else []
         return subprocess.run(
             [runtime, "run", "--rm", *env, "--entrypoint", "/bin/sh",
-             "--volume", f"{tmp_path}:/guard:z", "--workdir", "/guard",
+             "--volume", f"{mount}:/guard:z", "--workdir", "/guard",
              pipeline.NODE_IMAGE, "-c", runnable],
             capture_output=True, text=True, timeout=1800,
         )
@@ -797,9 +826,17 @@ def test_the_guard_says_which_of_the_four_things_went_wrong(doc_package, tmp_pat
         f"`make pkg` prints a checksum result nobody asked for:\n"
         f"{outcome('guard, match', matched)}"
     )
-    assert matched.stderr == "", (
+    # The PROPERTY the comment claims -- "sha256sum writes nothing there on a
+    # match" -- rather than `stderr == ""`, which would also adopt whatever
+    # banner the runtime feels like printing (podman's containers.conf warning,
+    # say) as a fixture of this test.
+    assert "sha256sum" not in matched.stderr, (
         "keeping stderr is supposed to cost nothing on the happy path, and "
         f"here it cost something:\n{outcome('guard, match', matched)}"
+    )
+    assert "is not the file stencil generated" not in matched.stderr, (
+        "the guard refused a lockfile it had just accepted, which should be "
+        f"impossible:\n{outcome('guard, match', matched)}"
     )
 
     checked.write_bytes(vendored.replace(b"registry.npmjs.org", b"evil.invalid.host"))
@@ -905,8 +942,20 @@ def test_the_guard_lets_sha256sum_say_why_it_failed(doc_package):
         "the guard no longer silences sha256sum's success line, so every "
         f"`make pkg` prints a checksum result nobody asked for:\n{block}"
     )
-    assert "2>&1" not in block, (
-        "the guard sends sha256sum's stderr to /dev/null, so a missing or "
-        "broken sha256sum is reported to the consumer as a tampered lockfile "
-        f"and 'stencil gen' will never fix it (stn-jjw):\n{block}"
+
+    # `2>` RATHER THAN `2>&1`, AND THE DIFFERENCE IS THE WHOLE TEST. An
+    # adversarial review mutated the guard to `>/dev/null 2>/dev/null` -- stderr
+    # fully re-silenced, this ticket fully regressed -- and the literal-token
+    # assertion this replaces stayed green, on precisely the runtime-less laptop
+    # the test exists for. `2>` catches that, `2>&1`, `2>&-`, and anything else
+    # that redirects descriptor 2, in one assertion.
+    #
+    # It does not catch the guard's own six `>&2` message redirections, and that
+    # is checked rather than assumed: `>&2` contains no `2>` substring. The one
+    # legitimate spelling it would refuse is a stray space (`2 >`), which nobody
+    # writes and which the executed test above would catch anyway.
+    assert "2>" not in block, (
+        "the guard redirects sha256sum's stderr away, so a missing or broken "
+        "sha256sum is reported to the consumer as a tampered lockfile and "
+        f"'stencil gen' will never fix it (stn-jjw):\n{block}"
     )

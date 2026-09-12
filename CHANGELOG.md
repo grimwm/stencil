@@ -25,11 +25,20 @@ How the version gets bumped is written down in
 
   Dropping `2>&1` and keeping `>/dev/null` puts `sha256sum`'s own account of the
   failure immediately above stencil's explanation. Success stays silent, and the
-  line leaks nothing: it names no digest. This is the shape `Dockerfile.browser`'s
-  guard already shipped with in this release; the two no longer differ. All four
-  cases are measured in the pinned image by `tests/test_compose_format_md.py`,
-  which asserts the missing-`sha256sum` case is distinguishable from a mismatch —
-  the thing `2>&1` destroyed.
+  line leaks nothing: it names no digest. All four cases are measured in the
+  pinned image by `tests/test_compose_format_md.py`, which asserts the
+  missing-`sha256sum` case is distinguishable from a mismatch — the thing `2>&1`
+  destroyed.
+
+  The refusal itself also gains the two causes `Dockerfile.browser`'s already
+  named, because each reaches the same dead end by a different route: a
+  `format-package-lock.json.j2` overridden from your own `templates_dir` (the
+  digest comes from stencil's vendored lockfile, so `stencil gen` regenerates
+  your override and refuses again), and Windows CRLF line endings (`stn-at4`,
+  which changes the digest though nobody edited the file). Both presented as a
+  plain mismatch over a correct file and sent the reader to `stencil gen` — the
+  same forever-loop, arrived at sideways. The two guards now match in both the
+  redirection and the refusal.
 
   The entrypoint's "what this does not close" note also gains the bypass it
   omitted: compose-file *selection*. `make` pins its compose file with `-f` since

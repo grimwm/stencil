@@ -79,8 +79,10 @@
   # `>/dev/null` WITHOUT `2>&1`, and the difference is a consumer's morning.
   # Measured in the pinned image (busybox 1.37.0, /usr/bin/sha256sum ->
   # /bin/busybox): a match prints `OK` on stdout, a mismatch prints sha256sum's
-  # WARNING on stderr, an absent file prints `can't open`, and an absent
-  # sha256sum gives `sh: sha256sum: not found`. All four are fail-closed -- the
+  # WARNING on stderr, an absent file prints `can't open` AND that same WARNING,
+  # and an absent sha256sum gives `sh: sha256sum: not found`. The third overlaps
+  # the second on purpose in busybox, so `can't open` is the discriminator
+  # between them and the WARNING alone is not. All four are fail-closed -- the
   # last verified with PATH=/nonexistent, where the `if !` branch still fires --
   # so this never passes for the wrong reason. But the `if !` swallows all four
   # of those exit codes and substitutes its own `exit 1`, and `>/dev/null`
@@ -90,8 +92,11 @@
   # re-run `stencil gen` forever over a file that was correct all along
   # (stn-jjw). Keeping stderr costs nothing on the happy path -- sha256sum
   # writes nothing there on a match -- and leaks nothing: that line names no
-  # digest. Dockerfile.browser's guard carries the same reasoning; the two are
-  # deliberately the same shape.
+  # digest. Dockerfile.browser's guard carries the same reasoning, and the two
+  # are deliberately kept the same shape -- both the redirection and the refusal,
+  # which is why the override and CRLF causes are named below rather than only
+  # there. Each of those produces a mismatch over a file nobody edited, which is
+  # this ticket's forever-loop reached by a different route.
   #
   # The refusal says the file is stencil's, that editing it has no supported
   # effect, and that `stencil gen` restores it -- because the reader who hits
@@ -164,6 +169,13 @@
           echo "decide which bytes become the prettier that runs here, as root, over" >&2; \
           echo "this directory -- so the service refuses it rather than installing it." >&2; \
           echo "Run 'stencil gen' for this package to restore it." >&2; \
+          echo "If you deliberately override format-package-lock.json.j2 from" >&2; \
+          echo "your own templates_dir, 'stencil gen' will not help: the digest" >&2; \
+          echo "above is stencil's vendored lockfile, not your rendered one." >&2; \
+          echo "Override this compose file's guard with it, or drop the" >&2; \
+          echo "override. See STENCIL.md." >&2; \
+          echo "On Windows, see stn-at4: generated files are written CRLF, which" >&2; \
+          echo "changes this digest even though nobody edited the file." >&2; \
           exit 1; \
         fi && \
         (cd {{ format_tools_dir }} && npm ci --ignore-scripts --no-audit --no-fund) && \
