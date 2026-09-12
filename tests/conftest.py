@@ -61,6 +61,24 @@ CHECKOUT = Path(__file__).resolve().parent.parent
 FOREIGN_OK_ENV = "STENCIL_ALLOW_FOREIGN_STENCIL"
 
 
+def stencil_location() -> Path:
+    """Where `stencil` was imported from, even when it has no `__file__`.
+
+    A NAMESPACE package -- a bare `stencil/` directory with no `__init__.py`,
+    which is what a half-deleted or badly-built install leaves behind -- has
+    `__file__` of None, and `Path(None)` raises TypeError. The guard exists to
+    speak clearly precisely in confused import situations, so it must not be
+    the thing that blows up in one.
+
+    The returned path is treated as an `__init__.py` by every caller, so the
+    synthetic one keeps the arithmetic identical; nothing prints it, the
+    DIRECTORY is what reaches the message.
+    """
+    if stencil.__file__:
+        return Path(stencil.__file__)
+    return Path(next(iter(stencil.__path__))) / "__init__.py"
+
+
 def foreign_stencil_note(checkout: Path, stencil_file: Path, rootdir: Path) -> str | None:
     """The refusal, or None when the import belongs to `checkout`.
 
@@ -118,7 +136,7 @@ def foreign_stencil_note(checkout: Path, stencil_file: Path, rootdir: Path) -> s
 try:
     from stencil import generate, pipeline
 except ImportError as exc:
-    _note = foreign_stencil_note(CHECKOUT, Path(stencil.__file__), CHECKOUT)
+    _note = foreign_stencil_note(CHECKOUT, stencil_location(), CHECKOUT)
     if _note is None:
         raise
     raise pytest.UsageError(_note) from exc
@@ -405,9 +423,13 @@ def inner_pytest_env(**overrides) -> dict[str, str]:
 def pytest_configure(config):
     # First, before anything else in this file has a chance to report on a
     # source tree nobody is editing.
-    note = foreign_stencil_note(CHECKOUT, Path(stencil.__file__), config.rootpath)
+    note = foreign_stencil_note(CHECKOUT, stencil_location(), config.rootpath)
     if note:
-        if not os.environ.get(FOREIGN_OK_ENV):
+        # Exactly "1", not merely non-empty. `STENCIL_ALLOW_FOREIGN_STENCIL=0`
+        # reading as "yes, allow it" is the kind of surprise that gets a guard
+        # blamed for the thing it was trying to prevent, and the message tells
+        # people to set it to 1.
+        if os.environ.get(FOREIGN_OK_ENV) != "1":
             raise pytest.UsageError(note)
         # Not `pytest_report_header`, which was the obvious channel and is
         # the wrong one: `-q` suppresses the header, and `-q` is exactly how

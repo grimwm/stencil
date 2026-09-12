@@ -328,6 +328,54 @@ def test_the_door_is_loud(tmp_path):
     )
 
 
+def test_the_door_does_not_open_on_zero(tmp_path):
+    """`=0` must not read as "yes".
+
+    An override that treats any non-empty value as consent turns
+    `STENCIL_ALLOW_FOREIGN_STENCIL=0` -- which a person writes meaning the
+    opposite -- into a silent bypass of the one guard standing between them
+    and a run that measures somebody else's source. The refusal message says
+    to set it to 1, so 1 is what it takes.
+    """
+    fake = tmp_path / "some-other-checkout"
+    (fake / "tests").mkdir(parents=True)
+    shutil.copyfile(CONFTEST, fake / "tests" / "conftest.py")
+    (fake / "tests" / "test_trivial.py").write_text("def test_trivial(): pass\n")
+
+    result = _run_inner(
+        [str(fake / "tests")],
+        cwd=tmp_path,
+        PYTHONPATH=str(CHECKOUT),
+        STENCIL_ALLOW_FOREIGN_STENCIL="0",
+    )
+
+    assert result.returncode != 0, (
+        "setting the override to 0 opened the door:\n"
+        f"{result.stdout}\n{result.stderr}"
+    )
+
+
+def test_the_guard_speaks_for_a_namespace_package(monkeypatch):
+    """A `stencil` with no `__init__.py` must get the message, not a TypeError.
+
+    `stencil.__file__` is None for a namespace package -- a bare directory,
+    which is what a half-deleted or badly-built install leaves behind. The
+    guard exists to be the thing that speaks clearly when imports are
+    confused; it must not be the thing that raises `TypeError: argument should
+    be a str or an os.PathLike` in one.
+    """
+    from conftest import stencil_location
+
+    monkeypatch.setattr(stencil, "__file__", None)
+    monkeypatch.setattr(stencil, "__path__", ["/checkouts/main/stencil"])
+
+    located = stencil_location()
+    assert located.parent == Path("/checkouts/main/stencil"), located
+
+    note = foreign_stencil_note(Path("/checkouts/branch"), located, Path("."))
+    assert note is not None and "/checkouts/main/stencil" in note, note
+
+
 def test_no_tracked_file_at_the_root_shadows_a_dependency():
     """The cost of putting the repository root on sys.path, made visible.
 
@@ -375,10 +423,10 @@ def test_no_tracked_file_at_the_root_shadows_a_dependency():
     probe = (
         "import importlib.util, sys\n"
         "for name in sys.argv[1:]:\n"
-        "    try:\n"
-        "        spec = importlib.util.find_spec(name)\n"
-        "    except Exception:\n"
-        "        spec = None\n"
+        # No `except: spec = None` here. Swallowing the error would report
+        # "nothing shadows anything" for a name that could not be inspected,
+        # which is the guard passing precisely when it cannot see.
+        "    spec = importlib.util.find_spec(name)\n"
         "    if spec is not None:\n"
         "        print(f'{name} {spec.origin}')\n"
     )
