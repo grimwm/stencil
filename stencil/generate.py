@@ -1806,6 +1806,21 @@ def generate_package(
 
     output_dir = output_base / context["package_dir"]
 
+    # stn-vhr: contain the package directory itself before anything is
+    # created. A non-existent directory resolves to itself under
+    # output_base, so this check is correct whether or not output_dir
+    # exists yet -- and running it above the mkdir means a refused run
+    # has touched nothing. Called for its refusal only: the return value
+    # is discarded, because contained_path returns the RESOLVED path, and
+    # every subsequent write and the "Generated: {output_path}" report
+    # must keep going through the DECLARED output_dir. This covers only
+    # the package directory itself, not a symlinked subdirectory nested
+    # inside it or copy_brand_image's destination -- that gap is filed
+    # separately as stn-h5q.
+    contained_path(
+        package_id, "dir", context["package_dir"], output_dir, output_base
+    )
+
     if not output_dir.exists():
         if dry_run:
             print(f"Would create directory: {output_dir}")
@@ -3109,6 +3124,13 @@ def _main():
             # per package would be N copies of one install problem. main()
             # catches it and says what it actually is.
             raise
+        except ValueError as error:
+            # Narrower than the broad handler below, and must come first: a
+            # config-shaped refusal (e.g. stn-vhr's containment check)
+            # already reads as a config message, and the broad handler would
+            # prefix it with "ValueError: ", which package_contexts' own
+            # docstring argues at length a config message must never carry.
+            return f"{package_id}: {error}"
         except Exception as error:
             # Broad on purpose: this is the CLI boundary, and a traceback is
             # never the right report here. The type is kept in the message so
