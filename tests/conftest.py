@@ -206,6 +206,14 @@ def _claim_lock(basetemp: Path) -> FileLock:
     Held only across the two transitions below, never for the length of the
     session. The MARKER is the long-lived claim; a lock held for a ten-minute
     run would add nothing to it and would turn a killed run into a puzzle.
+
+    The lock file is left behind on release, which is filelock's behaviour and
+    not an oversight: unlinking it would race another process that has it
+    open. It is zero bytes, and normal use leaves exactly one per distinct
+    `--basetemp` path -- so, for someone following this file's own advice and
+    passing the same directory every time, one file forever. Worth saying out
+    loud only because stn-7im was about this suite's temp footprint; this is
+    the opposite end of that scale.
     """
     key = hashlib.sha256(str(basetemp.resolve()).encode()).hexdigest()[:16]
     return FileLock(str(Path(tempfile.gettempdir()) / f".stencil-basetemp-{key}.lock"))
