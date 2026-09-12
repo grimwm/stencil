@@ -147,6 +147,65 @@ How the version gets bumped is written down in
     rules, which is where a negation first has something to negate, `!`, `#` and
     glob characters are refused in both keys.
 
+- **The generated Makefile no longer lets an empty `DC`, or a `BUILD_DATE`/`WITH` from your
+  environment, decide what it runs** (`stn-mbq`, `stn-cb8`; `stn-2je` closed won't-fix with its
+  measurements). All three were found while reproducing `stn-3y8` and filed rather than fixed
+  there.
+
+  **An empty `DC` was a build that exited 0 having produced nothing** (`stn-mbq`). `DC ?= docker compose` tests whether `DC` is *defined*, never whether it is non-empty — the same fact the
+  `COMPOSE_FILES` guard beside it was already written out at length for. Measured against a real
+  generated package, `DC= make doc` broke in two places at once: the probe's runtime is
+  `$(firstword $(subst -, ,$(DC)))`, which is empty, so the recipe began with the probe's own
+  arguments and ran a program named `image` from anywhere on `PATH` — with both streams sent to
+  `/dev/null` — while every compose line expanded to a leading-space `-f docker-compose.yml …`
+  and make stripped that `-` as its ignore-errors prefix, so `/bin/sh: f: command not found` was ignored *by
+  construction*. `make doc` printed "Generated docs" and wrote no HTML. It is now refused both at
+  parse time and at the point of use, the second being what catches a composition that includes
+  the partial and empties `DC` afterwards.
+
+  **`BUILD_DATE` and `WITH` interpolated into a recipe with nothing between them and `/bin/sh`**
+  (`stn-cb8`). Measured: `make doc DC=true 'BUILD_DATE=2026-01-01";touch /tmp/PWN;"'` created the
+  file, and `WITH=a;script;b` ran the script. This also falsifies a claim `stn-3y8` made — that
+  `CONTAINER` was the one variable in that file with no check at all — which is corrected in the
+  template comment rather than left standing: both were the same `?=` shape, and both were
+  *worse*, because `CONTAINER` let an exported value name a program while these let it inject a
+  shell fragment.
+
+  They are now **checked against a character class, not quoted**, and the distinction is the
+  whole fix. Quoting could not work in either direction: make runs recipes through `cmd` on
+  Windows, where a single quote is an ordinary character, and — measured —
+  `WITH='$(shell touch /tmp/PWN)'` in the environment created the file under `make -n`, with no
+  recipe run at all, because make expands these values itself. The check therefore reads
+  `$(value …)`, the *unexpanded* text. `WITH` and the lowercase `with` may carry letters, digits,
+  `-`, `_` and commas; `BUILD_DATE` may carry digits, `-`, `T` and `:` — exactly the characters
+  of the date shapes `frontmatter-filter.lua` honours, with a test driving that list through the
+  Makefile so the two layers cannot drift.
+
+  **`BUILD_DATE` is checked where it is used, not at the top of the file**, and that asymmetry is
+  deliberate. It is not stencil's name — it is the OCI `org.opencontainers.image.created`
+  convention, whose `Z` is out of class — so a parse-time check would abort `make help` and
+  `make clean` for anyone who exported it once for something unrelated. That is the same call
+  `stn-3y8` made in leaving a stray `CONTAINER` inert rather than fatal. The class is enforced on
+  `doc` and `slide`, and on `pdf` and `check-pdf` which reach them as prerequisites;
+  `make doc BUILD_DATE=` still builds, with the container's own date. `pkg` is deliberately not
+  among them — `pkg: format-md` never reaches `doc` and its recipe interpolates no date, so it
+  is checked for `WITH` alone rather than stopped by a value it never reads.
+
+  **`MAKEFLAGS=--eval` remains open, and `stn-2je` is closed saying so.** Two defences were built
+  and measured on GNU Make 4.4.1 — requiring `$(origin STENCIL_CONTAINER)` to be `override`, and
+  refusing to run when `MAKEFLAGS` carries `--eval`. Both close the filed reproduction; both are
+  defeated by a one-clause change to the same hostile string; and each costs something real (the
+  first breaks a consumer's own target-specific assignment, the second refuses a legitimate
+  `make --eval=…`). What the residual costs is now stated plainly in the template comment rather
+  than understated: on GNU Make 4.0+ it is arbitrary shell through a pattern-specific
+  `BUILD_DATE`, not merely a repointed probe. It stays honest-mistake territory rather than a
+  boundary — nobody sets `MAKEFLAGS='--eval %: … = x'` by accident, which is exactly what makes
+  it different from `export DC=`.
+
+  A pattern-specific assignment delivered through **`MAKEFILES`** — an environment variable plus
+  a file, a route the template already documented as reaching further than the consuming makefile
+  — *is* closed, by the same point-of-use check, measured on GNU Make 3.81 and 4.4.1.
+
 - **Every configured path that names the output side is now checked and
   contained** (`stn-pe3`, `stn-vhr`, `stn-40a`, `stn-9rn`). The input side got
   this in `stn-vhm`, `stn-c25` and `stn-k73`; three keys on the output side
