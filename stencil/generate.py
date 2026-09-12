@@ -12,6 +12,7 @@ Usage:
 """
 
 import argparse
+import json
 import os
 import re
 import shutil
@@ -31,6 +32,13 @@ SCRIPT_DIR = Path(__file__).parent
 # Gitignore markers
 GITIGNORE_START = "# >>> stencil >>>"
 GITIGNORE_END = "# <<< stencil <<<"
+
+# The per-package manifest gen writes at the end of a successful
+# generate_package (stn-2x4). MANIFEST_VERSION is an integer so a later,
+# hardened reader (stn-2x4.4) can refuse a manifest whose version it does
+# not recognize by name rather than guess at its shape.
+MANIFEST_NAME = ".stencil-manifest.json"
+MANIFEST_VERSION = 1
 
 
 def load_config(config_path: Path) -> dict:
@@ -163,8 +171,26 @@ def brand_image_path(value: str | None) -> str | None:
 # something other than naming a file -- a space splitting one argument into
 # two, a `;` running a second command, a `..` escaping the package.
 #
-# Globs stay: * ? [ ] are the point of an outputs pattern.
+# Globs stay: * ? [ ] are the point of a `package_sources` pattern, which is
+# documented and used (`md/*.md`). That is why this regex was NOT widened to
+# cover them when the glob vocabulary below was tightened -- widening it here
+# would refuse a working feature to close a manifest-entry hole that
+# `check_glob_vocabulary` already closes at the only place an entry is
+# expanded. `check_no_glob` is the narrow, opt-in refusal for the config keys
+# where a pattern is meaningless instead.
 _UNSAFE_IN_PATH = re.compile(r"[$`;|&<>\\\n]")
+
+# Every character `Path.glob` gives a meaning other than "itself". Used two
+# ways: `check_no_glob` refuses the whole class in a config value that names
+# ONE file, and `check_glob_vocabulary` bounds where it may appear in a
+# manifest entry.
+_GLOB_IN_PATH = re.compile(r"[*?\[\]]")
+
+# The ONLY shape a manifest entry's final component may have once it carries
+# a metacharacter at all: a non-empty literal prefix, exactly one '*', and
+# no '?' or bracket anywhere. This is what `package_entries` emits --
+# `Guide*.html`, `Guide*.pdf` -- and nothing else.
+_GLOB_SHAPE = re.compile(r"[^*?\[\]]+\*[^*?\[\]]*")
 
 # The C0 controls and DEL, checked LAST so the two more specific messages keep
 # the characters they already explain: `\n` stays a Make metacharacter and a
@@ -259,6 +285,92 @@ def check_config_path(package_id: str, where: str, value) -> str:
     return text
 
 
+def check_no_glob(package_id: str, where: str, value: str) -> str:
+    """Refuse a glob metacharacter in a config value that names ONE file.
+
+    The other half of `check_glob_vocabulary` (below), and the reason it is
+    a separate function rather than a widening of `_UNSAFE_IN_PATH`: a
+    config value is where a metacharacter gets INTO a manifest entry in the
+    first place. `docs: ["[!z].md"]` produced the entry `[!z]*.html`, which
+    the vocabulary check now refuses -- so the package became permanently
+    un-cleanable, and the complaint pointed at a "manifest entry" the author
+    never wrote.
+
+    Applied to `docs` and `slides` only. They are the two keys whose values
+    `package_entries` splices into a glob of its own making
+    (`<stem>*.html`), so an author metacharacter compounds with stencil's.
+    `package_sources` deliberately keeps its globs -- `md/*.md` is
+    documented and in use -- which is the whole reason this is opt-in.
+    """
+    if _GLOB_IN_PATH.search(value):
+        raise ValueError(
+            f"Package {package_id}: {where} {value!r} contains a glob "
+            "metacharacter (one of * ? [ ]). This names one file, not a "
+            "pattern -- `clean` would have to expand it back out of the "
+            "manifest, and would refuse to."
+        )
+    return value
+
+
+def check_glob_vocabulary(package_id: str, where: str, entry: str) -> None:
+    """Bound what a manifest entry's glob may look like (stn-2x4.6,
+    adversarial CRITICAL 2).
+
+    ``check_config_path`` guards the STRING -- no absolute path, no ``..``,
+    no shell metacharacter -- but says nothing about what a survivor
+    EXPANDS to, and ``*`` is deliberately not in its unsafe set. Measured on
+    this interpreter (Python 3.14.7, so since-3.13 semantics apply): ``'**'``
+    passes `check_config_path` outright, and ``Path.glob('**')`` yields
+    FILES, not only directories -- so a single manifest entry can expand to
+    the package's entire subtree, including the author's own source
+    markdown, and containment says nothing against it because every match
+    is legitimately inside the package.
+
+    ``get_generated_files`` only ever emits ``'<stem>*.html'``,
+    ``'<stem>*.pdf'`` and a literal archive name, so that is the entire
+    legitimate vocabulary: a glob entry may contain ``*`` only in its FINAL
+    path component, at most once, with a non-empty literal prefix before
+    it. ``'**'``, a bare ``'*'``, and ``'*'`` in a non-final component such
+    as ``'dir/*'`` are all refused by name -- none of them is a shape
+    `get_generated_files` produces, so nothing legitimate is lost.
+
+    THE LITERAL IS VALIDATED, NOT THE POSITION OF A ``'*'``. The first
+    version of this function reasoned about ``'*'`` alone, and ``'?'`` and
+    ``'['``/``']'`` are metacharacters ``Path.glob`` honours just as
+    happily -- none of them is in ``_UNSAFE_IN_PATH`` either. Measured:
+    ``'?*'``, ``'[!z]*'``, ``'[a-z]*'`` and ``'sub/?*'`` all passed BOTH
+    checks, and ``'?*'`` is a bare ``'*'`` wearing a hat -- worse, because
+    ``Path.glob`` matches dotfiles where ``glob.glob`` does not, so it also
+    sweeps up ``.stencil-manifest.json`` itself. Reproduced end to end: a
+    manifest carrying ``["?*", "sub/?*"]`` removed the author's own
+    ``thesis.md``, ``research.bib`` and ``sub/keep.md``, and exited 0.
+
+    There is deliberately no ``if '*' not in entry: return`` fast path --
+    that is exactly what let ``'Makefil?'`` through. An entry with no
+    metacharacter at all is the common case and is answered by the
+    ``_GLOB_IN_PATH.search(final)`` test below, on the literal rather than
+    on one character of it.
+    """
+    parts = entry.split("/")
+    if any(_GLOB_IN_PATH.search(part) for part in parts[:-1]):
+        raise ValueError(
+            f"Package {package_id}: {where} {entry!r} has a glob "
+            "metacharacter (one of * ? [ ]) outside its final path "
+            "component. A glob may only vary the last component of a path."
+        )
+    final = parts[-1]
+    if not _GLOB_IN_PATH.search(final):
+        # An ordinary literal filename. Nothing to bound.
+        return
+    if not _GLOB_SHAPE.fullmatch(final):
+        raise ValueError(
+            f"Package {package_id}: {where} {entry!r} is not a recognized "
+            "glob shape. Only '<literal-prefix>*<literal-suffix>', in the "
+            "final path component, is allowed -- never '**', a bare '*', a "
+            "'?' or a [character class]."
+        )
+
+
 def get_template_context(package_id: str, config: dict) -> dict:
     """Build the template context for a package."""
     package = config.get("packages", {}).get(package_id)
@@ -343,13 +455,15 @@ def get_template_context(package_id: str, config: dict) -> dict:
     # recipe that /bin/sh parses. A space in a filename silently becomes two
     # arguments and builds the wrong thing.
     docs = [
-        check_config_path(package_id, "docs", d) for d in package.get("docs", [])
+        check_no_glob(package_id, "docs", check_config_path(package_id, "docs", d))
+        for d in package.get("docs", [])
     ]
 
     # slides list: markdown rendered as a slide deck instead of a flowing document.
     # Same pipeline, different pandoc template plus the slide-sections filter.
     slides = [
-        check_config_path(package_id, "slides", d) for d in package.get("slides", [])
+        check_no_glob(package_id, "slides", check_config_path(package_id, "slides", d))
+        for d in package.get("slides", [])
     ]
 
     both = sorted(set(docs) & set(slides))
@@ -581,6 +695,15 @@ def get_template_context(package_id: str, config: dict) -> dict:
         ),
         "browser_lockfile": pipeline.read_lockfile(pipeline.BROWSER_LOCKFILE),
         "format_lockfile": pipeline.read_lockfile(pipeline.FORMAT_LOCKFILE),
+        # And the digest of the file the line above renders, so the format-md
+        # entrypoint can refuse a lockfile that is not the one stencil wrote.
+        # The service reads its lockfile out of the mount, and `npm ci` fetches
+        # whatever host each `resolved` names -- so without this, a
+        # consumer-editable file chose which bytes became the prettier that
+        # runs as uid 0 over that same mount (stn-qge). Derived from the same
+        # call the file is rendered from, never written down, so a re-vendor
+        # moves both at once.
+        "format_lockfile_digest": pipeline.lockfile_digest(pipeline.FORMAT_LOCKFILE),
         # The names those two land under in the package, which the Dockerfile
         # COPYs and the format-md entrypoint cps, and the directories each
         # install is rooted at.
@@ -1017,27 +1140,60 @@ def _safe(text: str) -> str:
     return escaped
 
 
-def _raise_config_problems(problems: list[str]) -> None:
+# The trailer gen and install have always printed: nothing was written, and
+# the recovery instruction is to delete leftovers by hand rather than
+# reaching for `clean` -- because before stn-2x4, `clean` refused for the
+# same reason. stn-2x4.8 makes that no longer true for `clean` specifically
+# (a manifest-backed package cleans anyway), so `clean`'s branch of `_main`
+# passes a different trailer to `_raise_config_problems` instead of
+# printing this one -- see the `trailer` parameter below. gen and install
+# keep this default unchanged.
+_DEFAULT_CONFIG_PROBLEM_TRAILER = (
+    "Nothing was generated, removed or written. Fix the config and run "
+    "again -- and if files from an earlier, working config are still on "
+    "disk, remove that directory by hand rather than reaching for "
+    "`clean`, which refuses for the same reason this did."
+)
+
+# `_main`'s `clean` branch passes this instead of the default above (stn-2x4
+# architecture review finding D2). `clean` is the one command that does NOT
+# refuse on this config problem -- see `clean_generated`'s `config_readable`
+# path -- so the default trailer's claim that nothing was removed, and that
+# clean refuses for the same reason, would both be false the moment this
+# text reaches the terminal.
+CLEAN_DEGRADED_TRAILER = (
+    "`clean` does not need this config to be valid: any package with its "
+    "own manifest is still cleaned from it. A package with neither a valid "
+    "manifest nor a place in a readable config is named below, after this "
+    "warning, and nothing under it is touched."
+)
+
+
+def _raise_config_problems(problems: list[str], trailer: str | None = None) -> None:
     """Turn collected config problems into the one ValueError callers print.
 
     Deliberately names no file: --config means the path is not always
     .config.yaml, and nothing down here is told which one it got. Every
     caller prints this behind an "Error: " prefix, so the first line reads
     as a continuation of one rather than as a second heading.
+
+    ``trailer`` defaults to today's gen/install wording (stn-2x4 architecture
+    review finding D2). `clean`'s degraded path passes its own: printed as a
+    warning immediately before `clean` goes on to remove files and exit 0,
+    the default trailer's "Nothing was generated, removed or written ...
+    which refuses for the same reason this did" would be a direct
+    contradiction of what just happened.
     """
     unique = list(dict.fromkeys(_safe(p) for p in problems))
     bullets = "\n".join(f"- {p}" for p in unique)
     count = "this problem" if len(unique) == 1 else f"these {len(unique)} problems"
-    raise ValueError(
-        f"the config has {count}:\n{bullets}\n\n"
-        "Nothing was generated, removed or written. Fix the config and run "
-        "again -- and if files from an earlier, working config are still on "
-        "disk, remove that directory by hand rather than reaching for "
-        "`clean`, which refuses for the same reason this did."
-    )
+    text = _DEFAULT_CONFIG_PROBLEM_TRAILER if trailer is None else trailer
+    raise ValueError(f"the config has {count}:\n{bullets}\n\n{text}")
 
 
-def package_contexts(config: dict, config_dir: Path | None = None) -> dict[str, dict]:
+def package_contexts(
+    config: dict, config_dir: Path | None = None, trailer: str | None = None
+) -> dict[str, dict]:
     """Every package's template context, read before anything is written.
 
     Replaces two former call sites -- validate_config's loop and
@@ -1069,6 +1225,10 @@ def package_contexts(config: dict, config_dir: Path | None = None) -> dict[str, 
     None -- what get_generated_files, install_gitignore and clean_generated
     pass -- skips it; a real path -- what validate_config's `gen` caller
     passes -- runs it.
+
+    trailer is forwarded to _raise_config_problems verbatim (None keeps its
+    gen/install default); see that function's docstring for why `clean`'s
+    degraded path passes a different one.
     """
     packages = config.get("packages", {})
     problems: list[str] = []
@@ -1157,7 +1317,7 @@ def package_contexts(config: dict, config_dir: Path | None = None) -> dict[str, 
             )
 
     if problems:
-        _raise_config_problems(problems)
+        _raise_config_problems(problems, trailer)
 
     for package_id, package in packages.items():
         try:
@@ -1229,7 +1389,7 @@ def package_contexts(config: dict, config_dir: Path | None = None) -> dict[str, 
         contexts[package_id] = context
 
     if problems:
-        _raise_config_problems(problems)
+        _raise_config_problems(problems, trailer)
 
     return contexts
 
@@ -1334,6 +1494,216 @@ def injected_templates(context: dict) -> list[dict]:
     return [{"src": src} for src in injected_sources(context)]
 
 
+def write_manifest(
+    output_dir: Path,
+    package_id: str,
+    pkg_dir: str,
+    entries: set[str] | list[str],
+    dry_run: bool = False,
+) -> None:
+    """Write ``<output_dir>/MANIFEST_NAME``, recording exactly what this
+    generate_package call produced for one package.
+
+    ``entries`` must come from ``package_entries`` -- see its docstring for
+    why a second derivation of the same list is the drift bug this exists to
+    avoid. Never written under ``--dry-run``: a preview's manifest would tell
+    a later, manifest-driven `clean` about files that were never actually
+    produced.
+    """
+    manifest_path = output_dir / MANIFEST_NAME
+    if dry_run:
+        print(f"Would write: {manifest_path}")
+        return
+
+    document = {
+        "manifest_version": MANIFEST_VERSION,
+        "stencil_version": __version__,
+        "package": package_id,
+        "dir": pkg_dir,
+        "entries": sorted(entries),
+    }
+    manifest_path.write_text(json.dumps(document, sort_keys=True, indent=2) + "\n")
+    print(f"Generated: {manifest_path}")
+
+
+class ManifestError(RuntimeError):
+    """A per-package manifest is present but unreadable, damaged, or from an
+    unrecognized version -- not a config mistake.
+
+    stn-2x4.4, same reasoning as `pipeline.VendoredAssetError` (see its
+    docstring): `ValueError` is the channel `package_contexts` collects
+    CONFIG problems on, and a damaged manifest is not a config problem. No
+    amount of editing `.config.yaml` fixes a manifest that will not parse;
+    deleting the manifest and letting a manifest-aware `clean` fall back to
+    deriving from the config does. Raising `ValueError` here would put a
+    manifest problem under "the config has these problems", which is a
+    false diagnosis pointing the reader at the wrong file.
+
+    Deliberately NOT a subclass of `ValueError`, for the same reason
+    `VendoredAssetError` is not one: making it a `ValueError` would let it
+    travel silently on the config-problem channel instead of being caught
+    and reported on its own terms.
+    """
+
+
+# 1 MiB is generous for a file that is a sorted list of relative paths --
+# real manifests run to a few KiB. The cap exists so a manifest cannot make
+# this command hang or exhaust memory before anything is even parsed; see
+# read_manifest's docstring for the measurements behind it (review finding
+# A7).
+_MANIFEST_MAX_BYTES = 1024 * 1024
+_MANIFEST_MAX_ENTRIES = 100_000
+
+
+def _reject_duplicate_manifest_keys(pairs: list[tuple[str, object]]) -> dict:
+    """``object_pairs_hook`` for ``json.loads``: refuse a repeated top-level key.
+
+    ``json.loads('{"entries": ["safe"], "entries": ["EVIL"]}')`` returns
+    ``{"entries": ["EVIL"]}`` -- the JSON spec permits duplicate keys and the
+    stdlib parser silently keeps the last one. A manifest committed to a
+    repo can therefore show a human one list in the diff and hand Python
+    another. There is no legitimate reason for a generated manifest to
+    repeat a key, so any repeat is refused outright rather than resolved by
+    picking a value the human reviewing the diff might never have seen.
+    """
+    seen: set[str] = set()
+    for key, _ in pairs:
+        if key in seen:
+            raise ValueError(f"duplicate key {key!r}")
+        seen.add(key)
+    return dict(pairs)
+
+
+def read_manifest(path: Path) -> dict:
+    """Parse a per-package manifest file and return the parsed document.
+
+    Takes the path to a manifest FILE and returns the parsed document (a
+    ``dict``) -- ``manifest_version``, ``stencil_version``, ``package``,
+    ``dir`` and ``entries``. Returning ``None`` for "no manifest" is NOT
+    this function's job: the caller checks ``path.is_file()`` (never
+    ``path.exists()``) before calling this at all, so a directory or a FIFO
+    at the manifest's name is never opened here.
+
+    Every rejection below raises ``ManifestError``, never ``ValueError`` --
+    see ``ManifestError``'s docstring for why a damaged manifest must not
+    travel on the channel ``package_contexts`` collects config problems on.
+    A damaged manifest does NOT fall back to deriving from the config; that
+    is not the same statement as no manifest being present, and quietly
+    re-deriving would be exactly the guessing this manifest exists to
+    remove. Every message here says so: delete the manifest to restore the
+    config-derived fallback.
+
+    FORWARD COMPATIBILITY (review finding D7): within a KNOWN
+    ``manifest_version``, unknown keys in the document are IGNORED, not
+    refused. Strict key validation would make a v1 manifest written by a
+    later stencil unreadable by this one the moment that later version adds
+    a diagnostic field -- exactly backwards from what a version field is
+    for. Only ``manifest_version`` itself and the required shape of
+    ``entries`` are enforced; everything else is read permissively.
+
+    HARDENING (review finding A7), all measured on this interpreter:
+
+    - a manifest over ``_MANIFEST_MAX_BYTES`` is refused by a ``stat()``
+      BEFORE it is read at all, and ``len(entries)`` is capped after
+      parsing. A manifest is a file on disk that nothing has validated, so
+      an arbitrarily large one must not be allowed to make this command
+      hang or exhaust memory -- the same reasoning ``_MAX_PROBLEM_CHARS``
+      applies to config text, for a file that is strictly less trustworthy.
+    - ``json.loads("[" * 200000 + "]" * 200000)`` raises ``RecursionError``,
+      which is NEITHER a ``ValueError`` NOR a ``json.JSONDecodeError`` and
+      would otherwise escape any handler that only catches those, reaching
+      the terminal as a bare traceback -- from the one command whose entire
+      premise is working when everything else is broken. Caught here
+      alongside ``OSError`` (file unreadable) and ``ValueError`` (bad JSON,
+      including a duplicate key) and re-raised as ``ManifestError``.
+    - duplicate top-level keys are refused via ``object_pairs_hook`` (see
+      ``_reject_duplicate_manifest_keys``): without it,
+      ``json.loads('{"entries": ["safe"], "entries": ["EVIL"]}')`` silently
+      returns ``EVIL``, so a manifest committed to a repo could show a
+      human one list in the diff and hand Python another.
+
+    EVERY manifest-derived value that reaches a message here goes through
+    `_safe` (review finding A8) -- the filename, `manifest_version`, and
+    the document's `package` / `dir` fields when available for context.
+    `_safe` exists because config text can repaint the terminal and
+    `_MAX_PROBLEM_CHARS` because it can bury the report; manifest text is
+    strictly LESS trustworthy than config text, since it is a JSON file
+    that nothing has validated yet, read at the exact moment a human is
+    staring at the terminal because something is already wrong.
+    """
+    path = Path(path)
+    safe_name = _safe(str(path))
+
+    try:
+        size = path.stat().st_size
+    except OSError as error:
+        raise ManifestError(f"cannot read manifest {safe_name}: {error}") from error
+    if size > _MANIFEST_MAX_BYTES:
+        raise ManifestError(
+            f"manifest {safe_name} is {size} bytes, over the "
+            f"{_MANIFEST_MAX_BYTES}-byte limit -- refusing to read it. "
+            "Delete the manifest to fall back to deriving from the config."
+        )
+
+    try:
+        document = json.loads(
+            path.read_text(), object_pairs_hook=_reject_duplicate_manifest_keys
+        )
+    except (OSError, ValueError, RecursionError) as error:
+        raise ManifestError(
+            f"manifest {safe_name} could not be parsed: {_safe(str(error))}. "
+            "Delete the manifest to fall back to deriving from the config."
+        ) from error
+
+    if not isinstance(document, dict):
+        raise ManifestError(
+            f"manifest {safe_name} is not a JSON object (found "
+            f"{_safe(type(document).__name__)}). Delete the manifest to "
+            "fall back to deriving from the config."
+        )
+
+    def _context() -> str:
+        """A best-effort ``(package "x", dir "y")`` suffix for a message.
+
+        Both fields are diagnostic only (see write_manifest's docstring),
+        so a missing or malformed one is not itself a rejection -- it just
+        drops out of the suffix. Every value is `_safe`-guarded: it came
+        from the same unvalidated document as everything else here.
+        """
+        parts = []
+        for key in ("package", "dir"):
+            value = document.get(key)
+            if isinstance(value, str):
+                parts.append(f'{key} "{_safe(value)}"')
+        return f" ({', '.join(parts)})" if parts else ""
+
+    version = document.get("manifest_version")
+    if version != MANIFEST_VERSION:
+        raise ManifestError(
+            f"manifest {safe_name}{_context()} has an unrecognized "
+            f"manifest_version {_safe(repr(version))} (this stencil knows "
+            f"version {MANIFEST_VERSION!r}). Delete the manifest to fall "
+            "back to deriving from the config."
+        )
+
+    entries = document.get("entries")
+    if not isinstance(entries, list) or not all(isinstance(e, str) for e in entries):
+        raise ManifestError(
+            f"manifest {safe_name}{_context()} has no valid \"entries\" "
+            "list of strings. Delete the manifest to fall back to deriving "
+            "from the config."
+        )
+    if len(entries) > _MANIFEST_MAX_ENTRIES:
+        raise ManifestError(
+            f"manifest {safe_name}{_context()} has {len(entries)} entries, "
+            f"over the {_MANIFEST_MAX_ENTRIES}-entry limit -- refusing to "
+            "read it. Delete the manifest to fall back to deriving from "
+            "the config."
+        )
+
+    return document
+
+
 def generate_package(
     env: Environment,
     config: dict,
@@ -1358,6 +1728,16 @@ def generate_package(
             output_dir.mkdir(parents=True)
             print(f"Created directory: {output_dir}")
 
+    # Before the first render, and never a stale manifest left behind: a
+    # regeneration that fails partway must leave NO manifest, so a
+    # manifest-driven `clean` falls back to deriving from the config --
+    # today's behaviour exactly -- instead of trusting a list that names the
+    # old files while whatever the failed run half-wrote sits unnamed on
+    # disk.
+    manifest_path = output_dir / MANIFEST_NAME
+    if not dry_run and manifest_path.exists():
+        manifest_path.unlink()
+
     config_templates = list(config.get("templates", []))
     template_defs = injected_templates(context) + config_templates
     if not template_defs:
@@ -1376,6 +1756,19 @@ def generate_package(
             output_dir,
             dry_run,
         )
+
+    # Last of all, from the same derivation get_generated_files uses (see
+    # package_entries) -- so the manifest cannot name a file this call did
+    # not itself just produce.
+    write_manifest(
+        output_dir,
+        package_id,
+        context["package_dir"],
+        package_entries(
+            package_id, config["packages"][package_id], context, config_templates
+        ),
+        dry_run,
+    )
 
     return output_dir
 
@@ -1436,6 +1829,85 @@ def list_packages(config: dict):
         print(f"  {package_id:8} - {name:20} ({dir_name})")
 
 
+def package_entries(
+    package_id: str, package: dict, context: dict, config_templates: list
+) -> set[str]:
+    """Every file (or build-artifact glob pattern) one package generates,
+    relative to that package's own directory -- no ``<pkg_dir>/`` prefix.
+
+    Extracted from what used to be get_generated_files' per-package loop
+    body. This is the point of the change, not a tidy-up: get_generated_files
+    feeds both `install`'s managed .gitignore section and `clean`, and the
+    per-package manifest (see write_manifest) needs the exact same list. A
+    manifest built by a second, parallel walk of the config would be a THIRD
+    instance of a drift bug this repository has already paid for twice --
+    `injected_sources` exists because the injected-template list and the
+    clean list drifted, and stn-8wt exists because `copy_brand_image` and
+    `get_generated_files` named the same file two different ways. One walk,
+    two consumers (get_generated_files prefixes with the package dir;
+    write_manifest records these entries verbatim), so drift is no longer
+    possible between them.
+
+    This does NOT unify everything that names a generated file.
+    `render_templates` still computes `tdef.get('dest', template_dest(src))`
+    on its own, and `copy_brand_image` still names the copied logo from the
+    (unresolved) config string it was given rather than from this function's
+    output -- those two remain separate spellings of the same fact, guarded
+    by test_package_sources.py's and tests/test_manifest.py's rglob
+    assertions rather than by a shared derivation.
+    """
+    entries = set()
+
+    # Check each template's `when` condition against this package's context
+    for tdef in config_templates:
+        if not when_holds(tdef, context):
+            continue
+        dest = tdef.get("dest", template_dest(tdef.get("src", "")))
+        if dest:
+            entries.add(dest)
+
+    # What stencil injects, from the one list generate_package renders
+    # from, on the same predicates -- spelling them twice is what left a
+    # package_sources-only doc package with five generated files that clean
+    # could not see.
+    for src in injected_sources(context):
+        entries.add(template_dest(src))
+
+    if context["has_pages"]:
+        # The copied brand image, which `clean` should be able to see and
+        # git should not. Named by its basename, which is what it is
+        # copied to. Not a template, so it is not in the list above.
+        # `context["config_brand"]` is already that basename (or the config
+        # string unchanged, when brand names something other than a local
+        # image) -- get_template_context computed it the same way
+        # copy_brand_image names its destination, from the unresolved config
+        # string, so reading it back here cannot drift from either.
+        brand_image = brand_image_path(context.get("config_brand"))
+        if brand_image:
+            entries.add(Path(brand_image).name)
+
+    # docs and slides generate .html files from .md files, and `make pdf`
+    # prints each of those to a .pdf beside it (glob for feature variants)
+    for md in list(package.get("docs", [])) + list(package.get("slides", [])):
+        if md.endswith(".md"):
+            entries.add(f"{md.removesuffix('.md')}*.html")
+            entries.add(f"{md.removesuffix('.md')}*.pdf")
+
+    # package_name is the zip file created by pkg target
+    package_name = package.get("package_name")
+    if package_name and package.get("package_type") == "zip":
+        entries.add(package_name)
+
+    # A doc package's pkg target concatenates package_sources into
+    # <stem>.html and prints that to <stem>.pdf (glob for feature variants)
+    if package.get("package_type") == "doc" and package_name:
+        stem = package_name.removesuffix(".pdf")
+        entries.add(f"{stem}*.html")
+        entries.add(f"{stem}*.pdf")
+
+    return entries
+
+
 def get_generated_files(config: dict) -> list[str]:
     """Determine what files stencil will generate based on templates config.
 
@@ -1450,6 +1922,10 @@ def get_generated_files(config: dict) -> list[str]:
     with its own get_template_context loop, which would double the work
     every `install` and `clean` do. No config_dir is passed: the brand
     file-existence check is gen-only (see package_contexts).
+
+    Each package's own entries come from `package_entries` -- see there for
+    why. The per-package manifest name is added on top, here, rather than in
+    `package_entries`: the manifest does not list itself.
     """
     entries = set()
     config_templates = config.get("templates", [])
@@ -1460,98 +1936,221 @@ def get_generated_files(config: dict) -> list[str]:
         package = config["packages"][package_id]
         pkg_dir = package.get("dir", package_id)
 
-        # Check each template's `when` condition against this package's context
-        for tdef in config_templates:
-            if not when_holds(tdef, context):
-                continue
-            dest = tdef.get("dest", template_dest(tdef.get("src", "")))
-            if dest:
-                entries.add(f"{pkg_dir}/{dest}")
+        for entry in package_entries(package_id, package, context, config_templates):
+            entries.add(f"{pkg_dir}/{entry}")
 
-        # What stencil injects, from the one list generate_package renders
-        # from, on the same predicates -- spelling them twice is what left a
-        # package_sources-only doc package with five generated files that clean
-        # could not see.
-        for src in injected_sources(context):
-            entries.add(f"{pkg_dir}/{template_dest(src)}")
-
-        if context["has_pages"]:
-            # The copied brand image, which `clean` should be able to see and
-            # git should not. Named by its basename, which is what it is
-            # copied to. Not a template, so it is not in the list above.
-            brand_image = brand_image_path(brand_of(package, config)[0])
-            if brand_image:
-                entries.add(f"{pkg_dir}/{Path(brand_image).name}")
-
-        # docs and slides generate .html files from .md files, and `make pdf`
-        # prints each of those to a .pdf beside it (glob for feature variants)
-        for md in list(package.get("docs", [])) + list(package.get("slides", [])):
-            if md.endswith(".md"):
-                entries.add(f"{pkg_dir}/{md.removesuffix('.md')}*.html")
-                entries.add(f"{pkg_dir}/{md.removesuffix('.md')}*.pdf")
-
-        # package_name is the zip file created by pkg target
-        package_name = package.get("package_name")
-        if package_name and package.get("package_type") == "zip":
-            entries.add(f"{pkg_dir}/{package_name}")
-
-        # A doc package's pkg target concatenates package_sources into
-        # <stem>.html and prints that to <stem>.pdf (glob for feature variants)
-        if package.get("package_type") == "doc" and package_name:
-            stem = package_name.removesuffix(".pdf")
-            entries.add(f"{pkg_dir}/{stem}*.html")
-            entries.add(f"{pkg_dir}/{stem}*.pdf")
+        entries.add(f"{pkg_dir}/{MANIFEST_NAME}")
 
     return sorted(entries)
 
 
-def clean_generated(
-    output_base: Path,
-    config: dict,
-    package_id: str | None = None,
-    dry_run: bool = False,
-) -> None:
-    """Remove files and directories that stencil generates.
+def _clean_scope(
+    config: dict, package_id: str | None, problems: list[str]
+) -> dict[str, dict] | None:
+    """Which packages `clean` is asked to consider, shape-guarded (stn-2x4.8
+    requirement 3). Returns None when the scope itself could not be
+    enumerated at all -- the caller must treat that as a hard failure, never
+    as an empty-but-fine scope, so a `packages:` typo cannot exit 0 having
+    cleaned nothing (requirement 4; this is the `package_contexts` comment's
+    own "exact harm this whole change exists to close", reintroduced here if
+    it were allowed to pass silently).
 
-    If package_id is None, clean all packages; otherwise clean only that package.
+    A malformed INDIVIDUAL package (not a mapping, or a non-string `dir`) is
+    a named problem, not an abort: it is excluded from the returned mapping
+    so the rest of the scope still gets a chance.
 
-    The membership check runs before get_generated_files, which now reads and
-    validates every package. That ordering matters for a DIRECT caller of
-    this function; it is not what protects the CLI, and an earlier version of
-    this docstring wrongly claimed it was. `main` pre-flights the whole config
-    before calling in here, so by this point a broken sibling has already
-    stopped the run -- which is why main does its own membership check first,
-    above that pre-flight. Both exist: this one so the API cannot be made to
-    delete from a config it never checked, that one so a typo gets "Unknown
-    package" rather than a lecture about a package the user did not mention.
+    When `package_id` is given, the CLI's own membership check (`_main`'s
+    "Unknown package") has already proven `packages` is a mapping containing
+    it, so only the shape of that one package's value is guarded here. A
+    direct caller of `clean_generated` that skips that check gets the same
+    guard rather than a bare AttributeError/TypeError.
     """
-    if package_id is not None and package_id not in config.get("packages", {}):
-        print(f"Error: Unknown package {package_id}", file=sys.stderr)
-        list_packages(config)
-        sys.exit(1)
-
-    entries = get_generated_files(config)
+    packages_raw = config.get("packages")
 
     if package_id is not None:
-        pkg_dir = config["packages"][package_id].get("dir", package_id)
-        entries = [e for e in entries if e.startswith(f"{pkg_dir}/")]
-        if not entries:
-            print(f"No generated paths for package {package_id}", file=sys.stderr)
-            return
+        if not isinstance(packages_raw, dict) or package_id not in packages_raw:
+            problems.append(f"Unknown package {package_id}")
+            return None
+        candidates = {package_id: packages_raw[package_id]}
+    else:
+        if not isinstance(packages_raw, dict):
+            problems.append(
+                "'packages' must be a mapping of package id to settings, not "
+                f"{type(packages_raw).__name__}; no package can be "
+                "identified to clean"
+            )
+            return None
+        candidates = packages_raw
 
-    # Resolve to absolute paths; sort by depth descending so we remove files before parent dirs
+    scope: dict[str, dict] = {}
+    for pid, package in candidates.items():
+        if not isinstance(package, dict):
+            problems.append(
+                f"Package {pid}: must be a mapping of settings, not "
+                f"{type(package).__name__}"
+            )
+            continue
+        raw_dir = package.get("dir", pid)
+        if not isinstance(raw_dir, str):
+            problems.append(
+                f"Package {pid}: dir {raw_dir!r} is {type(raw_dir).__name__}, "
+                "not a string"
+            )
+            continue
+        scope[pid] = package
+    return scope
+
+
+def _validated_package_dirs(
+    scope: dict[str, dict], output_base: Path, problems: list[str]
+) -> dict[str, Path]:
+    """check_config_path plus a containment check on every scoped package's
+    `dir`, re-run here even for a package whose config already passed
+    `package_contexts` (stn-2x4.8 requirement 2).
+
+    On the degraded path `dir` has been validated by NOTHING: `dir` is only
+    checked inside `get_template_context`, which the degraded path never
+    reaches because the config did not parse as a whole. A config carrying
+    `dir: ../../../victim` alongside a broken sibling would otherwise anchor
+    the manifest lookup, and the containment root, outside the output tree.
+
+    The string check alone does not catch a symlinked package directory, so
+    `(output_base / pkg_dir).resolve()` is also required to stay under
+    `output_base.resolve()` -- this is the stn-7t9 containment guarantee,
+    applied at the one place every source (manifest or config-derived) goes
+    through before anything is touched.
+
+    A package failing either check is a named problem, not a silent drop.
+    """
+    resolved_base = output_base.resolve()
+    result: dict[str, Path] = {}
+    for pid, package in scope.items():
+        raw_dir = package.get("dir", pid)
+        try:
+            check_config_path(pid, "dir", raw_dir)
+        except ValueError as error:
+            problems.append(str(error))
+            continue
+        pkg_path = (output_base / raw_dir).resolve()
+        try:
+            pkg_path.relative_to(resolved_base)
+        except ValueError:
+            problems.append(
+                f"Package {pid}: dir {raw_dir!r} resolves to {pkg_path}, "
+                f"outside the output directory {resolved_base} -- refusing "
+                "to touch it"
+            )
+            continue
+        result[pid] = pkg_path
+    return result
+
+
+def _remove_entries(
+    package_id: str,
+    root: Path,
+    pkg_path: Path,
+    entries: set[str],
+    dry_run: bool,
+    problems: list[str],
+) -> list[Path]:
+    """Unlink every entry (file, or glob pattern expanded against disk)
+    under one package directory. Returns the paths actually removed (or that
+    would be, under --dry-run), so the caller can clean up now-empty parent
+    directories from exactly those. `pkg_path` is already resolved (the
+    caller resolves the package directory ONCE per package, in
+    `_validated_package_dirs` -- decision d-cfc315b8); this function does
+    not resolve it again.
+
+    An entry that fails a check is appended to `problems` and skipped --
+    the rest of the package is still processed (stn-2x4.6, review finding
+    A10: `test_manifest_survives_a_partial_clean`). Every entry, manifest-
+    sourced or config-derived alike, goes through the same three checks,
+    because running them on both costs nothing and is one code path:
+
+    1. `check_config_path` -- no absolute path, no '..', no '~', no shell
+       metacharacter, no control character, no whitespace.
+    2. `check_glob_vocabulary` -- bounds what a survivor's '*' may mean, so
+       a string that passed (1) cannot still expand to the whole package.
+    3. TWO HALVES OF ONE RULE, THE SAME SHAPE stn-ttg'S FIX ALREADY USES
+       (`brand_problem`, generate.py): the string is checked above; here the
+       RESOLVED location is checked too, against a root that is not derived
+       from the thing being checked. Only the entry's PARENT directory is
+       resolved and checked -- never the entry's own final component. That
+       is what makes the two symlink cases come out differently on purpose:
+
+       - a symlinked SUBDIRECTORY inside the package (e.g. `linked/*.txt`
+         where `linked` points outside) is caught here, because
+         `(pkg_path / entry).parent.resolve()` follows `linked` to its real,
+         outside location, which fails containment (architecture finding
+         T1 second half / adversarial CRITICAL 1's shape, applied to an
+         entry rather than to `dir`).
+       - an ordinary symlink AS the final component (e.g. a generated
+         `Makefile` replaced by a symlink to some file elsewhere) is NOT
+         caught here, and must not be: `unlink()` does not follow a
+         final-component symlink, so the path actually removed below is
+         the UNRESOLVED join -- the link itself, sitting legitimately
+         inside the package -- never its resolved target. Refusing the
+         entry because its target resolves outside would make such a
+         package permanently un-cleanable, which is the opposite of the
+         guarantee this function exists to provide.
+    """
     paths_with_depth = []
     for entry in entries:
-        path = (output_base / entry).resolve()
-        if "*" in path.name:
-            # Glob pattern: expand and collect matches
-            for p in path.parent.glob(path.name):
-                paths_with_depth.append((len(p.parts), p))
+        try:
+            check_config_path(package_id, "manifest entry", entry)
+            check_glob_vocabulary(package_id, "manifest entry", entry)
+        except ValueError as error:
+            problems.append(str(error))
+            continue
+
+        unresolved = pkg_path / entry
+        try:
+            parent_resolved = unresolved.parent.resolve()
+        except OSError as error:
+            problems.append(
+                f"Package {package_id}: manifest entry {entry!r} could not "
+                f"be resolved: {error} -- refusing to touch it"
+            )
+            continue
+        if not (
+            parent_resolved.is_relative_to(root)
+            and parent_resolved.is_relative_to(pkg_path)
+        ):
+            problems.append(
+                f"Package {package_id}: manifest entry {entry!r} resolves "
+                f"to {parent_resolved}, outside the package directory "
+                f"{pkg_path} -- refusing to touch it"
+            )
+            continue
+
+        # Rebuilt on `parent_resolved`, NEVER on `unresolved.parent`. The
+        # parent is the half that was just containment-checked, so every
+        # path that leaves here has a real, checked directory above it --
+        # which is what makes `_remove_empty_parent_dirs`' `relative_to`
+        # guards containment checks rather than lexical tests on a string.
+        #
+        # Measured before this: an intermediate directory that is a SYMLINK
+        # pointing inside the package left `unresolved.parent` naming the
+        # link, the sweep called `rmdir` on it, and `clean` ended in
+        # NotADirectoryError -- a bare traceback AFTER the unlink, which is
+        # the shape `_main`'s clean branch says in a comment that it refuses
+        # to create.
+        #
+        # The FINAL component stays unresolved (it is joined on as a plain
+        # name), so `unlink()` still removes a symlinked file rather than
+        # its target -- see this docstring's third point, and
+        # test_removing_a_generated_symlink_removes_the_link_not_its_target.
+        name = Path(entry).name
+        if "*" in name:
+            for match in parent_resolved.glob(name):
+                paths_with_depth.append((len(match.parts), match))
         else:
-            paths_with_depth.append((len(path.parts), path))
+            resolved_join = parent_resolved / name
+            paths_with_depth.append((len(resolved_join.parts), resolved_join))
 
     paths_with_depth.sort(key=lambda x: -x[0])
 
+    removed = []
     for _, path in paths_with_depth:
         if not path.exists():
             continue
@@ -1559,22 +2158,69 @@ def clean_generated(
             if dry_run:
                 print(f"Would remove {path}")
             else:
-                path.unlink()
+                # The final component is unresolved -- see the docstring
+                # above. unlink() removes the directory entry itself and
+                # never follows a final-component symlink, so this is
+                # correct for an ordinary symlink living inside the package
+                # even though `path.is_file()` above followed it to check
+                # type.
+                try:
+                    path.unlink()
+                except OSError as error:
+                    # A named failure, never a traceback mid-delete: a
+                    # read-only parent directory, a file removed by
+                    # something else between the check and here, a
+                    # filesystem going away. The rest of the package is
+                    # still processed, exactly as a refused entry is.
+                    problems.append(
+                        f"Package {package_id}: {str(path)!r} could not be "
+                        f"removed: {error}"
+                    )
+                    continue
                 print(f"Removed {path}")
-        # (entries are file paths only; no dir entries in list)
+            removed.append(path)
+    return removed
 
-    # Remove empty directories (e.g. .vscode, scripts/) under package dirs
-    parent_dirs = set(p.parent for _, p in paths_with_depth)
-    # Only consider dirs at least one level below package root (don't remove hs1-Setup itself)
+
+def _remove_empty_parent_dirs(
+    root: Path,
+    pkg_path: Path,
+    removed_paths: list[Path],
+    dry_run: bool,
+    problems: list[str],
+) -> None:
+    """Remove now-empty directories (e.g. .vscode, scripts/) left behind
+    under one package directory -- never the package directory itself.
+
+    Containment-checked against BOTH `pkg_path` and `root` (stn-2x4.6,
+    adversarial MEDIUM 11), and the two are not interchangeable. The
+    `d.relative_to(pkg_path)` guard is the only reason this sweep does not
+    already rmdir outside the package tree today -- verified directly by
+    tests/test_manifest.py::test_sweep_never_rmdirs_a_directory_outside_the_package_tree
+    -- so it stays exactly as it was. `root` is added ALONGSIDE it, never in
+    place of it: checking against `root` alone would be strictly MORE
+    permissive, because a directory can sit under `root` (inside
+    `output_dir`) while still being a SIBLING of `pkg_path` rather than
+    nested inside it -- exactly the escape that test pins.
+
+    Every directory reaching here is `_remove_entries`' `parent_resolved`
+    (or a resolved glob match's parent), so the two guards are containment
+    checks on a real directory rather than lexical tests on a path that
+    might still have a symlink in it.
+    """
+    parent_dirs = {p.parent for p in removed_paths}
     candidate_dirs = []
     for d in parent_dirs:
         if not d.exists() or not d.is_dir():
             continue
         try:
-            if len(d.relative_to(output_base).parts) >= 2:
+            if (
+                len(d.relative_to(pkg_path).parts) >= 1
+                and d.is_relative_to(root)
+            ):
                 candidate_dirs.append(d)
         except ValueError:
-            # Path is not under output_base (e.g. glob matched files elsewhere)
+            # Not under pkg_path (e.g. a glob matched files elsewhere).
             pass
     candidate_dirs.sort(key=lambda d: -len(d.parts))
     for d in candidate_dirs:
@@ -1588,10 +2234,356 @@ def clean_generated(
                 print(f"Would skip non-empty directory (leave as-is): {d}")
         else:
             if is_empty:
-                d.rmdir()
+                try:
+                    d.rmdir()
+                except OSError as error:
+                    # Same rule as the unlink above: an emptied directory
+                    # whose parent is not writable is a named failure, not a
+                    # traceback landing after the files underneath it are
+                    # already gone.
+                    problems.append(
+                        f"directory {str(d)!r} could not be removed: {error}"
+                    )
+                    continue
                 print(f"Removed directory {d}")
             else:
                 print(f"Skipped non-empty directory (leave as-is): {d}")
+
+
+def _remove_path(path: Path, dry_run: bool, problems: list[str]) -> None:
+    """Unlink a single file (the manifest), the same way _remove_entries
+    reports an ordinary entry -- kept separate so the manifest is always the
+    LAST thing printed and removed for its package. Guarded the same way
+    too: a manifest that cannot be unlinked is a named problem, never a
+    traceback after every file it named is already gone."""
+    if not path.exists():
+        return
+    if dry_run:
+        print(f"Would remove {path}")
+        return
+    try:
+        path.unlink()
+    except OSError as error:
+        problems.append(f"manifest {str(path)!r} could not be removed: {error}")
+        return
+    print(f"Removed {path}")
+
+
+def _config_template_defs(
+    config: dict, who: str, problems: list[str]
+) -> list[dict]:
+    """The config's `templates:` list, shape-guarded, for the config-derived
+    removal list.
+
+    `package_contexts` inspects `templates` only when it is a list and skips
+    any member that is not a mapping, so `templates: ["Makefile.j2"]` --
+    strings rather than mappings -- passes validation outright and then
+    reaches `tdef.get(...)` here as a `str`. Measured on this branch: the
+    first package's files were deleted from its manifest and the SECOND
+    group raised AttributeError, so the command tracebacked after a partial
+    delete. (On the predecessor the whole list was computed before the first
+    unlink, so the same config failed harmlessly.)
+
+    A dropped member is a NAMED problem rather than a silent filter: the
+    files those templates render to cannot be identified, so `clean` is
+    knowingly leaving them behind and has to say so.
+    """
+    declared = config.get("templates", [])
+    if not isinstance(declared, list):
+        problems.append(
+            f"Package(s) {who}: 'templates' must be a list of template "
+            f"definitions, not {type(declared).__name__} -- the files it "
+            "renders cannot be named, so none of them was removed"
+        )
+        return []
+    kept = [tdef for tdef in declared if isinstance(tdef, dict)]
+    dropped = len(declared) - len(kept)
+    if dropped:
+        problems.append(
+            f"Package(s) {who}: {dropped} entr"
+            f"{'y' if dropped == 1 else 'ies'} under 'templates' "
+            f"{'is' if dropped == 1 else 'are'} not a mapping with a `src:` "
+            "-- the file(s) they render to could not be named, so they were "
+            "not removed"
+        )
+    return kept
+
+
+def _config_derived_entries(
+    pids: list[str], config: dict, problems: list[str]
+) -> set[str]:
+    """`package_entries` for each of `pids`, unioned -- the same union
+    `get_generated_files` has always produced for packages sharing a `dir`
+    (a set, deduplicated), computed directly here instead of via a second
+    full-config sweep.
+
+    Every failure is a named problem rather than an exception, because this
+    runs INSIDE `clean`, interleaved with the deleting. See
+    `_config_template_defs` for the shape this exists to survive.
+    """
+    who = ", ".join(sorted(pids))
+    config_templates = _config_template_defs(config, who, problems)
+    entries: set[str] = set()
+    for pid in pids:
+        try:
+            context = get_template_context(pid, config)
+            entries |= package_entries(
+                pid, config["packages"][pid], context, config_templates
+            )
+        except (ValueError, TypeError, AttributeError, KeyError) as error:
+            problems.append(
+                f"Package {pid}: its removal list could not be derived from "
+                f"the config ({type(error).__name__}: {error}) -- nothing "
+                "was removed for it"
+            )
+    return entries
+
+
+def _clean_one_directory(
+    root: Path,
+    pkg_path: Path,
+    members: list[str],
+    all_members: list[str],
+    config: dict,
+    config_readable: bool,
+    dry_run: bool,
+    problems: list[str],
+) -> None:
+    """Clean everything under one resolved package directory, on behalf of
+    every package_id in `members` that is configured with it (stn-2x4.8
+    requirement 5: packages sharing a `dir` are processed once as a group,
+    not once per package -- both because there is only one physical manifest
+    to read there, and because checking that manifest's `package` field
+    against ONE member at a time would falsely refuse it for every member
+    but whichever one gen wrote it for last).
+
+    `root` is the resolved output base, threaded through to `_remove_entries`
+    and `_remove_empty_parent_dirs` -- see their docstrings.
+
+    `members` is the SELECTION at this directory (what the command line
+    asked for); `all_members` is every package in `config['packages']`
+    configured with it. The two are different and both are needed:
+
+    - The manifest's `package` field is checked against `all_members`.
+      Checked against the selection instead, `stencil clean alpha` on a
+      directory shared with `beta` was refused EVERY time -- the manifest
+      names whichever package `gen` wrote last, so a one-package selection
+      could never match it, and no user action cleared it. `clean --all`
+      worked; `clean alpha` could not, ever.
+    - The entries actually removed come from the selection, unioned into
+      the manifest (below).
+    """
+    manifest_path = pkg_path / MANIFEST_NAME
+    member_set = set(members)
+    full_member_set = set(all_members) | member_set
+    representative_id = sorted(member_set)[0]
+
+    if manifest_path.is_file():
+        try:
+            manifest = read_manifest(manifest_path)
+        except ManifestError as error:
+            # Refused for the whole group, as a whole -- a damaged manifest
+            # does not fall back to the config (see ManifestError's
+            # docstring), and nothing is removed for any package sharing
+            # this directory rather than guessing which one it belonged to.
+            problems.append(str(error))
+            return
+
+        manifest_pkg = manifest.get("package")
+        if isinstance(manifest_pkg, str) and manifest_pkg not in full_member_set:
+            problems.append(
+                f"manifest {manifest_path} names package {manifest_pkg!r}, "
+                "which is not among the package(s) configured with this "
+                f"directory ({', '.join(sorted(full_member_set))}); refusing "
+                "to use it"
+            )
+            return
+
+        entries = set(manifest["entries"])
+        entry_problems: list[str] = []
+
+        # THE MANIFEST NAMES ONE PACKAGE; A DIRECTORY MAY HOLD SEVERAL.
+        # `generate_package` unlinks the existing manifest and writes only
+        # `package_entries(package_id)`, so after `gen --all` a shared
+        # directory carries a manifest naming whichever package ran LAST.
+        # Driving the whole group from it left the other package's
+        # artifacts named by nothing: measured, `alpha.zip` survived
+        # `clean --all`, which exited 0 and said nothing -- a manifest
+        # making `clean` LESS thorough than the config-derived predecessor,
+        # which is the opposite of what stn-p9a is for.
+        unnamed = [pid for pid in sorted(member_set) if pid != manifest_pkg]
+        if unnamed:
+            if config_readable:
+                entries |= _config_derived_entries(unnamed, config, entry_problems)
+            else:
+                # Nothing can name these files: not the manifest, which is
+                # another package's, and not the config, which does not
+                # parse. Named and non-zero, never silently dropped.
+                for pid in unnamed:
+                    entry_problems.append(
+                        f"Package {pid}: the manifest at {manifest_path} "
+                        f"names package {manifest_pkg!r}, and the config "
+                        "could not be read -- nothing was cleaned for it. "
+                        "Fix the config and run `clean` again."
+                    )
+
+        removed = _remove_entries(
+            representative_id, root, pkg_path, entries, dry_run, entry_problems
+        )
+        _remove_empty_parent_dirs(root, pkg_path, removed, dry_run, entry_problems)
+        if entry_problems:
+            # stn-2x4.6, review finding A10
+            # (test_manifest_survives_a_partial_clean): the manifest is NOT
+            # removed when any entry was refused or failed. Every other
+            # entry has already been unlinked above; leaving the manifest
+            # in place is what lets the refused entry still be named, and
+            # acted on, next time -- removing it here would erase the only
+            # record that it was ever there.
+            problems.extend(entry_problems)
+            return
+        # Last of all -- stn-2x4's whole point: a clean that fails partway
+        # still has a manifest on disk naming what is left to resume from.
+        _remove_path(manifest_path, dry_run, problems)
+        return
+
+    if manifest_path.exists():
+        # A directory or a FIFO (or anything else) occupying the manifest's
+        # name is a DAMAGED manifest, not the same statement as no manifest
+        # being present -- stn-2x4.6 review finding: falling back to the
+        # config here would be guessing, exactly what a manifest exists to
+        # remove. NEVER opened: a FIFO with no writer blocks forever on
+        # open() for reading, so every check below is stat-based
+        # (`exists`/`stat`), never a `read_text` or `open` call.
+        try:
+            mode = manifest_path.stat().st_mode
+        except OSError:
+            mode = 0
+        if stat.S_ISDIR(mode):
+            kind = "a directory"
+        elif stat.S_ISFIFO(mode):
+            kind = "a FIFO"
+        else:
+            kind = "not a regular file"
+        problems.append(
+            f"Package(s) {', '.join(sorted(member_set))}: {manifest_path} "
+            f"is {kind}, not a manifest -- refusing to guess whether one is "
+            "present. Remove it by hand, or restore the manifest, then run "
+            "`clean` again."
+        )
+        return
+
+    # No manifest at this directory.
+    if not config_readable:
+        for pid in sorted(member_set):
+            problems.append(
+                f"Package {pid}: no manifest and the config could not be "
+                "read -- nothing was cleaned for it. Delete the directory "
+                "by hand, or fix the config and run `clean` again."
+            )
+        return
+
+    # Config-derived fallback, unioned across every selected package
+    # sharing this directory.
+    entry_problems: list[str] = []
+    entries = _config_derived_entries(sorted(member_set), config, entry_problems)
+    removed = _remove_entries(
+        representative_id, root, pkg_path, entries, dry_run, entry_problems
+    )
+    _remove_empty_parent_dirs(root, pkg_path, removed, dry_run, entry_problems)
+    problems.extend(entry_problems)
+
+
+def clean_generated(
+    output_base: Path,
+    config: dict,
+    package_id: str | None = None,
+    dry_run: bool = False,
+    config_readable: bool = True,
+) -> list[str]:
+    """Remove files and directories that stencil generates.
+
+    If package_id is None, clean all packages; otherwise clean only that
+    package. Returns the list of problems encountered -- never exits and
+    never raises for a per-package problem -- so the caller (`_main`)
+    decides the process's exit status; see `_main`'s `clean` branch.
+
+    Per package in scope: use its own manifest when one is present (see
+    read_manifest); otherwise derive from the config when `config_readable`
+    says the config parsed; otherwise remove nothing for that package, name
+    it, and add a problem. The manifest wins over the config whenever both
+    exist -- it records what `gen` actually produced, not what the config
+    would produce if run again.
+
+    `config_readable` defaults to True, which preserves this function's
+    contract for a DIRECT caller that does not know about the manifest: the
+    whole config is validated up front via `package_contexts`, and a broken
+    config RAISES here exactly as it always has, rather than degrading to
+    per-package problems. The CLI passes `config_readable=False` only after
+    it has already run that same validation itself and the config failed --
+    see `_main`'s `clean` branch, which prints that failure as a warning
+    instead of exiting on it. The membership check below still runs first
+    either way, so the API cannot be made to delete from a config it never
+    checked, and a mistyped package_id is answered as a mistyped package_id
+    rather than with an unrelated sibling's problem.
+    """
+    if package_id is not None and package_id not in config.get("packages", {}):
+        print(f"Error: Unknown package {package_id}", file=sys.stderr)
+        list_packages(config)
+        sys.exit(1)
+
+    problems: list[str] = []
+
+    if config_readable:
+        # Re-validates the whole config, same as get_generated_files always
+        # has -- and lets the ValueError propagate, unmodified, for a direct
+        # caller that never checked this itself. On the CLI path this is a
+        # cheap (microseconds) repeat of a check `_main` already made and
+        # already knows succeeded.
+        package_contexts(config)
+
+    scope = _clean_scope(config, package_id, problems)
+    if scope is None:
+        return problems
+
+    package_dirs = _validated_package_dirs(scope, output_base, problems)
+
+    # Resolved once here, and threaded through to every package's clean
+    # rather than re-resolved per entry (decision d-cfc315b8) -- the same
+    # resolved output base `_validated_package_dirs` already checked each
+    # `pkg_path` against.
+    root = output_base.resolve()
+
+    groups: dict[Path, list[str]] = {}
+    for pid, pkg_path in package_dirs.items():
+        groups.setdefault(pkg_path, []).append(pid)
+
+    # Every package configured with each directory, regardless of what the
+    # command line selected -- which is what the manifest's `package` field
+    # has to be checked against. Enumerated over the WHOLE config (scope
+    # None) and with its problems discarded: a package outside the selection
+    # is not this command's business to report, it only has to be known
+    # about. See `_clean_one_directory` for what goes wrong without it.
+    full_groups: dict[Path, list[str]] = {}
+    discarded: list[str] = []
+    full_scope = _clean_scope(config, None, discarded) or {}
+    for pid, pkg_path in _validated_package_dirs(
+        full_scope, output_base, discarded
+    ).items():
+        full_groups.setdefault(pkg_path, []).append(pid)
+
+    for pkg_path, members in groups.items():
+        _clean_one_directory(
+            root,
+            pkg_path,
+            members,
+            full_groups.get(pkg_path, members),
+            config,
+            config_readable,
+            dry_run,
+            problems,
+        )
+
+    return problems
 
 
 def install_gitignore(config: dict, dry_run: bool = False):
@@ -1834,14 +2826,46 @@ def _main():
         # "your config is wrong" and wrong for "something failed halfway
         # through destroying files" -- so only the read is inside the try;
         # clean_generated itself runs outside it, same as install above.
+        #
+        # Unlike install and gen, a broken config here does NOT exit: it is
+        # printed as a WARNING, and clean_generated still runs, because
+        # clean (stn-2x4) does not need the config at all for a package that
+        # has its own manifest. Passing CLEAN_DEGRADED_TRAILER instead of
+        # the gen/install default is what stops that warning from
+        # contradicting itself -- printed immediately before clean removes
+        # files and exits 0, "Nothing was generated, removed or written ...
+        # which refuses for the same reason this did" would be a direct
+        # lie about the run that just happened (architecture review D2).
+        config_readable = True
         try:
-            package_contexts(config)
+            package_contexts(config, trailer=CLEAN_DEGRADED_TRAILER)
         except ValueError as e:
-            print(f"Error: {e}", file=sys.stderr)
-            sys.exit(1)
-        clean_generated(
-            output_base, config, package_id=package_id, dry_run=args.dry_run
+            config_readable = False
+            print(f"Warning: {e}", file=sys.stderr)
+        problems = clean_generated(
+            output_base,
+            config,
+            package_id=package_id,
+            dry_run=args.dry_run,
+            config_readable=config_readable,
         )
+        if problems:
+            # _safe on every line, for the reason _raise_config_problems runs
+            # it on the warning printed a few lines above: a package id is
+            # config text, and YAML's double-quoted style honours \x escapes,
+            # so `"demo\x1b[2Jx":` puts a real control character in the id
+            # without a raw control byte anywhere in the file. Measured: the
+            # warning above rendered it as `demo\x1b[2Jx` while this message
+            # printed the escape raw and repainted the terminal -- the two
+            # halves of one report disagreeing about the same id, with the
+            # unescaped half sitting directly underneath a sentence promising
+            # the escape "cannot repaint this line".
+            print(
+                "Error: these packages could not be cleaned:\n  "
+                + "\n  ".join(_safe(problem) for problem in problems),
+                file=sys.stderr,
+            )
+            sys.exit(1)
         return
 
     if args.command != "gen":

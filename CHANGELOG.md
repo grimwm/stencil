@@ -70,6 +70,258 @@ How the version gets bumped is written down in
   without `Makefile-base.j2` first now fails with `Makefile-doc needs STENCIL_COMPOSE: include Makefile-base.j2 before this include, or define it yourself`, instead of the bare `make: run: No such file or directory` it produced before. stencil has no pinning consumers today, so this
   reaches every consumer on their next `stencil gen` with nothing in between.
 
+  **`DC` may now name a compose implementation only, and a flag inside it is refused.**
+  Found by the adversarial review of this change and reproduced: `STENCIL_COMPOSE` puts
+  `$(DC)` *first*, so `DC="docker compose -f evil.yml"` expands to
+  `docker compose -f evil.yml -f docker-compose.yml run …` — and compose *merges* the two
+  rather than letting the pin override, so `config` still reports the pinned image while a
+  `privileged: true` and a `/:/hostfs` mount out of `evil.yml` land intact. That is this
+  same hole reopened through the sibling variable. `ifneq ($(filter -%,$(DC)),)` refuses any
+  word beginning with a dash, which is deliberately broader than an `-f`/`--file` denylist:
+  `--project-directory` moves the base every relative volume source resolves against and
+  `--env-file` re-points the variable file, and neither is a compose file by name. All four
+  spellings `pipeline.compose_command()` falls through — `docker compose`, `podman compose`,
+  `docker-compose`, `podman-compose` — pass it, exported or on the command line, so
+  `DC="podman compose"` is unaffected. Like the `COMPOSE_FILES` guards, this is
+  honest-mistake protection rather than a boundary: `DC` names the command `make` runs, so
+  anyone who can set it can already run anything. `CONTAINER` has the same env-settable
+  shape but a different objective — what the image probe *executes* rather than which files
+  compose *reads* — and is filed separately as `stn-3y8` with its reproduction.
+
+- **pytest in a git worktree now tests that worktree** (`stn-2et`). A run
+  started inside a worktree, using a venv whose `pip install -e .` points at
+  another checkout, imported THAT checkout's `stencil` while running the
+  worktree's tests — and said nothing. Measured: the console script imported
+  `<main>/stencil/__init__.py` from a `<worktree>` whose own version was a
+  minor ahead, and the same suite differed by two tests depending only on
+  `PYTHONPATH`.
+
+  `pythonpath = ["."]` in `[tool.pytest.ini_options]` fixes it by putting the
+  rootdir on `sys.path` before `tests/conftest.py` is imported. Resolved
+  relative to rootdir rather than the cwd, and it reaches xdist workers — both
+  verified rather than assumed.
+
+  Why it stayed hidden: `python -m pytest` was always right, because `-m`
+  puts the cwd on `sys.path` first, so the obvious sanity check passed. And
+  stn-12v's CLI guard passes either way — it derives `REPO_ROOT` from the
+  imported module, so it pins the subprocess to whatever the in-process import
+  chose. That is consistency, not correctness; under this bug both halves
+  agreed on the wrong tree. Fixing the in-process import is what makes
+  stn-12v's guarantee point somewhere useful.
+
+  `tests/conftest.py` now refuses a run whose `stencil` belongs to a different
+  checkout, naming both trees and the two ways out, because a setting can be
+  deleted in a merge and every failure here is silent — the lesson this
+  repository already paid for with a pre-push hook that failed open. It
+  compares against the conftest's own checkout rather than `config.rootpath`,
+  which would have refused the inner pytest runs `test_parallel_harness.py`
+  and `test_tmp_footprint.py` legitimately make against a throwaway rootdir.
+  AGENTS.md records what a contributor in a worktree should expect, including
+  where the fix stops: `pythonpath` decides which `stencil/` is imported and
+  nothing about what is installed, so a worktree that adds a dependency, a
+  pytest plugin or an entry point still needs its own venv. That one fails as
+  an honest `ModuleNotFoundError` rather than a silent wrong answer.
+
+  The same bug existed one level down, and the guard is what found it: the
+  inner pytest runs `test_parallel_harness.py` and `test_tmp_footprint.py`
+  spawn get no ini file, so `pythonpath` never reached them and they resolved
+  `stencil` through the interpreter's install — another checkout, under the
+  borrowed venv the docs had just called safe. That surfaced as `UsageError`
+  and exit 4 on two harness tests with nothing to do with this change, which
+  was the refusal being right and the harness being wrong.
+  `conftest.inner_pytest_env()` now appends this checkout to their
+  `PYTHONPATH`. The regression test models the competing install as an
+  appended `sys.meta_path` finder rather than a path entry, because that is
+  what an editable install is — a first draft using `PYTHONPATH` made the
+  competitor stronger than the real one and failed a correct fix, and a second
+  draft forgot to remove the venv's own finder and passed against a build with
+  the fix taken out.
+
+  Two costs are accepted rather than left to be discovered. The guard has a
+  loud door — `STENCIL_ALLOW_FOREIGN_STENCIL=1` proceeds and warns on every
+  run, including under `-q`, since a guard with no way past it gets deleted
+  whole and one that can be silenced is not a guard. And the repository root
+  now precedes site-packages on `sys.path`, so a top-level `yaml.py` would
+  become the one the suite imports; a new test fails if any git-tracked name
+  at the root starts shadowing an installed module.
+
+- **`format-md` installs only the lockfile stencil generated** (`stn-qge`). The
+  service copied `format-package-lock.json` out of the mount — the consumer's
+  own package directory — and ran `npm ci` from it. `npm ci` fetches whatever
+  host each `resolved` names and checks `integrity` against a value in that same
+  file, so a consumer-editable file decided which bytes became the prettier that
+  then ran as uid 0 over that read-write mount. Neither `--ignore-scripts` nor
+  0.39.0's own `--no-config` touches it: nothing has to run at install time,
+  because the payload runs when prettier runs.
+
+  **Measured**, on the pinned node image, with one `resolved` host changed in a
+  generated package's lockfile and nothing else: npm requested that host. It now
+  fails before npm asks, with a message saying the file is stencil's, that
+  editing it has no supported effect, and that `stencil gen` restores it.
+
+  The entrypoint carries the sha256 of the lockfile `stencil gen` wrote and
+  checks the copy in `/tmp/fmt` — after the `cp`, before the install, so what
+  was hashed is what npm reads rather than a file the host could still rewrite.
+  The digest is derived from the vendored bytes at generation time, never
+  written down, so re-vendoring moves the lockfile and its digest together and
+  bumping a pin stays the same two steps it was.
+
+  **What it proves, exactly.** A checksum is not a signature: it shows that two
+  files in the package agree, and both are files whoever edited the lockfile
+  could edit. It refuses every edit that touches only the lockfile — a script, a
+  dependency bot, a bad merge, a half-finished hand edit — and it turns the
+  collusive case into something visible: the digest in `docker-compose.yml`
+  moves without stencil having been re-run.
+
+  Nothing a consumer does legitimately changes that file, so no build that was
+  working stops. If you had edited your package's copy — there was never a
+  supported reason to — run `stencil gen` and the package goes back to the
+  lockfile stencil ships.
+
+- **A stray `npm install` in a package directory can no longer decide which
+  puppeteer renders your handouts** (`stn-86y`). The generated
+  `html-to-pdf.js` runs inside the browser image but lives in the mounted
+  package directory, and it asked for its tools by bare specifier. Node
+  resolves those starting from the requiring file, so
+  `<package>/node_modules` outranked the image's pinned, lockfile-verified
+  tree at `/opt/tools` -- which was reached only through `NODE_PATH`, Node's
+  *last-resort* path.
+
+  **Measured**, in the image built from the generated `Dockerfile.browser`,
+  with a decoy planted at `<package>/node_modules`:
+
+  ```
+  puppeteer      /workspace/node_modules/puppeteer/index.js   0.0.0-decoy
+  pdf-lib        /workspace/node_modules/pdf-lib/index.js     0.0.0-decoy
+  ```
+
+  Both, not just puppeteer -- and `pdf-lib` is the one that writes the PDF/UA
+  role map and XMP metadata that `make check-pdf` exists to require, so a
+  decoy there yields a finished-looking PDF missing exactly that, with
+  nothing about the rendering looking wrong.
+
+  `html-to-pdf.js` now resolves both through `module.createRequire` rooted at
+  the image's install root, and refuses to run at all if resolution lands
+  outside it. `make check-access` was never affected by this particular
+  hijack: `pa11y` resolves its own dependencies from its own location inside
+  the tools tree, not from the working directory.
+
+  **What this does and does not close.** It closes an *incidental*
+  `node_modules` -- someone, or some tool, once ran `npm install` in the
+  package directory -- silently outranking the pinned tree. That is the real,
+  common, traceless case. It does **not** close a hostile package directory,
+  and cannot from inside one: `html-to-pdf.js` is itself in the mount, as are
+  the `Makefile`, `docker-compose.yml` and the Lua filters.
+
+  **If you have copied `html-to-pdf.js.j2` into your own `templates_dir`**,
+  you keep the old resolution and get no warning -- `StrictUndefined` cannot
+  tell you, because your copy reads none of these keys. Re-apply the change,
+  or drop your override.
+
+  **The fix reaches a package only when you run `stencil gen`.** `make pkg`
+  has no `gen` prerequisite, so an existing package keeps running the
+  `html-to-pdf.js` it was generated with.
+
+- **The container tier now runs in parallel** (`stn-vda`). CI's integration job
+  ran a single `pytest -v`; it now runs `pytest -v -n auto --dist loadfile`.
+  `loadfile`, not xdist's default `load`: nine test files carry module- or
+  file-scoped fixtures that each pay one container run to answer many
+  assertions, and AGENTS.md now carries the full list and the reasoning.
+
+  **Measured**, per container test on this branch against the pinned
+  `pandoc/core:3.10.0.0` image: 0.30s docker-run container start and 0.56s
+  pandoc, a 35%/65% split. `stencil gen` (`make_package`) is 0.031s;
+  `install_fixtures` is 0.001s. The 0.56s decomposes by flag, cumulatively:
+  pandoc's own process startup is 4ms; `--standalone` against pandoc's own
+  template is 16ms; `--standalone --template=html-template.html` is 559ms;
+  adding all six lua filters brings it to 565ms; adding `--citeproc` brings it
+  to 579ms. The entire per-render cost is pandoc parsing the generated
+  `html-template.html` — 5.3MB, almost all of it the inlined
+  Bootstrap/highlight.js/Mermaid/webfont payload. The six lua filters and
+  citeproc together cost about 20ms, roughly 2% of a render.
+
+  That measurement refutes two of the ticket's three proposed fixes, plainly,
+  so neither needs re-proposing from scratch. Widening fixture scope targets
+  `stencil gen` at 31ms of an 870ms test — about 3.5% of the tier — while
+  introducing shared mutable package directories across fifteen test files.
+  Batching `test_dates.py`'s 102 builds into one container saves only the
+  container starts (102 × 0.30s ≈ 31s), because each of the 102 still parses
+  the same 5.3MB template, while turning a spreadable file into a serialized
+  57s critical path.
+
+  The single biggest cut available — generating test packages against a
+  slimmed asset set, which is 65% of every container test — is not taken.
+  `tests/test_assets.py`, `tests/test_fonts.py` and `tests/test_pins.py`
+  assert on exactly that inlined payload; a lean variant would mean the
+  container tier stops testing the artifact stencil actually ships.
+
+  Locally, the container tier went from 689.63s to 191.00s — 989 tests passed
+  either way, the same assertions against the same real containers — and the
+  fast tier from 18.18s to 5.24s.
+
+  On CI, which is the number that decides this: run 34678996838 on `8e17d65`
+  measured the `pytest -v` step at 565s inside a 9m42s job; run 34683551394
+  on this branch measured the same step at **352.95s** inside a **6m10s**
+  job, 995 passed. That is **1.60x**, and it is worth saying plainly that the
+  plan predicted 3.2-3.5x and was wrong.
+
+  It was wrong about why the tier is slow, not about the arithmetic. The
+  reasoning was that these tests are IO-bound on container startup, so four
+  workers would overlap four waits. They are not: 65% of every container test
+  is pandoc *parsing* the 5.3MB `html-template.html`, which is CPU and memory
+  bandwidth. Measured on the CI run, the four workers were busy 348s, 327s,
+  317s and 343s of a 351s wall clock — saturated, with idle tails of 0-31s,
+  so the bin-packing `--dist loadfile` produced was close to ideal and is not
+  where the missing speedup went. What the four workers spent was 1,335
+  worker-seconds on work that takes 565s on one worker: the same unit of work
+  costs **2.36x more** when four of them run at once on four vCPUs. Against a
+  perfect-split floor of `565/4 ≈ 141s`, 353s is 2.50x over.
+
+  So the honest statement is that parallelism recovers what contention
+  leaves, and on this workload that is a little over half. 1.60x for a CI
+  flag and two harness fixes is still worth having. It also sharpens the
+  fourth cost this entry declines to take: the 5.3MB template is both the
+  per-test cost *and* the reason four workers contend, so slimming it would
+  pay twice. It is still not taken, for the reason above — `test_assets.py`,
+  `test_fonts.py` and `test_pins.py` assert on exactly that payload.
+
+  No assertion was deleted, weakened, skipped or merged, and the compose gate
+  from #86 is untouched.
+
+- **The shared-basetemp guard now actually fires** (`stn-6fs`). It never did.
+  `pytest_configure` wrote `.pytest-run-owner` into the basetemp, and pytest's
+  own `TempPathFactory.getbasetemp()` `rmtree()`s that directory on first use
+  and recreates it — so a run deleted its own marker the moment any test
+  asked for `tmp_path`, and the window in which the guard could fire was
+  milliseconds. Dead, not racy: two concurrent runs on one `--basetemp` both
+  passed.
+
+  The test that was supposed to prove otherwise hand-writes the marker into a
+  directory no pytest ever rotates, so it proved the marker is **read** while
+  saying nothing about whether it is ever there to read.
+
+  The fix claims the basetemp twice: the check stays in `pytest_configure`
+  (refusing after the rotation would destroy the run being protected), and the
+  write is repeated in `pytest_sessionstart`, after touching `getbasetemp()`
+  to force the rotation while the run is still starting. Proven by two real
+  pytest runs overlapping in time, the first already past a `tmp_path`.
+
+  Two runs starting *simultaneously* are a second case, and the marker alone
+  never covered it: checking for an owner and writing one are two steps, so
+  both runs read an empty directory and both claimed it. Claiming is now
+  atomic under a lock keyed on the resolved basetemp path, held only across
+  that check-and-write and across the rotation — and living outside the
+  basetemp, since a lock inside it would be deleted by the rotation it
+  covers. Measured: four simultaneous starters leave exactly one survivor,
+  15 runs out of 15; with the lock removed the same test fails 2 runs in 6.
+
+  Forcing the rotation introduced a failure of its own, now closed.
+  `getbasetemp()` does `rm_rf` and then `mkdir` with no `exist_ok`, so a
+  directory recreated underneath it raised `FileExistsError` out of a session
+  hook — an `INTERNALERROR` whose traceback never names a basetemp, which is
+  worse than the corruption being guarded against. It retries once and then
+  refuses in the guard's own words.
+
 - **The three images the scaffolding pulls are pinned by manifest digest, not only by
   tag** (`stn-8vi`, closing the sibling gap `stn-5hv` left open). A registry tag is
   mutable — `docker.io/pandoc/core:3.10.0.0` can be repushed, and every rebuild after

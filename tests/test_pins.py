@@ -48,8 +48,11 @@ than the version.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
+import shutil
+import subprocess
 
 import pytest
 import yaml
@@ -508,6 +511,94 @@ def test_the_browser_image_installs_from_the_pinned_manifest_and_lockfile(doc_pa
     assert f"ENV PATH={pipeline.BROWSER_NODE_MODULES}/.bin:$PATH\n" in dockerfile
 
 
+def test_html_to_pdf_js_roots_its_resolution_at_the_pinned_tools_dir(doc_package):
+    """stn-cnm: puppeteer and pdf-lib must resolve from pipeline.BROWSER_TOOLS_DIR
+    (module.createRequire rooted at "{{ browser_tools_dir }}/package.json", per
+    the approved plan for stn-cnm), not from wherever a bare `require` happens
+    to land starting at /workspace.
+
+    Asserted against the CONSTANT, the way
+    test_the_browser_image_installs_from_the_pinned_manifest_and_lockfile above
+    asserts the Dockerfile's ENV lines against pipeline.BROWSER_NODE_MODULES --
+    so a rewiring of the tools directory cannot leave this test asserting a
+    path the image stopped using.
+
+    OVER code_lines, NOT read_text, for the same reason the bare-require scan
+    below is -- and here it is the POSITIVE assertion that would go vacuous.
+    stn-cnm.2 is required to explain in a comment why a bare require is a
+    defect here, and the natural way to write that comment is to quote the
+    very call this looks for. A raw-text scan would then be satisfied by the
+    explanation alone, and would keep passing if the actual call were deleted.
+    """
+    needle = f'createRequire("{pipeline.BROWSER_TOOLS_DIR}/package.json")'
+    rooted = [
+        line
+        for path, line in code_lines(doc_package)
+        if path.name == "html-to-pdf.js" and needle in line
+    ]
+    assert rooted, (
+        "html-to-pdf.js does not root a createRequire() at "
+        f"{pipeline.BROWSER_TOOLS_DIR!r} in CODE (a comment mentioning it does "
+        "not count), so puppeteer/pdf-lib still resolve from wherever a bare "
+        "require lands starting at /workspace"
+    )
+
+    # The guard's prefix must be ANCHORED with a trailing separator. Dropping
+    # it leaves a check that a sibling directory whose name merely starts with
+    # the tools path would satisfy -- and that mutation survives every other
+    # tier here, including the container one, because nothing can produce such
+    # a directory through createRequire. The code says the separator is
+    # load-bearing; this is what makes that true rather than aspirational.
+    anchored = f'startsWith("{pipeline.BROWSER_NODE_MODULES}/")'
+    assert any(anchored in line for _, line in code_lines(doc_package)), (
+        f"the tools-tree prefix check is not anchored at {anchored!r} -- "
+        "without the trailing separator it accepts any path merely beginning "
+        f"with {pipeline.BROWSER_NODE_MODULES!r}"
+    )
+
+
+# Every pinned browser package, as a require-CALL pattern rather than a
+# mention of the name -- stn-cnm.2's guard legitimately contains
+# fromTools.resolve("puppeteer"), which must NOT trip this. Iterated from
+# pipeline.BROWSER_NPM_PINS rather than hardcoding "puppeteer" and "pdf-lib":
+# a fourth pin added tomorrow (pa11y is already one) must be covered without
+# anyone remembering to add a case for it here, the same property
+# test_nothing_in_the_scaffolding_installs_by_name uses above.
+BARE_PINNED_REQUIRE = {
+    name: re.compile(r"""require\(\s*['"]""" + re.escape(name) + r"""['"]\s*\)""")
+    for name in pipeline.BROWSER_NPM_PINS
+}
+
+
+def test_no_generated_js_bare_requires_a_pinned_browser_package(doc_package):
+    """A bare `require("puppeteer")` (or pdf-lib, or pa11y) resolves starting
+    from the requiring file's own directory and walks upward -- which, for
+    html-to-pdf.js, starts at /workspace and lets a consumer's own
+    node_modules outrank the image's pinned tree at pipeline.BROWSER_TOOLS_DIR.
+
+    Scanned over every generated .js file, not only html-to-pdf.js -- a
+    future template that reaches for one of these by a bare specifier must
+    fail this too. Scanned over code_lines(doc_package), NOT read_text():
+    code_lines strips `//` comments, and stn-cnm.2 is required to write a
+    comment EXPLAINING why a bare require is a defect here -- a raw-text scan
+    would find that explanation and report the file as still doing it.
+    """
+    violations = [
+        (path.name, name, line)
+        for path, line in code_lines(doc_package)
+        # .mjs/.cjs as well as .js: a future template emitting either would
+        # otherwise be scanned by nothing at all.
+        if path.suffix in {".js", ".mjs", ".cjs"}
+        for name, pattern in BARE_PINNED_REQUIRE.items()
+        if pattern.search(line)
+    ]
+    assert not violations, (
+        "these generated .js lines require a pinned package by bare "
+        "specifier, which resolves starting from the file's own directory "
+        f"rather than {pipeline.BROWSER_TOOLS_DIR}: {violations}"
+    )
+
+
 def test_format_md_installs_from_the_pinned_manifest_and_lockfile(doc_package):
     """Same rule for the formatter. An unpinned prettier decides how every
     markdown file in a package gets rewritten, which is a wider blast radius
@@ -535,6 +626,288 @@ def test_format_md_installs_from_the_pinned_manifest_and_lockfile(doc_package):
         "npm must run from the tools directory, not from /workspace -- a course "
         "package legitimately carries a package.json of its own"
     )
+
+
+# One 64-character lowercase hex run. The entrypoint contains exactly one, and
+# a test that reads it out of the rendered text rather than recomputing it is
+# what makes the digest assertion below about the FILE stencil emitted rather
+# than about a constant agreeing with itself.
+_SHA256_HEX = re.compile(r"\b[0-9a-f]{64}\b")
+
+
+def _format_md_script(package):
+    """The format-md entrypoint's script, parsed out of the compose file.
+
+    yaml.safe_load rather than a text search, for the reason
+    tests/test_compose_format_md.py's fast-tier test gives: the change that
+    adds this guard also adds a long comment explaining it, and a comment
+    satisfies ``in compose.read_text()`` forever -- including after someone
+    deletes the guard the comment describes.
+
+    That file has a parser of its own shaped like this one, and the two are
+    deliberately not shared: ``from tests.test_compose_format_md import ...``
+    resolves locally and fails on CI with ModuleNotFoundError, which is the
+    trap conftest.py documents for its own fixtures. Three lines of yaml is
+    the cheaper half of that trade. What lives HERE is what the scaffolding
+    installs -- the manifest, the lockfile, the digest that pins it; what
+    lives there is what the service DOES once it has installed.
+    """
+    compose = yaml.safe_load((package / "docker-compose.yml").read_text())
+    return compose["services"]["format-md"]["entrypoint"][-1]
+
+
+def test_format_md_verifies_the_lockfile_it_installs_from(doc_package):
+    """stn-qge. The install must refuse a lockfile that is not stencil's.
+
+    The service copies ``format-package-lock.json`` out of /workspace -- the
+    consumer's own directory, mounted read-write -- and ``npm ci`` fetches
+    whatever host each ``resolved`` names, checking ``integrity`` against a
+    value in that same file. So a consumer-editable file decided which bytes
+    became the prettier that then ran as uid 0 over that mount.
+    ``--ignore-scripts`` and stn-20h's ``--no-config`` do not touch it: nothing
+    has to run at install time, the payload runs when prettier runs.
+
+    THE ORDER IS THE PROPERTY, not the presence of a checksum somewhere. A
+    check after ``npm ci`` verifies a file npm has already fetched from, and a
+    check before the ``cp`` verifies a file in a directory the host can write
+    while the container runs. Verifying the COPY, before the install, is the
+    only arrangement where what was hashed is what npm reads.
+    """
+    script = _format_md_script(doc_package)
+    copied = f"{pipeline.FORMAT_TOOLS_DIR}/package-lock.json"
+
+    assert "sha256sum -c" in script, (
+        "the format-md entrypoint installs from the lockfile in the mount "
+        f"without checking it is the one stencil shipped (stn-qge):\n{script}"
+    )
+
+    check = script.index("sha256sum -c")
+    assert script.index(f"cp {pipeline.FORMAT_LOCKFILE}") < check, (
+        "the checksum is verified before the cp, so what it hashes is a file "
+        "in the mount rather than the copy npm ci reads -- a host that rewrites "
+        f"it between the two wins:\n{script}"
+    )
+    assert check < script.index("npm ci"), (
+        f"npm ci runs before the lockfile is checked:\n{script}"
+    )
+
+    # And it hashes the copy, not the original: the same reason again, stated
+    # where a reordering cannot quietly satisfy it. TWO SPACES between the hash
+    # and the path, which is what GNU coreutils requires in text mode; busybox,
+    # which is what the pinned Alpine image actually runs, accepts one space as
+    # well. Writing the stricter of the two is free and keeps the line valid if
+    # this ever runs anywhere but busybox -- so it is pinned here rather than
+    # left to whoever next edits the format string.
+    digest = pipeline.lockfile_digest(pipeline.FORMAT_LOCKFILE)
+    assert f'"{digest}  {copied}"' in script, (
+        "the checksum line does not name the copy in the two-space form "
+        f"`<sha256>  <path>` that both sha256sum implementations read:\n{script}"
+    )
+
+
+def _guard_block(script: str) -> str:
+    """The `if ! ... fi` the digest check lives in, lifted out of the script.
+
+    From the `if` to its `fi`, dropping the `&& \\` that chains it to the
+    install -- so what comes back is a complete shell command that can be run
+    on its own.
+    """
+    start = script.index("if ! echo")
+    end = script.index("fi &&", start) + len("fi")
+    return script[start:end]
+
+
+def test_the_guard_refuses_on_mismatch_rather_than_on_match(doc_package, tmp_path):
+    """The polarity, RUN rather than read -- and no container needed.
+
+    Dropping one `!` inverts this guard: stencil's own lockfile is refused and
+    a tampered one is installed from. Every other assertion in this file
+    survives that edit, because `sha256sum -c` is still present, still between
+    the cp and the npm ci, and still carrying the right digest and path. An
+    adversarial review found it by mutating the template and watching this
+    tier stay green.
+
+    So the check is executed here against two files, which is what makes a
+    reversed condition fail: the digest's own file must pass and a changed one
+    must not. Only the path literal is substituted -- /tmp/fmt does not exist
+    on the host and is not this test's to create -- so the `if !`, the
+    pipeline, the redirection and the `exit 1` are the template's own text.
+
+    THE CONTAINER TIER IS NOT A SUBSTITUTE, and neither is this for it. That
+    tier runs the real busybox against the real service and skips where there
+    is no compose; this runs the real shell condition anywhere sha256sum -c
+    works, which includes CI. Both, because the failure this is about is a
+    one-character regression in a file nobody runs locally.
+    """
+    script = _format_md_script(doc_package)
+    block = _guard_block(script)
+
+    target = tmp_path / "package-lock.json"
+    shutil.copyfile(doc_package / pipeline.FORMAT_LOCKFILE, target)
+    runnable = block.replace(f"{pipeline.FORMAT_TOOLS_DIR}/package-lock.json", str(target))
+    assert str(target) in runnable, (
+        f"the guard no longer names the copy it checks:\n{block}"
+    )
+
+    # PROBED SEPARATELY, and it has to be. Darwin's sha256sum takes no -c and
+    # prints its usage; the guard sends both streams to /dev/null, so on that
+    # host a missing -c and a refused lockfile are the same exit code and the
+    # same silence. Asking the tool directly, outside the guard, is the only
+    # way to tell "this host cannot run the check" from "the check says no".
+    probe = subprocess.run(
+        ["sh", "-c", f'echo "{hashlib.sha256(target.read_bytes()).hexdigest()}  '
+         f'{target}" | sha256sum -c'],
+        capture_output=True, text=True, timeout=60,
+    )
+    if probe.returncode != 0:
+        pytest.skip(
+            "sha256sum -c does not work here, so the guard cannot be executed "
+            f"on this host: {(probe.stderr or probe.stdout).strip()[:200]}"
+        )
+
+    def run() -> subprocess.CompletedProcess:
+        return subprocess.run(
+            ["sh", "-c", runnable], capture_output=True, text=True, timeout=60
+        )
+
+    accepted = run()
+    assert accepted.returncode == 0, (
+        "the guard refuses the lockfile whose digest it carries, so a package "
+        f"stencil generated would not build:\n{accepted.stderr}"
+    )
+
+    target.write_bytes(target.read_bytes().replace(b"registry.npmjs.org", b"evil.invalid.host"))
+    refused = run()
+    assert refused.returncode != 0, (
+        "the guard accepted a lockfile that is not the one it carries the "
+        "digest of -- a dropped `!` reads exactly like this, and every other "
+        f"assertion here survives it:\n{refused.stdout}{refused.stderr}"
+    )
+    assert "is not the file stencil generated" in refused.stderr, (
+        f"it refused, but said nothing the reader can act on:\n{refused.stderr}"
+    )
+
+
+def test_the_guard_is_written_as_a_refusal(doc_package):
+    """The same polarity, asserted textually, for where the test above skips.
+
+    One character, and the executed test cannot run on a host whose sha256sum
+    has no -c. This one runs everywhere and says the same thing about the
+    shape: the condition is negated, so the branch that fires is the failure.
+    """
+    script = _format_md_script(doc_package)
+    assert "if ! echo" in script, (
+        "the digest guard is not written as `if ! echo ... | sha256sum -c`. If "
+        "it was rewritten, make sure the new shape still refuses on MISMATCH "
+        f"and update the executed test above with it:\n{script}"
+    )
+
+
+def test_the_format_md_entrypoint_stays_out_of_reach_of_compose_and_the_shell(
+    doc_package,
+):
+    """Two characters this script must not contain, for two different reasons.
+
+    ``$``: compose substitutes ``$VAR`` in a service definition before the
+    shell ever sees it, which is why check-pdf doubles every ``$`` on its way
+    into the same file. This entrypoint has never needed one, so the honest
+    assertion is that it still has none -- a ``$`` added here without doubling
+    reaches the shell as the empty string, and an empty string is how a guard
+    stops guarding without anything failing.
+
+    `` ` ``: backticks inside a double-quoted ``echo`` are command
+    substitution, not quotation marks. Every message in this entrypoint is a
+    double-quoted echo, and the prose in them wants to name commands --
+    `stencil gen` is exactly the phrase someone reaches for backticks to set
+    off. The file's own convention is single quotes for that, and this is what
+    keeps it.
+    """
+    script = _format_md_script(doc_package)
+
+    assert "$" not in script, (
+        "a `$` reached the format-md entrypoint. compose interpolates it out "
+        "before the shell sees it, so it must be doubled the way check-pdf's "
+        f"script is -- and then this test updated deliberately:\n{script}"
+    )
+    assert "`" not in script, (
+        "a backtick reached the format-md entrypoint. Inside the double-quoted "
+        "echos here that is command substitution, so the message would run "
+        f"what it meant to name. Use single quotes, as the rest do:\n{script}"
+    )
+
+
+def test_the_refusal_tells_the_consumer_what_to_do(doc_package):
+    """A checksum mismatch answers nobody's question.
+
+    Whoever hits this guard either edited the lockfile for a reason of their
+    own or was handed a package by someone who did, and "sha256sum: FAILED"
+    speaks to neither. The message has to say three things: the file is
+    stencil's, editing it has no supported effect, and `stencil gen` puts it
+    back. Asserted here rather than only in the container tier, which skips on
+    every machine without a compose implementation -- and asserted against the
+    parsed entrypoint, so the comment above the service cannot satisfy it.
+
+    The existing presence guard's message is pinned the same way, one test
+    below, and for the same reason.
+    """
+    script = _format_md_script(doc_package)
+    refusal = script[script.index("sha256sum -c") :]
+
+    assert "is not the file stencil generated" in refusal, (
+        f"the refusal does not say what is wrong:\n{refusal}"
+    )
+    assert "no supported effect" in refusal, (
+        "the refusal does not tell the reader that editing the lockfile is not "
+        f"a supported thing to do, so they will try again:\n{refusal}"
+    )
+    assert "Run 'stencil gen'" in refusal, (
+        f"the refusal does not say how to get back to a working package:\n{refusal}"
+    )
+
+
+def test_the_rendered_digest_is_the_digest_of_the_lockfile_in_the_package(doc_package):
+    """The guard cannot go stale, because both come from the same bytes.
+
+    A digest written down once and a lockfile re-vendored later is a guard that
+    refuses every honest build -- the failure mode of every checksum kept by
+    hand. ``pipeline.lockfile_digest`` hashes what ``read_lockfile`` returns
+    plus the newline the template restores, which is exactly the file
+    ``stencil gen`` writes; this asserts that against the file in a real
+    generated package rather than against the constant it was computed from.
+    """
+    script = _format_md_script(doc_package)
+    digests = set(_SHA256_HEX.findall(script))
+    assert len(digests) == 1, (
+        f"expected exactly one sha256 in the entrypoint, found {sorted(digests)}"
+    )
+
+    emitted = (doc_package / pipeline.FORMAT_LOCKFILE).read_bytes()
+    assert digests == {hashlib.sha256(emitted).hexdigest()}, (
+        "the digest rendered into the entrypoint is not the digest of the "
+        "lockfile rendered beside it, so `make format-md` refuses a package "
+        "stencil itself generated"
+    )
+    assert digests == {pipeline.lockfile_digest(pipeline.FORMAT_LOCKFILE)}
+
+
+def test_lockfile_digest_hashes_the_file_the_package_gets(tmp_path, monkeypatch):
+    """The helper's own contract, including the failure channel it inherits.
+
+    It hashes ``read_lockfile(...) + "\n"`` rather than the bytes on disk, so
+    the two cannot disagree about the trailing newline -- and it raises
+    VendoredAssetError, not ValueError, for a damaged install, for the reason
+    stn-hwo gives at read_lockfile.
+    """
+    monkeypatch.setattr(pipeline, "ASSETS_DIR", tmp_path)
+    (tmp_path / "y.json").write_text("{}\n")
+    assert pipeline.lockfile_digest("y.json") == hashlib.sha256(b"{}\n").hexdigest()
+
+    with pytest.raises(pipeline.VendoredAssetError, match="vendor_npm_locks"):
+        pipeline.lockfile_digest("absent.json")
+
+    (tmp_path / "z.json").write_text("{}\n\n")
+    with pytest.raises(pipeline.VendoredAssetError, match="exactly one newline"):
+        pipeline.lockfile_digest("z.json")
 
 
 def test_a_package_that_renders_no_markdown_still_gets_the_format_lockfile(
@@ -1118,3 +1491,261 @@ def test_pa11y_runs_in_both_generated_theme_configs(installed):
     for theme in ("light", "dark"):
         assert theme in installed["pa11y"], f"pa11y never ran for the {theme} theme"
         assert isinstance(installed["pa11y"][theme]["issues"], int)
+
+
+# ---------------------------------------------------------------------------
+# stn-cnm: html-to-pdf.js must resolve puppeteer and pdf-lib only from
+# pipeline.BROWSER_TOOLS_DIR, never from a node_modules a consumer's own npm
+# install left in /workspace. Beside the installed-tree assertions above
+# because it needs the same built image; NEVER planted inside pdf_workspace
+# itself -- the PROBE script above opens with a bare require("pa11y"), so a
+# decoy there would corrupt every assertion `installed` makes, not merely
+# these.
+
+DECOY_MARKERS = {
+    "puppeteer": "STN_CNM_DECOY_PUPPETEER_7f2a",
+    "pdf-lib": "STN_CNM_DECOY_PDF_LIB_9c3b",
+}
+
+# A phrase only the guard's own message carries. Node's raw MODULE_NOT_FOUND
+# names the tools directory too -- via its "Require stack:" -- so the
+# directory alone cannot tell the guard firing apart from the guard being
+# absent. See test_the_missing_tools_guard_names_the_pinned_dir.
+GUARD_PHRASE = "installed the tools somewhere other than"
+
+
+def _copy_rendered_page(pdf_workspace, dest):
+    """document.html and html-to-pdf.js, copied out of pdf_workspace.
+
+    Generated pages are self-contained -- assets are inlined at `stencil gen`
+    time -- so these two files are everything the pdf service needs, and
+    nothing else about pdf_workspace (in particular its own decoy-free
+    node_modules layout) is disturbed by whatever gets planted in ``dest``.
+    """
+    shutil.copy2(pdf_workspace / "document.html", dest / "document.html")
+    shutil.copy2(pdf_workspace / "html-to-pdf.js", dest / "html-to-pdf.js")
+
+
+def _plant_decoy(workdir, name, marker):
+    """A node_modules/<name> a bare `require(name)` from /workspace would
+    reach, whose module body THROWS at require time rather than on first use.
+
+    The shape is load-bearing, not incidental. Node's resolution algorithm
+    treats a directory it cannot load as a package (no `main`, no
+    `index.js` it can find) as ABSENT and CONTINUES to the next candidate
+    rather than raising -- so a decoy missing either of these would be
+    silently skipped in favour of NODE_PATH, and the acceptance test below
+    would pass vacuously against unfixed code rather than because the fix
+    works.
+    """
+    pkg_dir = workdir / "node_modules" / name
+    pkg_dir.mkdir(parents=True)
+    (pkg_dir / "package.json").write_text(
+        json.dumps({"name": name, "version": "0.0.0-decoy", "main": "index.js"})
+    )
+    (pkg_dir / "index.js").write_text(f'throw new Error("{marker}");\n')
+
+
+@pytest.fixture(scope="session")
+def rendered_pdf_page(pdf_workspace):
+    """document.html, rendered once into the shared pdf_workspace.
+
+    Exactly what the `installed` fixture above does at test_pins.py:809 --
+    pipeline.render("doc", ...) over the same session-scoped workspace pytest
+    already paid to build the browser image for.
+    """
+    built = pipeline.render(
+        "doc", "document.md", "document.html", workdir=pdf_workspace
+    )
+    assert built.returncode == 0, f"pandoc failed\n{built.stderr}"
+    return pdf_workspace
+
+
+@pytest.fixture(scope="session")
+def decoy_tools_workdir(rendered_pdf_page, tmp_path_factory):
+    """The real generated html-to-pdf.js and a real rendered page, in an
+    isolated directory of its own carrying decoy node_modules/{puppeteer,
+    pdf-lib} -- never inside pdf_workspace itself, per the module comment
+    above. Session-scoped so the cost is paid once.
+    """
+    workdir = tmp_path_factory.mktemp("tools-resolution-decoy")
+    _copy_rendered_page(rendered_pdf_page, workdir)
+    for name, marker in DECOY_MARKERS.items():
+        _plant_decoy(workdir, name, marker)
+    return workdir
+
+
+@pytest.fixture(scope="session")
+def bare_tools_workdir(rendered_pdf_page, tmp_path_factory):
+    """The same two real generated files, with NO node_modules planted at
+    all -- kept separate from decoy_tools_workdir so
+    test_the_missing_tools_guard_names_the_pinned_dir is not also, silently,
+    a test about the decoy fixture above.
+    """
+    workdir = tmp_path_factory.mktemp("tools-resolution-bare")
+    _copy_rendered_page(rendered_pdf_page, workdir)
+    return workdir
+
+
+@pytest.mark.integration
+def test_html_to_pdf_ignores_a_decoy_in_the_workspace(decoy_tools_workdir):
+    """ACCEPTANCE for stn-cnm. Same image, same mount, same entrypoint as the
+    generated pdf compose service -- pipeline.html_to_pdf runs
+    `node html-to-pdf.js document.html document.pdf` over a directory that
+    also carries decoy node_modules/{puppeteer,pdf-lib}, planted above.
+
+    A decoy /workspace/node_modules/puppeteer with a wrong version must not
+    be used by make pdf: exit 0, a PDF actually written, and neither decoy's
+    marker anywhere in stderr.
+    """
+    result = pipeline.html_to_pdf(
+        "document.html",
+        "document.pdf",
+        workdir=decoy_tools_workdir,
+        timeout=180,
+    )
+    assert result.returncode == 0, (
+        f"html-to-pdf.js exited {result.returncode} instead of 0\n"
+        f"stderr:\n{result.stderr[-3000:]}"
+    )
+    assert (decoy_tools_workdir / "document.pdf").is_file(), (
+        "html-to-pdf.js exited 0 but wrote no document.pdf"
+    )
+    for name, marker in DECOY_MARKERS.items():
+        assert marker not in result.stderr, (
+            f"the {name} decoy's marker appeared in stderr, so the decoy "
+            f"ran instead of the pinned tree at {pipeline.BROWSER_TOOLS_DIR}:\n"
+            f"{result.stderr[-3000:]}"
+        )
+
+
+@pytest.mark.integration
+def test_a_workspace_decoy_would_win_a_bare_require(decoy_tools_workdir):
+    """CONTROL, and it must assert the RIGHT half.
+
+    The acceptance test's load-bearing assertion is exit 0; "the marker is
+    absent from stderr" is vacuous unless something proves the decoy WOULD
+    have produced that marker. Node's resolution algorithm treats a
+    directory it cannot load as a package as ABSENT and silently continues to
+    the next candidate rather than erroring -- so a decoy fixture that is
+    malformed in a way an implementer plausibly gets wrong on the first try
+    (no `main`, no `index.js` Node can find) would be skipped in favour of
+    NODE_PATH, and the acceptance test above would then pass vacuously
+    against unfixed code. This control is what would catch that: it proves,
+    in the same image and the same directory, that a bare `require` issued
+    from /workspace really does reach the decoy, before trusting the
+    acceptance test's silence about it.
+
+    pdf-lib gets its own assertion here rather than "the same as puppeteer by
+    symmetry": both decoys throw at module load and html-to-pdf.js's
+    puppeteer require comes first, so in the red state the script dies on
+    puppeteer and never reaches its pdf-lib require at all -- pdf-lib's
+    exposure would otherwise go completely unmeasured by the acceptance test,
+    and pdf-lib is the more damaging hijack of the two: it is what writes the
+    PDF/UA role map `make check-pdf` exists to require.
+    """
+    script = """
+const results = {};
+for (const name of ["puppeteer", "pdf-lib"]) {
+  const entry = { resolved: require.resolve(name) };
+  try {
+    require(name);
+    entry.threw = false;
+  } catch (error) {
+    entry.threw = true;
+    entry.message = String(error.message);
+  }
+  results[name] = entry;
+}
+console.log("<<<CONTROL>>>" + JSON.stringify(results));
+"""
+    result = pipeline.run_in_browser(script, workdir=decoy_tools_workdir, timeout=120)
+
+    marker = "<<<CONTROL>>>"
+    line = next(
+        (line for line in result.stdout.splitlines() if line.startswith(marker)), None
+    )
+    assert line is not None, (
+        f"the control script printed no result (exit {result.returncode})\n"
+        f"stdout: {result.stdout[-2000:]}\nstderr: {result.stderr[-2000:]}"
+    )
+    results = json.loads(line[len(marker):])
+
+    for name, expected_marker in DECOY_MARKERS.items():
+        entry = results[name]
+        assert entry["threw"], (
+            f"require({name!r}) issued from /workspace did not throw at all; "
+            f"the decoy fixture is malformed (Node treated it as absent "
+            f"rather than as a package), so the acceptance test would pass "
+            f"vacuously against unfixed code"
+        )
+        assert expected_marker in entry["message"], (
+            f"require({name!r}) threw {entry['message']!r}, which does not "
+            f"contain {expected_marker!r} -- something other than the "
+            f"planted decoy ran"
+        )
+        assert entry["resolved"].startswith("/workspace"), (
+            f"require.resolve({name!r}) resolved to {entry['resolved']!r}, "
+            f"not under /workspace -- the decoy would not have been reached "
+            f"by a bare require issued from there"
+        )
+
+
+@pytest.mark.integration
+def test_the_missing_tools_guard_names_the_pinned_dir(bare_tools_workdir):
+    """THE GUARD MUST BE PROVEN TO FIRE. AGENTS.md is explicit that a guard
+    which silently does not run is worse than no guard at all
+    (tests/test_export_drift.py exists for exactly that reason), and nothing
+    else in this file would notice if the resolution guard were ever deleted.
+
+    THE TWO ASSERTIONS BELOW ARE BOTH DISCRIMINATORS, AND NEITHER IS
+    NEGOTIABLE. The obvious pair -- "exited non-zero" and "stderr names the
+    tools directory" -- does NOT test the guard, measured: with the guard
+    block deleted from the rendered script, the UNGUARDED require throws
+    Node's own
+
+        Error: Cannot find module 'puppeteer'
+        Require stack:
+        - /opt/tools/package.json
+
+    which exits 1 and names /opt/tools twice, satisfying both. What separates
+    the guard from the raw MODULE_NOT_FOUND is the exit code it chooses (2,
+    matching the usage path, where an uncaught throw gives 1) and a phrase
+    only the guard's own message contains. Assert those, or this test is
+    measuring the createRequire root that the fast tier already covers.
+
+    pipeline.NODE_IMAGE is the plain node base image the generated
+    Dockerfile.browser starts FROM, before anything under
+    pipeline.BROWSER_TOOLS_DIR is installed -- so running html-to-pdf.js
+    there, over the same kind of mount the pdf service uses, is "somebody ran
+    `node html-to-pdf.js` on their laptop" made real rather than simulated.
+    One container invocation; it builds no second image, only running the
+    public tag pipeline.NODE_IMAGE already names (already pulled locally, as
+    the base layer of the browser image pdf_workspace built).
+    """
+    result = pipeline.html_to_pdf(
+        "document.html",
+        "document.pdf",
+        workdir=bare_tools_workdir,
+        tag=pipeline.NODE_IMAGE,
+        timeout=60,
+    )
+    assert result.returncode == 2, (
+        "html-to-pdf.js did not refuse through its own guard under a plain "
+        f"node image with no {pipeline.BROWSER_TOOLS_DIR} at all. Exit 2 is "
+        "the guard (and the usage path); exit 1 is an uncaught throw, which "
+        "is what an UNGUARDED require produces here -- so exit 1 means the "
+        f"guard is gone, not that it fired.\nexit: {result.returncode}\n"
+        f"stderr: {result.stderr[-2000:]}"
+    )
+    assert GUARD_PHRASE in result.stderr, (
+        f"the failure did not carry the guard's own message ({GUARD_PHRASE!r}). "
+        "Node's raw MODULE_NOT_FOUND also names "
+        f"{pipeline.BROWSER_TOOLS_DIR}, via its 'Require stack', so naming "
+        "the directory proves nothing on its own.\n"
+        f"stderr: {result.stderr[-2000:]}\nstdout: {result.stdout[-2000:]}"
+    )
+    assert pipeline.BROWSER_TOOLS_DIR in result.stderr, (
+        f"the failure did not name {pipeline.BROWSER_TOOLS_DIR}:\n"
+        f"stderr: {result.stderr[-2000:]}\nstdout: {result.stdout[-2000:]}"
+    )

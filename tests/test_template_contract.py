@@ -95,8 +95,19 @@ CONTRACT = {
     # prettier's own dependencies re-resolving on every run. StrictUndefined
     # cannot tell them so, because a copy reads none of these keys. Say it in
     # the release notes instead.
+    #
+    # format_lockfile_digest arrived with stn-qge, and is an addition of the
+    # same kind with a security consequence rather than a pinning one. The
+    # service reads its lockfile out of the mount and `npm ci` fetches whatever
+    # host each `resolved` names, so the entrypoint now refuses a lockfile that
+    # is not the one stencil wrote. A consumer whose composition INCLUDES this
+    # partial gets that refusal; one that COPIED the partial keeps a service
+    # that installs from whatever lockfile is in the package directory.
+    # StrictUndefined cannot tell them so, for the reason above: a copy reads
+    # none of these keys.
     "docker-compose-html.yml.j2": {
         "check_access_script",
+        "format_lockfile_digest",
         "format_lockfile_name",
         "format_manifest",
         "format_tools_dir",

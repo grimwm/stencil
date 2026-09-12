@@ -215,6 +215,59 @@ fixtures, and it is `stn-vda`. Concurrency is a third thing again: two runs
 sharing a `--basetemp`, or the one fixed browser image tag, corrupt each other
 (`stn-zim`).
 
+### The container tier runs in parallel with `-n auto --dist loadfile` (`stn-vda`)
+
+`pytest -n auto --dist loadfile` is the local fast path for the container
+tier — the same flags CI's integration job uses. `loadfile`,
+not xdist's default `load`: nine test files carry module- or file-scoped
+fixtures that each pay one container run to answer many assertions —
+`accessibility` in `test_check_access.py` at 44s, `installed` in
+`test_pins.py`, and the module-scoped fixtures in `test_pdf_ua`, `test_pdf`,
+`test_columns`, `test_painted_gaps` and `test_download`. Under `load`, a
+file's tests scatter across workers and each worker rebuilds that fixture —
+up to four times. A regression dressed as parallelism.
+
+The flag lives on the CI step, not in `[tool.pytest.ini_options]` addopts. In
+addopts it would change what plain `pytest` does for every contributor and
+break `-x` and `--pdb` by default, and a contributor who wants the speed can
+pass the two flags. Not, note, because the fast tier has nothing to gain: it
+goes from 18.18s to 5.24s under the same flags, which is a better ratio than
+the container tier manages. Being wrong about that is the reason it is written
+down — the argument for keeping the default serial is about `-x`, `--pdb` and
+a predictable plain `pytest`, and it does not need a speed claim that is
+false. The standing risk of a CI-only flag — a code path exercised
+only in CI can silently stop working, the same failure this file already
+records for the pre-push hook — is answered by `tests/test_parallel_harness.py`,
+which pins the two harness behaviours this depends on in the fast tier, not by
+trusting the job to notice.
+
+What it buys, measured on CI rather than predicted: the `pytest -v` step went
+from 565s to 352.95s and the job from 9m42s to 6m10s — 1.60x, not the 3.2-3.5x
+the plan expected. The plan assumed these tests are IO-bound on container
+startup; they are not. 65% of every container test is pandoc parsing the 5.3MB
+generated `html-template.html`, which is CPU and memory bandwidth, so four
+workers on four vCPUs contend: the four were saturated (busy 348s/327s/317s/343s
+of a 351s run, so the bin-packing is not the problem) and spent 1,335
+worker-seconds on work that costs 565s on one worker. Do not expect `-n auto`
+to scale further here without making the template smaller, which is the one
+cut this repository has decided not to take.
+
+Two of `stn-vda`'s three proposed fixes were measured and not taken, recorded
+here so the question does not get re-litigated from scratch. Widening fixture
+scope targets `stencil gen` at 31ms of an 870ms test — about 3.5% of the tier
+— while introducing shared mutable package directories across fifteen test
+files. Batching `test_dates.py`'s 102 builds into one container saves only the
+container starts (102 × 0.30s ≈ 31s), because each of the 102 still parses
+the same 5.3MB template, while turning a spreadable file into a serialized
+57s critical path. CHANGELOG.md's 0.39.0 entry carries the full per-container
+breakdown these numbers come from.
+
+One practical warning worth its line: a pytest run spawned as a subprocess
+from inside the suite must not inherit `$PYTEST_XDIST_WORKER`, or it announces
+itself as its own parent's worker and exempts itself from the basetemp guard.
+`conftest.inner_pytest_env()` is what strips it. Four guard tests
+failed this way the first time the fast tier ran in parallel.
+
 ## Architecture Overview
 
 **stencil is a scaffolding generator, not a renderer.** It never invokes pandoc.
@@ -258,6 +311,82 @@ git worktree add .claude/worktrees/<branch> -b <branch>
 ```
 
 `.claude/worktrees/` is gitignored for exactly this purpose.
+
+**A worktree run tests the worktree, and that took fixing** (`stn-2et`). Several
+source trees sharing one `pip install -e .` is the arrangement this section
+asks for, and pytest resolved it wrongly: `prepend` import mode puts
+`<checkout>/tests` on `sys.path` and never `<checkout>`, so `import stencil`
+fell through to the editable install's finder and resolved, by absolute path,
+to whichever checkout owned it. A worktree's suite graded the main checkout's
+source and reported a confident pass or fail about code nobody had touched.
+
+Measured, from a worktree using the main checkout's venv: `pytest` imported
+`<main>/stencil/__init__.py`, while `PYTHONPATH=$(pwd) pytest` over the same
+tree differed by two tests. The failing direction is the lucky one. The
+dangerous one is a broken change passing green because main's code is fine —
+or, with several worktrees in flight as there usually are here, one worktree
+quietly grading another's state.
+
+Two things hid it, and both are worth knowing because they are why the obvious
+check did not catch it:
+
+- `python -m pytest` was right all along — `-m` puts the cwd on `sys.path`
+  first. Only the console script, the one this file documents, was wrong.
+- `tests/test_cli.py`'s stn-12v guard passes either way. It derives
+  `REPO_ROOT` from `generate.__file__`, so it pins the CLI subprocess to
+  whatever the in-process import already chose: consistency, which is what it
+  was for, and not correctness. Under this bug both halves agreed on the wrong
+  tree.
+
+`pythonpath = ["."]` in `[tool.pytest.ini_options]` is the fix — the rootdir on
+`sys.path`, before `tests/conftest.py` is imported. **So a worktree changing
+only source needs no venv of its own**, and borrowing the main checkout's is
+fine.
+
+Only source, and the boundary is worth stating because it is where the fix
+stops helping. `pythonpath` decides which `stencil/` gets imported; it decides
+nothing about what is *installed*. A worktree that adds or bumps a dependency,
+adds a pytest plugin, changes an entry point in `pyproject.toml`, or touches
+packaging still needs its own venv — the borrowed one resolves imports from
+whatever was installed into it, and the new dependency simply is not there.
+The symptom is an honest `ModuleNotFoundError` rather than a silent wrong
+answer, which is why it is a footnote here and not a second ticket.
+
+That claim cost a second fix to make true. An inner pytest — the ones
+`test_parallel_harness.py` and `test_tmp_footprint.py` spawn to answer
+questions that cannot be answered from inside the process — gets no ini file
+of its own, so `pythonpath` never reaches it, and it resolved `stencil`
+through the interpreter's install: another checkout, under exactly the
+borrowing this paragraph blesses. Those runs had the same bug, one level
+down. `conftest.inner_pytest_env()` now appends this checkout to their
+`PYTHONPATH` — appended rather than prepended, because two tests hand an
+inner run a competing `stencil` on purpose and need it to win.
+
+What to expect if it ever stops working: `tests/conftest.py` refuses the run
+rather than reporting on it, naming the checkout whose tests are running, the
+`stencil` that got imported, and the two ways out. It compares against the
+conftest's own checkout rather than against `config.rootpath`, because this
+suite deliberately runs inner pytests that load this conftest against a
+throwaway rootdir and a rootdir rule would refuse those. `tests/test_worktree_imports.py`
+holds the guard's tests, including a control that the scaffolding still lands
+on the wrong tree when the setting is removed — without which the whole file
+could pass while measuring nothing.
+
+There is a door, and it is loud: `STENCIL_ALLOW_FOREIGN_STENCIL=1` lets a run
+proceed against a `stencil` from somewhere else — testing an installed wheel
+to check packaging, say — and warns on every run, including under `-q`, which
+is where the header would have been swallowed. A guard with no way past it is
+one somebody deletes outright the first time it blocks something legitimate;
+a guard that can be waved through in silence is not a guard.
+
+The cost of `pythonpath = ["."]`, accepted deliberately: the repository root
+now precedes site-packages on `sys.path` for every pytest run, where before
+only `tests/` did, so a top-level `yaml.py` or `filelock.py` would become the
+one this suite imports. That is not new power — CI builds fork pull requests,
+so landing a test file already runs code there, which is what `permissions: contents: read` and the absence of secrets are for — but it lets such a file
+look more ordinary than one inside `tests/`. `tests/test_worktree_imports.py`
+fails if any git-tracked name at the root starts shadowing an installed
+module, so the risk is watched rather than merely accepted.
 
 Roll forward from a mistake: `git revert`, or a follow-up commit that fixes it. Never
 `git reset --hard`, and never rewrite a branch that has already been pushed.
@@ -483,6 +612,17 @@ A generated package therefore carries two files it did not before —
 `browser-package-lock.json` and `format-package-lock.json`. The `package.json` each install
 needs is derived from the pins and written inline by the Dockerfile and the format-md
 entrypoint, so there is still one place a version is written down.
+
+Those two files land in a directory the consumer owns, and `npm ci` fetches whatever host
+each `resolved` names — so the format-md entrypoint checks the copy it is about to install
+from against the sha256 of the lockfile `stencil gen` wrote, and refuses anything else
+(`stn-qge`). **That digest is derived, not stored**: `pipeline.lockfile_digest()` hashes
+what `read_lockfile()` returns plus the newline the template restores, which is the file
+the package receives. Re-vendoring therefore stays the two steps above — the lockfile and
+its digest move together, and there is nothing extra to keep in sync by hand. A checksum
+is not a signature, and the comment above the service in `docker-compose-html.yml.j2` says
+what it does and does not prove. The browser image installs its lockfile the same way, out
+of the same directory, and does not check it yet — `stn-egv`.
 
 The one thing not pinned is Chromium, and that is a decision rather than an oversight —
 `stn-s5b`, with the measurements, in `Dockerfile.browser.j2`'s comment. Alpine keeps one
