@@ -2019,16 +2019,26 @@ def test_open_for_write_nofollow_refuses_a_fifo_before_fstat_is_reached(tmp_path
     `os.open` itself, before fstat is ever reached -- so a FIFO planted at a
     destination cannot block `gen` forever waiting for a reader that will
     never come.
+
+    The refusal now travels as a `ValueError` carrying the kernel's own
+    `strerror`, like the two `fstat` refusals beside it, rather than as a
+    raw `OSError` -- so this asserts on the CHAIN rather than on an errno
+    the message no longer hardcodes. `__cause__` is where the ENXIO lives,
+    and it is still ENXIO, which is the property this test is named for: had
+    the open blocked instead, there would be no exception at all and this
+    test would hang rather than fail.
     """
     target = tmp_path / "target"
     os.mkfifo(target)
 
-    with pytest.raises(OSError) as excinfo:
+    with pytest.raises(ValueError) as excinfo:
         generate.open_for_write_nofollow(target)
 
-    assert excinfo.value.errno == errno.ENXIO, (
-        f"expected ENXIO from O_NONBLOCK, got: {excinfo.value!r}"
+    cause = excinfo.value.__cause__
+    assert isinstance(cause, OSError) and cause.errno == errno.ENXIO, (
+        f"expected ENXIO from O_NONBLOCK under the ValueError, got: {cause!r}"
     )
+    assert "refusing to write it" in str(excinfo.value)
 
 
 def test_open_for_write_nofollow_still_replaces_a_longer_existing_file(tmp_path):
@@ -2705,3 +2715,39 @@ def test_an_ordinary_package_with_only_the_generated_makefile_still_generates(
 
     assert result.returncode == 0, result.stderr
     assert (package_dir / "Makefile").exists()
+
+
+def test_a_gnumakefile_symlinked_to_the_makefile_is_not_refused_on_a_fresh_checkout(
+    tmp_path,
+):
+    """`GNUmakefile -> Makefile` is a self-alias, not a shadow, and must be
+    accepted whether or not `Makefile` is on disk when `gen` runs.
+
+    Measured: `os.path.samefile` raises FileNotFoundError when the target
+    does not exist yet, so before the `readlink` fallback this alias was
+    ACCEPTED on a regenerate and REFUSED on a fresh checkout or the run
+    after `stencil clean` -- a refusal that depended on whether the
+    directory happened to have been cleaned. Measured on GNU Make 3.81:
+    such an alias runs the real Makefile's recipes, so refusing it protects
+    nothing.
+    """
+    config = {
+        "output_dir": "out",
+        "templates": [{"src": "Makefile.j2"}],
+        "packages": {"demo": {"name": "Demo", "package_type": "none"}},
+    }
+    write_config(tmp_path, config)
+
+    package = tmp_path / "out" / "demo"
+    package.mkdir(parents=True)
+    # The alias exists; its target does NOT yet -- the fresh-checkout shape.
+    (package / "GNUmakefile").symlink_to("Makefile")
+    assert not (package / "Makefile").exists(), "setup: target must be absent"
+
+    result = run_cli("gen", "demo", cwd=tmp_path)
+
+    assert result.returncode == 0, (
+        f"a self-alias must not be refused just because its target is not "
+        f"on disk yet: {result.stderr!r}"
+    )
+    assert (package / "Makefile").exists()

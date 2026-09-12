@@ -873,22 +873,31 @@ def test_an_absent_templates_key_still_works_for_install_and_clean(tmp_path):
         assert result.returncode == 0, f"{' '.join(args)}: {result.stderr}"
 
 
-def test_a_widen_check_that_cannot_derive_the_authorised_set_fails_closed(
+def test_a_directory_whose_own_packages_cannot_be_derived_keeps_the_manifest(
     tmp_path,
 ):
-    """_clean_one_directory's own defense in depth (stn-dl3r). When
-    `_config_derived_entries` cannot compute what a directory's packages
-    authorise, trusting the manifest anyway used to be the fallback -- the
-    one option that is never right on its own, since the widen check exists
-    precisely because the manifest is an unvalidated file on disk.
+    """When the authorised set for THIS directory cannot be computed, the
+    manifest is trusted and the clean proceeds -- the documented stn-p9a
+    trade, reached here directly rather than through the CLI.
 
-    Reached directly here, bypassing `clean_generated`'s own
-    `package_contexts` probe (which now catches a malformed top-level
-    `templates:` before this branch is ever reached that way -- see the
-    tests above): the group handed to `_clean_one_directory` includes a
-    package id the config does not have at all, so
-    `_config_derived_entries` cannot derive what that directory's packages
-    authorise, for a reason that has nothing to do with `templates:`.
+    THIS TEST ASSERTED THE OPPOSITE UNTIL THE ADVERSARIAL PASS, and the
+    change is worth recording rather than quietly editing. Refusing here was
+    right while this branch was gated on `config_readable`: reaching it then
+    meant the config had already satisfied `package_contexts`, so a local
+    derivation failure was an unexplained fault worth failing closed on.
+
+    That gate has been removed, because it was a WHOLE-CONFIG boolean and a
+    fault in any unrelated package switched the authority rule off for every
+    package -- restoring the original stn-jez attack at exit 0. With the
+    question narrowed to this directory, the branch now means what stn-p9a
+    always described: this package's own config cannot be read, so the
+    manifest `gen` wrote is the only thing that can name what is here.
+    Refusing here instead would deny the capability to precisely the
+    packages it was built for.
+
+    The group below includes a package id the config does not have at all,
+    so `_config_derived_entries` cannot derive what this directory
+    authorises, for a reason that has nothing to do with `templates:`.
     """
     from stencil.generate import MANIFEST_NAME, _clean_one_directory, write_manifest
 
@@ -910,9 +919,89 @@ def test_a_widen_check_that_cannot_derive_the_authorised_set_fails_closed(
         problems,
     )
 
-    assert (pkg_dir / "Makefile").exists(), "nothing should have been removed"
-    assert (pkg_dir / MANIFEST_NAME).exists(), "the manifest should survive too"
-    assert problems, "the failure to derive the authorised set must be reported"
-    message = "\n".join(problems)
-    assert "phantom" in message, f"the undeliverable package is not named: {message!r}"
-    assert "nothing was removed" in message.lower(), message
+    assert not (pkg_dir / "Makefile").exists(), (
+        "the manifest is the only authority here and it names Makefile"
+    )
+    assert not (pkg_dir / MANIFEST_NAME).exists(), (
+        "a clean that removed everything the manifest named removes it last"
+    )
+
+
+
+# --- stn-dl3r, the sibling key: `when` is part of the shape ----------------
+#
+# `_checked_template_defs` promises "the only shape a caller can go on to read
+# without checking again", and `validate_config` / `when_holds` both read
+# `tdef["when"]` with no check of their own. Found by the adversarial pass over
+# the implementation: with `when:` malformed, this ticket's own bug reproduced
+# verbatim for the neighbouring key.
+
+MALFORMED_WHEN_CASES = [
+    pytest.param(5, id="when-is-an-int"),
+    pytest.param({"a": "b"}, id="when-is-a-mapping"),
+    pytest.param([], id="when-is-an-empty-list"),
+    pytest.param(["ok", 7], id="when-list-has-a-non-string"),
+    pytest.param("", id="when-is-an-empty-string"),
+]
+
+
+@pytest.mark.parametrize("when", MALFORMED_WHEN_CASES)
+def test_a_malformed_when_is_named_through_package_contexts(when):
+    config = {
+        "templates": [{"src": "Makefile.j2", "when": when}],
+        "packages": {"demo": package()},
+    }
+    with pytest.raises(ValueError) as exc:
+        package_contexts(config)
+    message = str(exc.value)
+    assert "templates" in message, f"the key is not named: {message!r}"
+    assert "demo" in message, f"the affected package is not named: {message!r}"
+    for class_name in ("AttributeError", "KeyError", "TypeError"):
+        assert class_name not in message, (
+            f"a Python class name leaked into a config message: {message!r}"
+        )
+
+
+@pytest.mark.parametrize("when", MALFORMED_WHEN_CASES)
+@pytest.mark.parametrize(
+    "args", [("gen", "--all"), ("install",)], ids=["gen", "install"]
+)
+def test_a_malformed_when_fails_closed_through_the_cli(tmp_path, when, args):
+    """`install` is the half that matters most here.
+
+    Measured before the check covered `when`: `when: {a: b}` made `install`
+    exit 0 having written a managed `.gitignore` with `Makefile` MISSING from
+    it -- `all(...)` over a mapping walks its keys, so the template was
+    silently skipped -- while `gen` refused the same config outright. A config
+    one command calls broken and the other quietly acts on is worse than
+    either answer alone.
+    """
+    write_config(
+        tmp_path,
+        {
+            "templates": [{"src": "Makefile.j2", "when": when}],
+            "packages": {"demo": package()},
+        },
+    )
+
+    result = run_cli(*args, cwd=tmp_path)
+
+    assert result.returncode != 0, (
+        f"{args[0]} must refuse a malformed `when`, not act on it: "
+        f"{result.stdout + result.stderr!r}"
+    )
+    assert "Traceback" not in result.stderr, result.stderr
+    assert "templates" in (result.stdout + result.stderr)
+    assert not (tmp_path / ".gitignore").exists(), (
+        "nothing may be written by a run that refuses"
+    )
+
+
+def test_a_well_formed_when_still_passes():
+    """The regression guard: both legal spellings survive the new check."""
+    for when in ("has_pages", ["has_pages", "has_slides"]):
+        config = {
+            "templates": [{"src": "Makefile.j2", "when": when}],
+            "packages": {"demo": package()},
+        }
+        package_contexts(config)

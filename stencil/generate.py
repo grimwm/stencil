@@ -1613,6 +1613,28 @@ def _checked_template_defs(
         if not isinstance(src, str) or not src:
             dropped += 1
             continue
+        # `when` TOO, because this function's whole promise is "the only
+        # shape a caller can go on to read without checking again" -- and
+        # `validate_config` and `when_holds` both consume `tdef["when"]`
+        # with no check of their own. Measured before this was added, with
+        # `when: 5` in the same mapping stn-dl3r fixed: `gen` and `install`
+        # both tracebacked with a bare `TypeError: 'int' object is not
+        # iterable`, and `clean` put that class name into a config message
+        # -- this ticket's own description of the bug it closed, reproduced
+        # verbatim for the sibling key. Worse, `when: {a: b}` made `install`
+        # exit 0 having written a managed .gitignore with `Makefile` missing
+        # from it, because `all(...)` over a dict walks its KEYS: a config
+        # `gen` calls broken and `install` quietly acts on.
+        when = tdef.get("when")
+        if when is not None:
+            names = [when] if isinstance(when, str) else when
+            if (
+                not isinstance(names, list)
+                or not names
+                or not all(isinstance(name, str) and name for name in names)
+            ):
+                dropped += 1
+                continue
         kept.append(tdef)
 
     if not dropped:
@@ -2146,7 +2168,16 @@ def read_manifest(path: Path) -> dict:
 
     try:
         document = json.loads(
-            path.read_text(), object_pairs_hook=_reject_duplicate_manifest_keys
+            # UTF-8 explicitly, the same decision `write_text_nofollow`'s
+            # docstring settles for the write side and for the same reason:
+            # with no encoding this reads in the locale's preferred encoding,
+            # so what a manifest MEANS would depend on the shell that ran
+            # `clean`. Harmless for manifests stencil writes -- `json.dumps`
+            # defaults to ensure_ascii -- and not harmless for a hand-edited
+            # one, which under a non-UTF-8 locale decodes to mojibake and
+            # then trips the widen refusal with an entry name nobody can read.
+            path.read_text(encoding="utf-8"),
+            object_pairs_hook=_reject_duplicate_manifest_keys,
         )
     except (OSError, ValueError, RecursionError) as error:
         raise ManifestError(
@@ -2597,7 +2628,20 @@ def refuse_shadowed_makefile(
                 # spelling. Not a shadow.
                 continue
         except OSError:
-            pass
+            # `samefile` raises FileNotFoundError when the name this call
+            # writes is not on disk YET -- a fresh checkout, or the run
+            # after `stencil clean`. Falling straight through to the
+            # refusal there turned a benign self-alias into a refusal that
+            # depended on whether the directory had been cleaned: measured,
+            # `GNUmakefile -> Makefile` was accepted on a regenerate and
+            # refused on a fresh one. A link whose target is exactly the
+            # name being written is the same file by construction once that
+            # file exists, so read the link rather than stat through it.
+            try:
+                if os.readlink(pkg_path / entry) == own_name:
+                    continue
+            except OSError:
+                pass
         # THE MESSAGE: names the file, says what `make` would run
         # instead, and says what stops happening -- "delete or rename it"
         # alone was ruled insufficient by the architecture review, because
@@ -2683,11 +2727,21 @@ def checked_write_target(
     has (a CI runner, a shared teaching machine, an `out/` that arrived with
     a merged pull request).
 
-    It is closable, with a descriptor walk -- `os.open(component,
+    CLOSED SINCE stn-avv, on any platform with `dir_fd` support. That is
+    what `walk_dir_fd` does, 200-odd lines above this: `os.open(component,
     O_RDONLY|O_DIRECTORY|O_NOFOLLOW)` per component and `dir_fd=` on the
     write, so the object checked and the object written are the same inode
-    by construction. That is a larger change than this one and is filed with
-    its reproduction rather than described here as impossible.
+    by construction. `open_for_write_nofollow` additionally `fstat`s the
+    descriptor it just opened and re-applies the hardlink and
+    not-a-regular-file refusals to THAT inode, so all three of the refusals
+    above now hold at write time and not only as a snapshot.
+
+    WHAT REMAINS, and it is the reason this paragraph is rewritten rather
+    than deleted: where `_DIR_FD_CAPABLE` is False -- Windows, which has no
+    `O_DIRECTORY`, no `O_NOFOLLOW` and no `dir_fd` -- the write sites fall
+    back to the path-based behaviour and this window is open there exactly
+    as described above. The pre-pass below is then the only check, which is
+    what it was designed to be.
     """
     check_config_path(package_id, where, relative)
     target = pkg_path / relative
@@ -2863,7 +2917,26 @@ def open_for_write_nofollow(path: Path, *, dir_fd: int | None = None):
     # before this function ever gets a chance to refuse it. `os.ftruncate`
     # below does the same job, moved to AFTER the fstat gate.
     flags = os.O_WRONLY | os.O_CREAT | nofollow | nonblock
-    descriptor = os.open(path, flags, 0o666, dir_fd=dir_fd)
+    try:
+        descriptor = os.open(path, flags, 0o666, dir_fd=dir_fd)
+    except OSError as error:
+        # THE THIRD REFUSAL GETS A SENTENCE, like the two below it. This one
+        # closes the final-component symlink race and used to surface as a
+        # raw `OSError: [Errno 62] Too many levels of symbolic links:
+        # 'Makefile'` -- no statement that the destination is a link, no
+        # recovery, and under `dir_fd` a bare relative name that does not
+        # say which directory.
+        #
+        # strerror, never an errno diagnosis: `walk_dir_fd`'s DO NOT BRANCH
+        # ON ERRNO reasoning applies identically (ELOOP on Linux, ENOTDIR on
+        # macOS for the same plant), and a hardcoded errno sends a user
+        # searching the message to platform-specific answers.
+        raise ValueError(
+            f"could not open {str(path)!r} for writing ({error.strerror}) "
+            "-- refusing to write it. A symlink standing where a generated "
+            "file belongs is the usual cause, and `stencil clean` removes "
+            "one."
+        ) from error
     try:
         info = os.fstat(descriptor)
         if not stat.S_ISREG(info.st_mode):
@@ -3155,7 +3228,7 @@ def generate_package(
                 manifest_path.unlink()
 
         if not template_defs:
-            print(f"Error: No templates defined in config", file=sys.stderr)
+            print("Error: No templates defined in config", file=sys.stderr)
             return None
 
         render_templates(
@@ -3273,7 +3346,17 @@ def render_templates(
                 print(f"Generated: {output_path}")
 
         except Exception as e:
-            print(f"Error rendering {template_name}: {e}", file=sys.stderr)
+            # `_safe`, for the reason `_main`'s clean branch documents at
+            # length: this is a SECOND printer for a problem `_generate`
+            # also reports, and an unescaped copy landing one line above an
+            # escaped one is the "two halves of one report disagreeing"
+            # shape. `template_name` is the config's `src`, which reaches
+            # here unescaped, and a stn-avv walk refusal now travels this
+            # path too.
+            print(
+                f"Error rendering {_safe(template_name)}: {_safe(str(e))}",
+                file=sys.stderr,
+            )
             raise
 
 
@@ -4046,118 +4129,144 @@ def _clean_one_directory(
         # list an entry the config never derives for it, so field presence
         # was never the actual boundary.
         #
-        # Checked ONLY on `config_readable`: on the degraded path the
-        # manifest is the ONLY thing that can name what this directory
-        # holds -- not the config, which does not parse, and not a sibling's
-        # manifest, which names different files. That is the same trade
-        # stn-p9a documents for the degraded path generally, restated here
-        # rather than fixed: a documented limit, not a defect.
+        # NOT GATED ON `config_readable`, and that is a correction rather
+        # than a style choice. `config_readable` is a WHOLE-CONFIG boolean:
+        # `_main`'s clean branch clears it when `package_contexts` raises for
+        # ANY package, which includes a problem in a package this command
+        # never touches. Measured, before this was fixed: a single quoted
+        # `show_download: "no"` on an unrelated package `other` turned the
+        # rule below off for `demo`, and a planted manifest deleted
+        # `demo/important.txt` at exit 0 -- the original stn-jez attack,
+        # restored, with `clean`'s reassuring degraded warning printed
+        # directly above the deletion. A security rule that any unrelated
+        # typo switches off is not a rule.
         #
+        # So the question asked here is the narrow one that actually
+        # matters: can the authorised set FOR THIS DIRECTORY be derived,
+        # whatever the rest of the config is doing? `_config_derived_entries`
+        # already reports per-package and returns what it could derive, so
+        # asking it directly is both stricter and more honest than asking a
+        # global flag. It also means a config that fails `package_contexts`
+        # for an unrelated reason still gets the full check here, rather than
+        # dropping every directory to the degraded trade at once.
+        #
+        # The degraded trade itself is unchanged and still real -- see below
+        # -- but it is now scoped to a directory whose OWN packages cannot be
+        # derived, which is what the paragraph under it always claimed.
+
         # Checked against the manifest's OWN entries, computed here BEFORE
         # the `unnamed` union below adds a sibling package's config-derived
         # entries on top -- unioning first and checking after would let a
         # sibling's legitimate entries mask a forged one sitting in THIS
         # manifest.
-        if config_readable:
-            authorised_problems: list[str] = []
-            authorised = _config_derived_entries(
-                sorted(full_member_set), config, authorised_problems
+        authorised_problems: list[str] = []
+        authorised = _config_derived_entries(
+            sorted(full_member_set), config, authorised_problems
+        )
+        if authorised_problems:
+            # THE DOCUMENTED DEGRADED TRADE, and with the whole-config gate
+            # gone this branch is finally what that paragraph always claimed:
+            # the authorised set for THIS DIRECTORY could not be derived, so
+            # there is nothing to narrow this manifest against and the
+            # manifest is the only thing that can name what is here.
+            #
+            # Trusting it is correct precisely BECAUSE the question is now
+            # narrow. stn-p9a exists so that the one command someone reaches
+            # for BECAUSE their config broke is not the command that cannot
+            # answer: a package whose own config entry is malformed must
+            # still be cleanable from the manifest `gen` wrote for it, and
+            # `test_broken_config_with_manifests_on_both_packages_cleans_
+            # warns_and_exits_zero` is that promise written down.
+            #
+            # An earlier commit on this branch made this refuse instead, and
+            # that was right AT THE TIME for a reason that has since expired:
+            # the branch was then gated on `config_readable`, so reaching it
+            # meant the config had ALREADY passed `package_contexts` and a
+            # local derivation failure was a rare, unexplained fault worth
+            # failing closed on. Removing that gate changed what the branch
+            # MEANS, and refusing here now would deny the stn-p9a capability
+            # to exactly the packages it was built for -- measured: it turned
+            # six existing tests red, every one of them a statement about
+            # cleaning a package whose config is broken.
+            #
+            # What makes trusting it safe enough to write down is that it is
+            # no longer reachable by breaking SOMETHING ELSE. A fault in an
+            # unrelated package leaves this directory's derivation intact and
+            # the widen check below applies in full -- which is the whole
+            # point of the correction above, and was the hole before it.
+            pass
+        else:
+            # Compared as LITERAL STRINGS, unexpanded: both sides come
+            # from `package_entries`, so a glob pattern like
+            # `Guide*.html` appears the same way on both, and expanding
+            # either would compare apples to a set that was never meant
+            # to hold them. `MANIFEST_NAME` itself is exempt --
+            # `package_entries` never lists it (see its docstring: "the
+            # manifest does not list itself"), so it is not the
+            # caller's entry to authorise, and `_remove_entries` never
+            # receives it either.
+            # NO EXEMPTION FOR `MANIFEST_NAME`, and an earlier version of
+            # this line had one on the grounds that `package_entries` never
+            # lists the manifest so it "is not the caller's entry to
+            # authorise". That argument is backwards: because no honest
+            # manifest ever contains it, the exemption could only ever let a
+            # DISHONEST one through -- and it did. Measured: a manifest
+            # listing itself had `_remove_entries` unlink the manifest in the
+            # MIDDLE of the entry loop, and with one entry also refused
+            # (chflags uchg) the run ended with the refused file on disk and
+            # the manifest gone -- destroying the resume guarantee
+            # `test_manifest_survives_a_partial_clean` exists to hold, which
+            # is that a clean failing partway still leaves a manifest naming
+            # what is left. A self-listing manifest is a widened manifest;
+            # it gets the named refusal like any other.
+            widened = sorted(entry for entry in entries if entry not in authorised)
+            expected_dir = config["packages"][manifest_pkg].get(
+                "dir", manifest_pkg
             )
-            if authorised_problems:
-                # The authorised set itself could not be derived, so there is
-                # nothing reliable to narrow this manifest against.
-                #
-                # FAILS CLOSED (stn-dl3r), not "trust the manifest". Before
-                # stn-dl3r, this branch fell through and used the manifest
-                # anyway -- the one option that is never right on its own,
-                # since the widen check above exists precisely because the
-                # manifest is an unvalidated file on disk, and trusting it
-                # because the thing that bounds it could not be computed
-                # defeats the check. That was tolerated for exactly one
-                # commit: a malformed top-level `templates:` entry used to
-                # reach here because `package_contexts` skipped a
-                # non-mapping member silently, and refusing here too (before
-                # `package_contexts` named the shape mistake itself) would
-                # have made `clean` LESS able to clean a package whose
-                # manifest is perfectly good -- the capability stn-p9a
-                # exists to provide.
-                #
-                # That door is closed now: `package_contexts` (via
-                # `_checked_template_defs`) names a malformed `templates:`
-                # itself, so `clean_generated`'s own `package_contexts` call
-                # (in `_main`, above this) raises on it first,
-                # `config_readable` drops to False, and this branch is never
-                # reached through that door at all. What can still land here
-                # is a narrower, rarer fault local to computing THIS
-                # directory's authorised set (see `_config_derived_entries`)
-                # -- and refusing is still the right answer for it: nothing
-                # bounds what the manifest would be allowed to remove, so
-                # nothing is removed for the group, and the underlying
-                # problem(s) are surfaced so they can be fixed.
-                problems.append(
-                    f"Package(s) {', '.join(sorted(full_member_set))}: what "
-                    "the config authorises for this directory could not be "
-                    "derived, so its manifest cannot be checked against it "
-                    "-- nothing was removed. Fix the problem(s) below and "
-                    "run `clean` again."
-                )
-                problems.extend(authorised_problems)
-                return
-            else:
-                # Compared as LITERAL STRINGS, unexpanded: both sides come
-                # from `package_entries`, so a glob pattern like
-                # `Guide*.html` appears the same way on both, and expanding
-                # either would compare apples to a set that was never meant
-                # to hold them. `MANIFEST_NAME` itself is exempt --
-                # `package_entries` never lists it (see its docstring: "the
-                # manifest does not list itself"), so it is not the
-                # caller's entry to authorise, and `_remove_entries` never
-                # receives it either.
-                widened = sorted(
-                    entry
-                    for entry in entries
-                    if entry != MANIFEST_NAME and entry not in authorised
-                )
-                expected_dir = config["packages"][manifest_pkg].get(
-                    "dir", manifest_pkg
-                )
-                manifest_dir = manifest.get("dir")
-                dir_mismatch = manifest_dir != expected_dir
+            manifest_dir = manifest.get("dir")
+            dir_mismatch = manifest_dir != expected_dir
 
-                if widened or dir_mismatch:
-                    complaints = []
-                    if widened:
-                        complaints.append(
-                            "names "
-                            + ", ".join(repr(entry) for entry in widened)
-                            + ", which the config does not derive for it"
-                        )
-                    if dir_mismatch:
-                        complaints.append(
-                            f'declares "dir" {manifest_dir!r}, not '
-                            f"{expected_dir!r} as configured"
-                        )
-                    # THE CONSEQUENCE, WORDED ON PURPOSE (stn-jez): an
-                    # author who removes a template from the config and
-                    # then runs `clean` hits this exact message -- the
-                    # manifest legitimately names a file the current config
-                    # no longer derives. That is fail-closed and intended,
-                    # not a false positive, so the message says what to do
-                    # about it rather than only that something is wrong:
-                    # restore the config entry if the file is still wanted,
-                    # or delete the file (and, if nothing else in the
-                    # package needs cleaning, the manifest) by hand.
-                    problems.append(
-                        f"manifest for package {manifest_pkg!r} "
-                        + "; and it ".join(complaints)
-                        + " -- a manifest may narrow what the config "
-                        "authorises but never widen it, so nothing was "
-                        "removed for this package. Restore the removed "
-                        "config entry if the file(s) are still wanted, or "
-                        "delete the file(s) -- and the manifest, by hand. "
-                        f"Manifest: {manifest_path}"
+            if widened or dir_mismatch:
+                complaints = []
+                if widened:
+                    complaints.append(
+                        "names "
+                        + ", ".join(repr(entry) for entry in widened)
+                        + ", which the config does not derive for it"
                     )
-                    return
+                if dir_mismatch:
+                    complaints.append(
+                        f'declares "dir" {manifest_dir!r}, not '
+                        f"{expected_dir!r} as configured"
+                    )
+                # THE CONSEQUENCE, WORDED ON PURPOSE (stn-jez): an
+                # author who removes a template from the config and
+                # then runs `clean` hits this exact message -- the
+                # manifest legitimately names a file the current config
+                # no longer derives. That is fail-closed and intended,
+                # not a false positive, so the message says what to do
+                # about it rather than only that something is wrong:
+                # restore the config entry if the file is still wanted,
+                # or delete the file (and, if nothing else in the
+                # package needs cleaning, the manifest) by hand.
+                # KEPT SHORT, and the length is the point rather than a
+                # style preference. `_safe` truncates at
+                # _MAX_PROBLEM_CHARS and `_main`'s clean printer re-prefixes
+                # on top; the first draft of this message measured 491
+                # characters, so the tail was cut -- and the tail was the
+                # manifest path, which is the one thing the advice
+                # ("delete the manifest by hand") requires. The entry names
+                # carry the diagnosis, the advice carries the recovery, and
+                # the path goes last and now fits.
+                problems.append(
+                    f"package {manifest_pkg!r} "
+                    + "; and it ".join(complaints)
+                    + " -- a manifest may narrow what the config "
+                    "authorises, never widen it, so nothing was removed. "
+                    "Restore the config entry, or delete the file(s) and "
+                    f"the manifest by hand: {manifest_path}"
+                )
+                return
 
         entry_problems: list[str] = []
 

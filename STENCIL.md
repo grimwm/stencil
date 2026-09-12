@@ -333,8 +333,8 @@ carries — while `gen` printed `Generated:` and exited 0.
 `dir_fd` support, so `gen` keeps the path-based behaviour and the check-to-write window stays open
 there. Stated rather than implied away.
 
-Three limits remain on the write side, each one pinned by a test so this paragraph cannot quietly
-go stale:
+Two limits remain on the **write** side, each pinned by a test so this paragraph cannot quietly go
+stale — and one on the **delete** side, which this release does not touch:
 
 - **The output base itself**, and its own ancestors, are resolved by ordinary path lookup. There is
   no descriptor further up to walk from — `output_dir` *is* the start — and the declared output root
@@ -343,9 +343,11 @@ go stale:
   that is a symlink resolving back inside the output base is permitted and has been since 0.38.0.
   For that one component, containment rests on the earlier resolve rather than on the open.
   Everything *below* the package directory is descriptor-walked.
-- **The delete side is unchanged.** `clean` still resolves an entry's parent and then unlinks by
-  path, so that window is open; it is filed as `stn-cfby`. This release closed the write side, and
-  says only that.
+- **The delete side is unchanged**, and is not a write-side limit at all — it is listed here so the
+  set is complete. `clean` still resolves an entry's parent and then unlinks by path, so that window
+  is open; it is filed as `stn-cfby` and no test on this branch pins it, because closing it means
+  touching code this release deliberately left alone. This release closed the write side, and says
+  only that.
 
 A `.stencil-manifest.json` is **not** authenticated, and cannot be — every field stencil writes into
 one is guessable. What holds instead is an authority rule (`stn-jez`): **a manifest may narrow what
@@ -354,10 +356,19 @@ the config also derives for that package; anything else is named and *nothing* u
 removed. A manifest missing any field stencil's writer emits is refused outright rather than read
 as "no opinion", which is how a planted one used to slip past the ownership check.
 
-The one case that rule cannot cover is when the config does **not** parse. There the manifest is the
-only thing that can name what the directory holds, so it is trusted — that is the trade `clean`
-exists to make, and a forged manifest is then honoured. A documented limit, pinned by a test named
-after it, not a defect with a fix pending.
+The one case that rule cannot cover is when **the set that directory's own packages authorise cannot
+be derived** — because a package configured with it has a config entry that does not read. There the
+manifest is the only thing that can name what the directory holds, so it is trusted; that is the
+trade `clean` exists to make, and a forged manifest is then honoured. A documented limit, pinned by
+a test named after it, not a defect with a fix pending.
+
+Note how narrow that is, because an earlier draft of this paragraph was wrong about it in a way that
+mattered. The trigger is **not** "the config does not parse", and it is not any problem anywhere in
+the file: a fault in a package configured with some *other* directory leaves this one derivable, and
+the rule applies in full. It has to be that way. The gate was briefly a whole-config boolean, and a
+single quoted `show_download: "no"` on an unrelated package then switched the rule off for every
+package — restoring the planted-manifest deletion at exit 0, underneath a warning saying `clean` was
+fine. A security rule any unrelated typo disables is not a rule.
 
 One consequence worth knowing before it surprises you: if you remove a template from the config and
 then run `clean`, the manifest legitimately names a file the config no longer derives, and `clean`

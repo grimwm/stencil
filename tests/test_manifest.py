@@ -2863,41 +2863,141 @@ def test_a_manifest_naming_a_strict_subset_of_the_configs_entries_still_cleans(
     )
 
 
-def test_a_forged_manifest_is_honoured_in_degraded_mode_because_nothing_else_can_name_the_files(
-    tmp_path,
+def test_a_sibling_packages_config_error_does_not_disable_the_widen_check(
+    tmp_path, demo_config
 ):
-    """DOCUMENTED LIMIT, not a defect (operator: "a limit with no fix is
-    documentation"). When the config cannot be read at all, the manifest is
-    the ONLY thing that can name what a package's directory holds -- the
-    same trade stn-p9a documents for the degraded path generally. A forged
-    entry the widening check above would otherwise refuse survives here,
-    because on this path there is nothing to check it against.
+    """A fault in a package this command never touches must NOT switch the
+    authority rule off for the package it does touch.
+
+    THIS TEST REPLACES ONE THAT ASSERTED THE OPPOSITE, and the one it
+    replaces was a pin of a live vulnerability rather than of a decision.
+    The rule used to be gated on `config_readable`, a WHOLE-CONFIG boolean
+    that `_main` clears when `package_contexts` raises for ANY package. So a
+    single quoted `show_download: "no"` on an unrelated sibling restored the
+    original stn-jez attack in full: measured, a planted manifest deleted a
+    hand-written file at exit 0, with `clean`'s reassuring degraded warning
+    printed immediately above the deletion.
+
+    The gate is now the narrow question -- can the authorised set for THIS
+    directory be derived? -- so a sibling's fault is irrelevant to it.
     """
     initially_fine = copy.deepcopy(GOOD_AND_BROKEN_CONFIG)
     del initially_fine["packages"]["broken"]["show_download"]
     write_config(tmp_path, initially_fine)
-    setup = run_cli("gen", "good", cwd=tmp_path)
+    setup = run_cli("gen", "--all", cwd=tmp_path)
     assert setup.returncode == 0, setup.stderr
 
+    (tmp_path / "good" / ".env").write_text("SECRET=1\n")
     manifest_path = tmp_path / "good" / MANIFEST_NAME
     manifest = json.loads(manifest_path.read_text())
     manifest["entries"].append(".env")
     manifest_path.write_text(json.dumps(manifest))
-    (tmp_path / "good" / ".env").write_text("SECRET=1\n")
 
-    # Now break the sibling package so the WHOLE config fails to parse --
-    # clean_generated's config_readable becomes False for every package in
-    # scope, "good" included, even though "good" is not what is broken.
+    # Break ONLY the sibling. `good` itself is untouched and derivable.
     write_config(tmp_path, GOOD_AND_BROKEN_CONFIG)
 
     result = run_cli("clean", "good", cwd=tmp_path)
 
-    assert result.returncode == 0, (
-        f"good has its own manifest; the degraded path must still succeed "
-        f"for it: {result.stderr}"
+    assert (tmp_path / "good" / ".env").exists(), (
+        "a sibling package's config error must not disable the widen check "
+        f"for this one: {result.stdout + result.stderr!r}"
     )
-    assert not (tmp_path / "good" / ".env").exists(), (
-        "documented limit: with the config unreadable, the manifest is the "
-        "sole authority and a forged entry is removed along with "
-        "everything else -- this is the trade, not a bug"
+    assert result.returncode != 0
+    assert "Traceback" not in result.stderr, result.stderr
+    assert ".env" in (result.stdout + result.stderr)
+
+
+def test_a_forged_manifest_is_honoured_when_this_directory_cannot_be_derived(
+    tmp_path,
+):
+    """DOCUMENTED LIMIT, not a defect (operator: "a limit with no fix is
+    documentation").
+
+    When the authorised set for THIS directory cannot be derived, the
+    manifest is the only thing that can name what is here -- not the config,
+    which is what failed, and not a sibling's manifest, which names other
+    files. So it is trusted, and a forgery is honoured. That is the trade
+    stn-p9a exists to make: the one command someone reaches for BECAUSE
+    their config broke must not be the command that cannot answer.
+
+    Note how much narrower this limit is than it used to be. It needs the
+    fault to be in a package configured with THIS directory; a fault
+    anywhere else in the config no longer reaches it. See the test above
+    for the case that used to land here and no longer does.
+    """
+    broken = copy.deepcopy(GOOD_AND_BROKEN_CONFIG)
+    initially_fine = copy.deepcopy(broken)
+    del initially_fine["packages"]["broken"]["show_download"]
+    write_config(tmp_path, initially_fine)
+    setup = run_cli("gen", "--all", cwd=tmp_path)
+    assert setup.returncode == 0, setup.stderr
+
+    # The forgery goes on the package whose OWN config entry is about to
+    # become underivable.
+    (tmp_path / "broken" / ".env").write_text("SECRET=1\n")
+    manifest_path = tmp_path / "broken" / MANIFEST_NAME
+    manifest = json.loads(manifest_path.read_text())
+    manifest["entries"].append(".env")
+    manifest_path.write_text(json.dumps(manifest))
+
+    write_config(tmp_path, broken)
+
+    result = run_cli("clean", "broken", cwd=tmp_path)
+
+    assert result.returncode == 0, (
+        "broken has its own manifest and its config cannot be derived, so "
+        f"the documented degraded trade applies: {result.stderr!r}"
+    )
+    assert not (tmp_path / "broken" / ".env").exists(), (
+        "documented limit: with this directory underivable, the manifest is "
+        "the only authority and a forged entry is honoured"
+    )
+
+
+
+# --- stn-jez, the exemption that only helped a forgery ----------------------
+
+
+def test_a_manifest_that_lists_itself_is_refused_not_exempted(
+    tmp_path, generate_package
+):
+    """A manifest naming `.stencil-manifest.json` among its own entries is a
+    WIDENED manifest and gets the named refusal.
+
+    An earlier version of the widen check exempted `MANIFEST_NAME` on the
+    grounds that `package_entries` never lists it, so it "is not the caller's
+    entry to authorise". That reasoning is backwards, and the adversarial pass
+    over the implementation proved it: because no honest manifest ever
+    contains it, the exemption could only ever admit a dishonest one -- and
+    the exemption's own comment claimed `_remove_entries` never receives the
+    name, which was false. `entries` is the manifest's list, unfiltered.
+
+    The harm was not hypothetical. With the exemption in place a self-listing
+    manifest had the manifest unlinked in the MIDDLE of the entry loop, and
+    with one further entry refused the run ended with the refused file still
+    on disk and the manifest gone -- destroying the resume guarantee
+    `test_manifest_survives_a_partial_clean` exists to hold.
+    """
+    config = {
+        "output_dir": "out",
+        "templates": [{"src": "Makefile.j2"}],
+        "packages": {"demo": {"name": "Demo", "package_type": "none"}},
+    }
+    generated = generate_package(config)
+
+    manifest_path = generated / MANIFEST_NAME
+    manifest = json.loads(manifest_path.read_text())
+    manifest["entries"].append(MANIFEST_NAME)
+    manifest_path.write_text(json.dumps(manifest))
+
+    result = run_cli("clean", "demo", cwd=tmp_path)
+
+    assert result.returncode != 0, "a self-listing manifest must be refused"
+    assert "Traceback" not in result.stderr, result.stderr
+    assert MANIFEST_NAME in (result.stdout + result.stderr), (
+        "the offending entry must be named"
+    )
+    assert manifest_path.exists(), "nothing is removed for a refused package"
+    assert (generated / "Makefile").exists(), (
+        "the refusal is whole-package: no entry is removed"
     )

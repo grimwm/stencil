@@ -19,8 +19,11 @@ How the version gets bumped is written down in
   manifest stencil ever wrote is affected. That alone stops a *malformed* manifest and not a forged
   one, since every field in a manifest is guessable, so the authority rule is the real fix: when the
   config is readable, `clean` removes only entries the config also derives, and refuses the package
-  by name otherwise. When the config does not parse, the manifest remains the only authority — a
-  documented limit, pinned by a test. **Consequence:** removing a template from the config and then
+  by name otherwise. The rule is scoped per directory, not per config: a fault in an unrelated
+  package does not switch it off — an earlier draft gated it on a whole-config flag, and a quoted
+  `show_download: "no"` elsewhere in the file then restored the original attack at exit 0. When the
+  set a directory's own packages authorise cannot be derived, the manifest remains the only
+  authority — a documented limit, pinned by a test. **Consequence:** removing a template from the config and then
   running `clean` now refuses that package instead of removing the file the manifest remembers.
 
 - **`gen` writes through descriptors, so the file it checked is the file it wrote** (`stn-avv`).
