@@ -1460,3 +1460,93 @@ def test_gen_dry_run_refuses_a_planted_write_target(tmp_path):
         f"rc={result.returncode}, stdout={result.stdout[:400]!r}"
     )
     assert target.read_text() == "PRECIOUS\n"
+
+
+@pytestmark_h5q
+def test_gen_refuses_a_fifo_at_a_destination(tmp_path):
+    """The node type a symlink-and-hardlink check does not look at, found by
+    the adversarial review of this change's own plan.
+
+    A FIFO is neither a symlink nor a regular file, `O_NOFOLLOW` has nothing
+    to say about it, and `mkfifo` needs no privilege. Measured against the
+    draft that refused only those two types: `os.open(fifo,
+    O_WRONLY|O_CREAT|O_TRUNC|O_NOFOLLOW)` BLOCKED INDEFINITELY -- `stencil
+    gen` hung with no timeout, and `clean` then exited 0 leaving the FIFO in
+    place, because `_remove_entries` gates on `path.is_file()`. So the
+    cheapest of the five unhandled types produced both harms the ticket is
+    about at once.
+
+    The check is an allowlist for exactly this reason: a regular file with
+    one link at the last component, a directory at every other. Five node
+    types are refused by saying what IS allowed rather than by enumerating
+    what is not."""
+    config_dir, package_dir, _target = _planted_package(tmp_path)
+    os.mkfifo(package_dir / "Makefile")
+
+    result = run_cli("gen", "demo", cwd=config_dir, timeout=60)
+
+    assert result.returncode != 0, (
+        f"rc={result.returncode}, stdout={result.stdout[:400]!r}"
+    )
+    assert "Traceback" not in result.stderr, result.stderr
+
+
+@pytestmark_h5q
+def test_gen_refuses_a_symlinked_subdirectory_pointing_back_inside(tmp_path):
+    """gen is STRICTER than clean here, deliberately, and that is pinned
+    rather than left to be discovered.
+
+    `_remove_entries` permits an intermediate symlink that resolves back
+    inside the package -- it resolves the parent and the containment holds,
+    so `clean` cleans such a package happily. `gen` refuses it anyway: a
+    link is not something `gen` created, and following one is how the three
+    cases above went wrong.
+
+    So the invariant this change establishes is "gen is at least as strict
+    as clean", not "gen and clean agree". Anything gen writes, clean can
+    remove; the converse is not claimed."""
+    config_dir, package_dir, _target = _planted_package(
+        tmp_path, templates=[{"src": "Makefile.j2", "dest": "sub/Makefile"}]
+    )
+    (package_dir / "real").mkdir()
+    (package_dir / "sub").symlink_to(package_dir / "real")
+
+    result = run_cli("gen", "demo", cwd=config_dir)
+
+    assert result.returncode != 0, (
+        f"rc={result.returncode}, stdout={result.stdout[:400]!r}"
+    )
+    assert "symlink" in result.stderr, result.stderr
+
+
+def test_a_template_dest_derived_from_src_is_checked_too(tmp_path):
+    """`package_contexts` checks a DECLARED `dest` and skips the key when it
+    is absent -- and the destination is then `src` with `.j2` removed, while
+    `src` goes through no check anywhere.
+
+    Measured before the fix: `src: "a b.txt.j2"` generated `a b.txt` at exit
+    0, recorded it in the manifest, and `stencil clean` then refused ITS OWN
+    manifest entry for containing whitespace -- so the package was
+    permanently un-cleanable and the complaint named a "manifest entry" the
+    author never wrote. That is stn-9rn's harm exactly, arriving through the
+    key nobody checked.
+
+    The refusal names `src`, not `dest`: the author wrote `src`, and a
+    message naming a key that is not in their config sends them hunting."""
+    write_config(
+        tmp_path,
+        {
+            "templates": [{"src": "a b.txt.j2"}],
+            "packages": {"demo": {"name": "Demo", "package_type": "none"}},
+        },
+    )
+
+    result = run_cli("gen", "demo", cwd=tmp_path)
+
+    assert result.returncode != 0, (
+        f"rc={result.returncode}, stdout={result.stdout[:400]!r}"
+    )
+    assert "src" in result.stderr, result.stderr
+    assert not (tmp_path / "demo" / "a b.txt").exists(), (
+        "gen wrote a file clean would then refuse to remove"
+    )

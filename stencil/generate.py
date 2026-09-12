@@ -1903,7 +1903,26 @@ def template_destinations(template_defs: list, context: dict) -> list[tuple[str,
         if not when_holds(tdef, context):
             continue
         src = tdef["src"]
-        destinations.append((src, tdef.get("dest", template_dest(src))))
+        declared = tdef.get("dest")
+        # PROVENANCE-INDEPENDENT (adversarial review of stn-h5q, HIGH 3).
+        # `package_contexts` checks a DECLARED `dest` and skips the key when
+        # it is absent -- but the destination is then `src` with `.j2`
+        # removed, and `src` goes through no check anywhere. Measured:
+        # `src: "a b.txt.j2"` generated `a b.txt` at exit 0, recorded it in
+        # the manifest, and `clean` then refused ITS OWN manifest entry for
+        # containing whitespace -- a permanently un-cleanable package whose
+        # error names a "manifest entry" the author never wrote. That is
+        # stn-9rn's harm arriving through the one key nobody checked, and
+        # this is the single place both spellings of the destination now
+        # pass through.
+        #
+        # `where` names the key the AUTHOR wrote, not the one stencil
+        # derived, so the message points at the line to edit.
+        dest = declared if declared is not None else template_dest(src)
+        check_config_path(
+            "config", "dest" if declared is not None else "src", dest
+        )
+        destinations.append((src, dest))
     return destinations
 
 
@@ -2036,12 +2055,28 @@ def checked_write_target(
     `pkg_path` must already be resolved (`contained_path`'s return value),
     the same contract `_remove_entries` has.
 
-    WHAT IT DOES NOT CLOSE, stated rather than implied: a symlink planted at
-    an intermediate directory BETWEEN this check and the write. The write
-    sites add O_NOFOLLOW, which covers the final component only. That is the
-    same limit stn-vhr already documents for the package directory -- anyone
-    who can swap a directory for a symlink mid-run can already write
-    wherever the running user can.
+    WHAT IT DOES NOT CLOSE, stated exactly rather than comfortably: a
+    symlink planted at an INTERMEDIATE directory between this check and the
+    write. The write sites add O_NOFOLLOW, which covers the final component
+    only, and `render_templates` joins its path unresolved -- so such a
+    write lands outside the output base with no containment left, and the
+    manifest then names entries whose parent `clean` resolves through the
+    same link, which means `clean` deletes there too.
+
+    An earlier draft of this paragraph borrowed stn-vhr's sentence -- "anyone
+    who can swap a directory for a symlink mid-run can already write wherever
+    the running user can" -- and that is NOT true here and is not repeated.
+    Swapping a component needs write permission on ONE directory inside the
+    output tree; being the running user is a different and much larger
+    capability, and the gap between them is exactly the deployment stencil
+    has (a CI runner, a shared teaching machine, an `out/` that arrived with
+    a merged pull request).
+
+    It is closable, with a descriptor walk -- `os.open(component,
+    O_RDONLY|O_DIRECTORY|O_NOFOLLOW)` per component and `dir_fd=` on the
+    write, so the object checked and the object written are the same inode
+    by construction. That is a larger change than this one and is filed with
+    its reproduction rather than described here as impossible.
     """
     check_config_path(package_id, where, relative)
     target = pkg_path / relative
@@ -2113,6 +2148,12 @@ def checked_write_target(
                 f"Package {package_id}: {where} {relative!r} already exists "
                 "and is not a regular file -- refusing to write over it."
             )
+        # st_nlink ONLY on a regular final component. Directories always
+        # have st_nlink >= 2 (`.` and the parent's entry), so leaking this
+        # rule onto intermediate components would refuse every config on
+        # earth -- and a directory hardlink is not a vector to cover anyway:
+        # `os.link()` on a directory is EPERM on macOS and unsupported on
+        # Linux.
         if info.st_nlink > 1:
             raise ValueError(
                 f"Package {package_id}: {where} {relative!r} is a hardlink "
@@ -2147,11 +2188,19 @@ def open_for_write_nofollow(path: Path):
     which is the same accommodation the brand read makes.
     """
     nofollow = getattr(os, "O_NOFOLLOW", 0)
-    flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC | nofollow
+    # O_NONBLOCK, for the one node type O_NOFOLLOW says nothing about.
+    # `checked_write_target` refuses a FIFO at a destination, but that is a
+    # snapshot; one swapped in afterwards would otherwise block this open
+    # FOREVER -- no timeout, a CI job burning its whole wall clock -- and
+    # `mkfifo` needs no privilege at all. With O_NONBLOCK and no reader the
+    # same open fails ENXIO. On a regular file POSIX says the flag has no
+    # effect, so this costs the ordinary path nothing.
+    nonblock = getattr(os, "O_NONBLOCK", 0)
+    flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC | nofollow | nonblock
     return os.fdopen(os.open(path, flags, 0o666), "wb")
 
 
-def write_text_nofollow(path: Path, text: str) -> None:
+def write_text_nofollow(path: Path, text: str, executable: bool = False) -> None:
     """`Path.write_text` without following a symlink at the final component.
 
     UTF-8, DECIDED RATHER THAN INHERITED. `Path.write_text` with no encoding
@@ -2165,9 +2214,22 @@ def write_text_nofollow(path: Path, text: str) -> None:
     worth avoiding, so it is settled here, out loud: UTF-8 on every platform.
     On any machine whose locale was already UTF-8 -- which is CI and every
     developer machine this has run on -- nothing about the bytes changes.
+
+    `executable` marks the file `+x` through the descriptor just written,
+    rather than by re-opening the path: see the call site in
+    `render_templates`.
     """
     with open_for_write_nofollow(path) as handle:
         handle.write(text.encode("utf-8"))
+        if executable:
+            descriptor = handle.fileno()
+            os.fchmod(
+                descriptor,
+                os.fstat(descriptor).st_mode
+                | stat.S_IXUSR
+                | stat.S_IXGRP
+                | stat.S_IXOTH,
+            )
 
 
 def generate_package(
@@ -2297,20 +2359,18 @@ def render_templates(
                 # stn-h5q: O_NOFOLLOW. generate_package has already refused
                 # a symlink at this path; this closes the window between
                 # that check and this write.
-                write_text_nofollow(output_path, content)
-                # Set execute bit on shell scripts. `stat()` FOLLOWS a
-                # symlink, which would matter if the final component could
-                # still be one -- it cannot: the O_NOFOLLOW write above has
-                # just succeeded on this path, which proves it is not a link.
-                # Left as-is deliberately, and said here so the next reviewer
-                # does not file it again.
-                if output_path.suffix == ".sh":
-                    output_path.chmod(
-                        output_path.stat().st_mode
-                        | stat.S_IXUSR
-                        | stat.S_IXGRP
-                        | stat.S_IXOTH
-                    )
+                # The execute bit is set THROUGH THE SAME DESCRIPTOR that
+                # was just written, never by re-opening the path
+                # (adversarial review of stn-h5q, MEDIUM 5). `Path.stat()`
+                # and `Path.chmod()` both follow symlinks, so a link swapped
+                # in between the write closing and the chmod would have got
+                # an arbitrary file marked executable -- a race the
+                # O_NOFOLLOW write closes for itself and reopened here.
+                # `fchmod` on the open fd cannot name anything but the file
+                # actually written.
+                write_text_nofollow(
+                    output_path, content, executable=output_path.suffix == ".sh"
+                )
                 print(f"Generated: {output_path}")
 
         except Exception as e:
