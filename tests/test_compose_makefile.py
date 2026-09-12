@@ -1576,6 +1576,51 @@ def test_an_out_of_class_build_date_is_refused_by_every_target_that_stamps_it(
     assert "BUILD_DATE" in combined, f"the failure does not name BUILD_DATE:\n{combined}"
 
 
+def test_the_pkg_target_stamps_and_so_it_checks_too(require_make, pkg_sources_package):
+    """Makefile-pkg.j2's `pkg` interpolates METADATA_FLAGS, so it validates too.
+
+    The package shape matters: `pkg` only drives compose in the
+    has_package_sources arm (the zip arm archives with tar or zip, and
+    package_type "none" renders nothing but clean-pkg), which is why this uses
+    pkg_sources_package rather than the pages fixture every other test in this
+    tier uses -- the target does not exist in the other shape.
+
+    FOUND BY REVIEW, not by design: the first version of this change wired the
+    check into `pkg` and then documented the validating targets as "doc, slide,
+    pdf, check-pdf -- and nowhere else", which was wrong in the direction that
+    matters, and no test covered the fifth one.
+
+    THE PROBE IS BUILD_DATE, NOT WITH, AND THAT IS THE WHOLE POINT. WITH is
+    checked at PARSE time, so a hostile WITH never reaches any target and this
+    test passed with the prefix deleted -- measured, on the first draft, which
+    is exactly the decoration this module refuses to keep. BUILD_DATE is
+    checked ONLY at the point of use, so it is the only value that can tell
+    whether `pkg` carries the check. Goes red when the prefix is dropped from
+    Makefile-pkg.j2: measured, `make pkg` then exits 0 with the out-of-class
+    date interpolated into the recipe.
+    """
+    out_of_class = "2026-09-12T14:30:00Z"
+    env_vars = clean_env()
+    env_vars["BUILD_DATE"] = out_of_class
+    result = subprocess.run(
+        ["make", "--no-print-directory", "-n", "pkg", "DC=true"],
+        cwd=pkg_sources_package, capture_output=True, text=True, env=env_vars,
+    )
+    combined = result.stdout + result.stderr
+    assert result.returncode != 0, outcome(
+        "`make pkg` accepted an out-of-class BUILD_DATE", result
+    )
+    assert "BUILD_DATE" in combined, f"the failure does not name BUILD_DATE:\n{combined}"
+
+    control = make_n(pkg_sources_package, "pkg", "WITH=solutions", dc="true")
+    assert control.returncode == 0, outcome(
+        "POSITIVE CONTROL: a legitimate `make pkg` failed", control
+    )
+    assert "--metadata include-solutions=true" in control.stdout, (
+        f"`pkg` stopped passing WITH through at all:\n{control.stdout}"
+    )
+
+
 # --- the date class and the frontmatter grammar cannot drift ---------------
 
 
@@ -1606,7 +1651,9 @@ def _rendered_date_class(env) -> set[str]:
     )
     text = env.get_template("Makefile-doc.j2").render(context)
     line = next(
-        l for l in text.splitlines() if l.startswith("_stencil_chars_date :=")
+        rendered
+        for rendered in text.splitlines()
+        if rendered.startswith("_stencil_chars_date :=")
     )
     return set(line.split(":=", 1)[1].split())
 

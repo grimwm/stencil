@@ -465,7 +465,8 @@ make doc COMPOSE_FILES="docker-compose.yml docker-compose.override.yml"
   `2026-13-45` passes here and is refused later, by the filter, with a message about months.
 
   The check runs on the targets that actually stamp a date — `doc`, `slide`, `pdf`,
-  `check-pdf` — and nowhere else, so an unrelated `BUILD_DATE` in your environment (the OCI
+  `check-pdf`, and `pkg` for a `doc` package built from `package_sources` — and nowhere else,
+  so an unrelated `BUILD_DATE` in your environment (the OCI
   `org.opencontainers.image.created` convention uses that name, and its `Z` is out of class)
   leaves `make help`, `make clean` and `make format-md` working. On a stamping target it is a
   hard error naming the variable; `make doc BUILD_DATE=` builds with the container's own date

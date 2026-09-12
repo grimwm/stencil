@@ -21,8 +21,8 @@ How the version gets bumped is written down in
   generated package, `DC= make doc` broke in two places at once: the probe's runtime is
   `$(firstword $(subst -, ,$(DC)))`, which is empty, so the recipe began with the probe's own
   arguments and ran a program named `image` from anywhere on `PATH` — with both streams sent to
-  `/dev/null` — while every compose line expanded to ` -f docker-compose.yml …` and make stripped
-  the leading `-` as its ignore-errors prefix, so `/bin/sh: f: command not found` was ignored *by
+  `/dev/null` — while every compose line expanded to a leading-space `-f docker-compose.yml …`
+  and make stripped that `-` as its ignore-errors prefix, so `/bin/sh: f: command not found` was ignored *by
   construction*. `make doc` printed "Generated docs" and wrote no HTML. It is now refused both at
   parse time and at the point of use, the second being what catches a composition that includes
   the partial and empties `DC` afterwards.
@@ -50,7 +50,7 @@ How the version gets bumped is written down in
   convention, whose `Z` is out of class — so a parse-time check would abort `make help` and
   `make clean` for anyone who exported it once for something unrelated. That is the same call
   `stn-3y8` made in leaving a stray `CONTAINER` inert rather than fatal. The class is enforced on
-  `doc`, `slide`, `pdf` and `check-pdf`; `make doc BUILD_DATE=` still builds, with the
+  `doc`, `slide`, `pdf`, `check-pdf` and `pkg`; `make doc BUILD_DATE=` still builds, with the
   container's own date.
 
   **`MAKEFLAGS=--eval` remains open, and `stn-2je` is closed saying so.** Two defences were built
@@ -188,7 +188,6 @@ How the version gets bumped is written down in
   longer redirects `make format-md`. A hand-run `docker compose` with no `-f`
   still merges an override, as compose has always done. The note enumerated only
   edits to the two files in the package, which read as exhaustive and was not.
-
 
 - **The generated Makefile's image probe no longer runs a command taken from the
   environment** (`stn-3y8`). The pull guard needs a container runtime rather than a compose
