@@ -377,6 +377,30 @@ def test_every_legitimate_dc_spelling_passes_the_flag_guard(
 
 # --- (d): the template scan, as an allowlist --------------------------------
 
+def makefile_templates() -> list[Path]:
+    """Every template make itself ever reads, wherever it lives.
+
+    `Makefile*.j2` RATHER THAN `*.j2`, and rglob rather than glob, so a future
+    `Makefile-check.j2` -- including one nested under a subdirectory such as
+    templates/make/ -- is covered without anyone remembering to list it, while
+    a template make never reads is not scanned for make syntax.
+
+    THE NARROWING IS NOT COSMETIC. `$(DC)` inside a `.js.j2` or a `.yml.j2` is
+    not a make variable reference at all: make never reads those files, so
+    nothing there can unpin anything. MEASURED, and the reason this helper
+    exists: `html-to-pdf.js.j2` carries the line
+
+        // package directory and the Makefile runs `$(DC) build pdf` before every
+
+    -- a JavaScript comment *describing* the Makefile -- and a scan over every
+    `*.j2` flagged it as an offender. The scans below skip `#` comments, which
+    is make's comment character and not JavaScript's, so no amount of
+    comment-stripping fixes that; the file simply is not a Makefile. Compose
+    is invoked from recipes, and recipes only exist in these files.
+    """
+    return sorted(TEMPLATES_DIR.rglob("Makefile*.j2"))
+
+
 # `$(DC)` AND `${DC}` ALIKE -- make treats the two bracket spellings of a
 # variable reference identically, so a scan that only recognizes `$(DC)`
 # leaves a `${DC}`-spelled call site invisible to it. MEASURED: mutating the
@@ -418,10 +442,10 @@ _ALLOWED_DC_WINDOWS = (
 def test_bare_dc_only_appears_in_the_two_sanctioned_forms():
     """A future compose call site must go through $(STENCIL_COMPOSE) or fail here.
 
-    Recurses (`rglob`, not `glob`) rather than naming Makefile-base/doc/pkg.j2,
-    so a future Makefile-check.j2 -- including one nested under a subdirectory
-    such as templates/make/ -- is covered without anyone remembering to list
-    it.
+    Scans every `Makefile*.j2` rather than naming Makefile-base/doc/pkg.j2,
+    so a future Makefile-check.j2 is covered without anyone remembering to
+    list it -- see makefile_templates() for why it is scoped to the templates
+    make actually reads rather than to every `*.j2`.
 
     This reads the raw template TEXT rather than a rendered Makefile, which is
     the only way to see both branches of `ifeq ($(OS),Windows_NT)` --
@@ -430,7 +454,7 @@ def test_bare_dc_only_appears_in_the_two_sanctioned_forms():
     unreachable by any test in this repository.
     """
     offenders: dict[str, list[str]] = {}
-    for template in sorted(TEMPLATES_DIR.rglob("*.j2")):
+    for template in makefile_templates():
         text = template.read_text()
         sanctioned = {
             span
@@ -506,7 +530,7 @@ def test_no_template_line_spells_out_a_compose_implementation_literally():
     is and is not for.
     """
     offenders: dict[str, list[str]] = {}
-    for template in sorted(TEMPLATES_DIR.rglob("*.j2")):
+    for template in makefile_templates():
         for lineno, line in enumerate(template.read_text().splitlines(), start=1):
             stripped = line.strip()
             if stripped.startswith("#") or stripped.startswith("{%"):
