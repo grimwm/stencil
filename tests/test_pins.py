@@ -315,12 +315,25 @@ def test_html_to_pdf_js_roots_its_resolution_at_the_pinned_tools_dir(doc_package
     asserts the Dockerfile's ENV lines against pipeline.BROWSER_NODE_MODULES --
     so a rewiring of the tools directory cannot leave this test asserting a
     path the image stopped using.
+
+    OVER code_lines, NOT read_text, for the same reason the bare-require scan
+    below is -- and here it is the POSITIVE assertion that would go vacuous.
+    stn-cnm.2 is required to explain in a comment why a bare require is a
+    defect here, and the natural way to write that comment is to quote the
+    very call this looks for. A raw-text scan would then be satisfied by the
+    explanation alone, and would keep passing if the actual call were deleted.
     """
-    text = (doc_package / "html-to-pdf.js").read_text()
-    assert f'createRequire("{pipeline.BROWSER_TOOLS_DIR}/package.json")' in text, (
+    needle = f'createRequire("{pipeline.BROWSER_TOOLS_DIR}/package.json")'
+    rooted = [
+        line
+        for path, line in code_lines(doc_package)
+        if path.name == "html-to-pdf.js" and needle in line
+    ]
+    assert rooted, (
         "html-to-pdf.js does not root a createRequire() at "
-        f"{pipeline.BROWSER_TOOLS_DIR!r}, so puppeteer/pdf-lib still resolve "
-        "from wherever a bare require lands starting at /workspace"
+        f"{pipeline.BROWSER_TOOLS_DIR!r} in CODE (a comment mentioning it does "
+        "not count), so puppeteer/pdf-lib still resolve from wherever a bare "
+        "require lands starting at /workspace"
     )
 
 
