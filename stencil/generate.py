@@ -1662,7 +1662,7 @@ def _checked_template_defs(
     return kept, problems
 
 
-def _collision_who(sources: dict[str, str]) -> str:
+def _collision_who(writers: set[tuple[str, str]]) -> str:
     """Name the colliding writers the way the AUTHOR can act on: the config key
     each one came from, plus the source that key names.
 
@@ -1674,12 +1674,14 @@ def _collision_who(sources: dict[str, str]) -> str:
     return " and ".join(
         sorted(
             "the manifest" if where == "manifest" else f"{where} {source!r}"
-            for source, where in sources.items()
+            for where, source in writers
         )
     )
 
 
-def _collision_scope(package_id: str, package: dict, sources: dict[str, str]) -> str:
+def _collision_scope(
+    package_id: str, package: dict, writers: set[tuple[str, str]]
+) -> str:
     """`config` when every key in a collision is config-level, `Package <id>`
     when a package-level key is involved.
 
@@ -1693,7 +1695,7 @@ def _collision_scope(package_id: str, package: dict, sources: dict[str, str]) ->
     """
     package_level = any(
         where == "brand" and package.get("brand") is not None
-        for where in sources.values()
+        for where, _source in writers
     )
     return f"Package {package_id}" if package_level else "config"
 
@@ -1995,19 +1997,28 @@ def package_contexts(
             # without a guard here deciding which.
             problems.append(str(error))
             continue
-        claimed: dict[str, dict[str, str]] = {}
+        # Keyed on (where, source), NOT on source alone. A template whose `src`
+        # happens to equal the manifest's own name -- reachable with a
+        # `templates_dir` holding a file called `.stencil-manifest.json`, and
+        # MEASURED: the rendered template was silently clobbered at exit 0,
+        # which is this ticket's bug walking straight past this ticket's check --
+        # collides as a bare source string while being a genuinely different
+        # writer. The pair keeps the dedup that matters (a template listed as
+        # well as injected is one ("dest", src) either way) and separates the
+        # writers that differ.
+        claimed: dict[str, set[tuple[str, str]]] = {}
         for where, relative, source in targets:
-            claimed.setdefault(Path(relative).as_posix(), {})[source] = where
+            claimed.setdefault(Path(relative).as_posix(), set()).add((where, source))
         collisions = [
-            (relative, sources)
-            for relative, sources in sorted(claimed.items())
-            if len(sources) > 1
+            (relative, writers)
+            for relative, writers in sorted(claimed.items())
+            if len(writers) > 1
         ]
         if collisions:
-            for relative, sources in collisions:
+            for relative, writers in collisions:
                 problems.append(
-                    f"{_collision_scope(package_id, package, sources)}: "
-                    f"{_collision_who(sources)} both write {relative!r}. "
+                    f"{_collision_scope(package_id, package, writers)}: "
+                    f"{_collision_who(writers)} both write {relative!r}. "
                     "Whichever stencil writes last silently replaces the "
                     "other; give them different names."
                 )
