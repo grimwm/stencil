@@ -21,13 +21,43 @@ different way out of the package:
   brand lands under a name `clean` cannot see and git happily tracks
   (stn-8wt).
 
-NOT A PRIVILEGE BOUNDARY, and worth repeating from check_config_path's own
-comment: `pre_build.run` is arbitrary execution by design, so whoever writes
-.config.yaml can already run anything. What these close is a filename quietly
-doing something other than naming a file -- and, for `brand`, a read of a
-file nobody asked to publish reaching a distributed artifact. `stencil gen
---dry-run` over a pull request's config executes nothing today, which is the
-case that makes the brand one worth more than its severity suggests.
+WHAT THESE ARE AND ARE NOT A BOUNDARY FOR. The previous version of this
+paragraph said they were not a privilege boundary at all, because "pre_build.run
+is arbitrary execution by design, so whoever writes .config.yaml can already run
+anything". That is false, it was the stated reason these checks were allowed to
+be lenient, and it had been quoted forward into stn-9rn's and stn-vhr's scope
+decisions (stn-axi). stencil never executes `pre_build.run`: it writes the
+command into a generated Makefile, and execution happens only when a human later
+runs `make` inside the generated package.
+
+The true split, measured rather than reasoned about:
+
+- `clean`, `install`, `list` and `version` execute NOTHING from the config.
+  These checks ARE a boundary for them -- and the harms they close are real, not
+  theoretical: per stn-h5q and stn-17h, a config got arbitrary named-file
+  deletion out of `clean` and an arbitrary managed-.gitignore rewrite out of
+  `install`, both at exit 0, from commands that ran no code at all. What closed
+  those: #102, #115, #122, #124, #125.
+- `gen` and `gen --dry-run` DO execute arbitrary code, and these checks are not
+  a boundary for them. `render_templates` calls `template.render()` above its
+  `dry_run` branch on a non-sandboxed jinja2.Environment whose FileSystemLoader
+  searches the config's own `templates_dir` FIRST. Measured: a payload in a
+  `templates/Makefile.j2` ran under `stencil gen demo --dry-run` at exit 0 with
+  nothing written to the output tree, while `install` and `clean` over the same
+  config executed nothing. That is the documented extension mechanism working as
+  designed -- a template is code, and overriding one is the feature -- so
+  whoever controls a `templates_dir` controls execution. It is stated here and in
+  STENCIL.md rather than implied away; see test_gen_is_the_only_command_that_
+  executes_anything below, which pins the half that must stay true.
+- `make` on a generated package is outside all of this. These checks are not a
+  boundary against whoever runs it, and are not trying to be.
+
+So what these close is a filename quietly doing something other than naming a
+file -- and, for `brand`, a read of a file nobody asked to publish reaching a
+distributed artifact. A reviewer or CI job running `clean` or `install` over a
+pull request's config is the case that makes them worth more than their
+severity suggests, because those commands execute nothing and still wrote and
+deleted named files.
 """
 
 from __future__ import annotations
@@ -2748,3 +2778,97 @@ def test_a_gnumakefile_symlinked_to_the_makefile_is_not_refused_on_a_fresh_check
         f"on disk yet: {result.stderr!r}"
     )
     assert (package / "Makefile").exists()
+
+
+def test_gen_is_the_only_command_that_executes_anything():
+    """stn-axi. Pins the half of this module's docstring that must stay true.
+
+    The claim being defended is narrow and precise: `generate.py` contains no
+    process-spawning surface at all, so `clean`, `install`, `list` and `version`
+    execute nothing from the config, and the ONE execution surface `gen` has is
+    `render_templates`' `template.render()`.
+
+    SCANNED BY AST, not by grepping the text. A text scan for "subprocess" is
+    green today while the render hole is wide open, and it would fail the day
+    someone writes the word in a comment -- in a file whose comments discuss
+    exactly this subject at length, including the stn-vd6v comment a few hundred
+    lines away that explains why a `git config` subprocess was NOT added.
+
+    `pipeline.py` is deliberately exempt and that is not a gap. Its one
+    `subprocess.run` is `compose_command`'s probe for a compose implementation,
+    which takes no config value and which `generate.py` never calls -- grep the
+    callers. Do not "strengthen" this to the whole package; it will fail
+    immediately, on the wrong thing, for the wrong reason.
+    """
+    import ast
+
+    source = (Path(generate.__file__)).read_text(encoding="utf-8")
+    tree = ast.parse(source)
+
+    spawning_modules = {"subprocess", "runpy", "ctypes", "multiprocessing", "pty"}
+    spawning_os_calls = {
+        "system",
+        "popen",
+        "execv",
+        "execve",
+        "execl",
+        "execlp",
+        "execvp",
+        "spawnv",
+        "spawnve",
+        "spawnl",
+        "posix_spawn",
+        "posix_spawnp",
+        "fork",
+        "forkpty",
+    }
+
+    imported = set()
+    os_called = set()
+    rendered_at = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            imported.update(alias.name.split(".")[0] for alias in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            imported.add(node.module.split(".")[0])
+        elif isinstance(node, ast.Call):
+            func = node.func
+            if isinstance(func, ast.Attribute):
+                if (
+                    isinstance(func.value, ast.Name)
+                    and func.value.id == "os"
+                    and func.attr in spawning_os_calls
+                ):
+                    os_called.add(func.attr)
+                if func.attr in {"render", "get_template"}:
+                    rendered_at.append(node.lineno)
+
+    assert not (imported & spawning_modules), (
+        f"generate.py now imports {sorted(imported & spawning_modules)}. The "
+        "module docstring's claim that clean/install/list/version execute "
+        "nothing rests on this file having no spawning surface -- update the "
+        "docstring deliberately, or drop the import."
+    )
+    assert not os_called, (
+        f"generate.py now calls os.{sorted(os_called)}, so the docstring's "
+        "claim is no longer true as written."
+    )
+
+    # The render surface is expected, and expected to stay in ONE function, so
+    # "gen executes templates" does not quietly become "several things do".
+    assert rendered_at, (
+        "no .render()/.get_template() call found at all -- if template "
+        "rendering moved, this test and the module docstring both need updating"
+    )
+    enclosing = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef):
+            span = range(node.lineno, (node.end_lineno or node.lineno) + 1)
+            if any(line in span for line in rendered_at):
+                enclosing.add(node.name)
+    assert enclosing == {"render_templates"}, (
+        f"templates are now rendered from {sorted(enclosing)}, not only from "
+        "render_templates. Every one of those is a code-execution surface "
+        "reachable from whichever command calls it -- update this module's "
+        "docstring to say so before widening this assertion."
+    )

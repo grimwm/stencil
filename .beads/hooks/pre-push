@@ -55,7 +55,19 @@ _url="$2"
 # All-zero shas are ref deletions -- there is no revision to read an export out
 # of -- and are dropped.
 _bd_updates="$(cat)"
-BD_PUSHED_REVISIONS="$(printf '%s\n' "$_bd_updates" \
+
+# git sends no lines at all when every ref is already up to date, and an empty
+# `_bd_updates` must replay as zero bytes, not the one blank line `printf '%s\n'
+# ""` would emit -- `pre-commit hook-impl` unpacks each replayed line into four
+# fields and aborts on an empty one. One function feeds every replay site (this
+# one, both branches below) so they cannot drift apart on that rule.
+_bd_replay() {
+  if [ -n "$_bd_updates" ]; then
+    printf '%s\n' "$_bd_updates"
+  fi
+}
+
+BD_PUSHED_REVISIONS="$(_bd_replay \
   | awk '$2 ~ /^[0-9a-fA-F]+$/ && $2 !~ /^0+$/ { print $2 }' \
   | sort -u | tr '\n' ' ')"
 export BD_PUSHED_REVISIONS
@@ -65,12 +77,12 @@ export BD_PUSHED_REVISIONS
 # is how this hook came to do nothing at all: the drift guard it exists to run
 # was never reached on a machine that had not activated the virtualenv.
 if [ -x "$INSTALL_PYTHON" ]; then
-  printf '%s\n' "$_bd_updates" | "$INSTALL_PYTHON" -mpre_commit hook-impl \
+  _bd_replay | "$INSTALL_PYTHON" -mpre_commit hook-impl \
     --config=.pre-commit-config.yaml \
     --hook-type=pre-push \
     --hook-dir "$_here" -- "$_remote" "$_url"
 elif command -v pre-commit >/dev/null 2>&1; then
-  printf '%s\n' "$_bd_updates" | pre-commit hook-impl \
+  _bd_replay | pre-commit hook-impl \
     --config=.pre-commit-config.yaml \
     --hook-type=pre-push \
     --hook-dir "$_here" -- "$_remote" "$_url"

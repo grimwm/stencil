@@ -106,7 +106,14 @@ def test_the_push_hook_replays_stdin_to_pre_commit():
     text = (HOOKS / "pre-push").read_text()
 
     assert '_bd_updates="$(cat)"' in text
-    assert text.count('printf \'%s\\n\' "$_bd_updates" |') == 2, (
+    # Through the shared `_bd_replay` rather than a literal `printf` per branch
+    # (stn-vynu). The two spellings this used to require were the bug: an empty
+    # capture replayed as one BLANK line, which `pre-commit hook-impl` aborted
+    # on, and fixing one branch's printf would have left the other. What this
+    # test is for -- both branches put the stream back -- is unchanged; only
+    # the name of the thing that does it is.
+    assert "_bd_replay() {" in text, "the shared replay function is gone"
+    assert text.count("_bd_replay |") == 2, (
         "both the venv and the PATH branch must replay the update stream"
     )
     assert "export BD_PUSHED_REVISIONS" in text
