@@ -2888,6 +2888,60 @@ def test_gen_is_the_only_command_that_executes_anything():
         "docstring to say so before widening this assertion."
     )
 
+    # And render_templates itself must stay reachable from ONE command. The
+    # assertion above pins where the .render() calls live; this pins who calls
+    # that function and who calls its caller, so a future clean or install
+    # branch that reaches render_templates fails here rather than quietly
+    # turning "gen executes templates" into "clean does too".
+    def callers_of(name):
+        found = set()
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.FunctionDef):
+                continue
+            for call in ast.walk(node):
+                if (
+                    isinstance(call, ast.Call)
+                    and isinstance(call.func, ast.Name)
+                    and call.func.id == name
+                ):
+                    found.add(node.name)
+        return found
+
+    assert callers_of("render_templates") == {"generate_package"}, (
+        f"render_templates is now called from "
+        f"{sorted(callers_of('render_templates'))}; only generate_package may "
+        "reach it, or the docstring's command split is wrong."
+    )
+    assert callers_of("generate_package") == {"_main"}, (
+        f"generate_package is now called from "
+        f"{sorted(callers_of('generate_package'))}; only the CLI dispatch may "
+        "reach it."
+    )
+    # Inside _main, every non-gen command returns before this guard, so the
+    # generate_package call must sit below it.
+    guard = next(
+        node.lineno
+        for node in ast.walk(tree)
+        if isinstance(node, ast.If)
+        and ast.unparse(node.test) == "args.command != 'gen'"
+    )
+    main_def = next(
+        node for node in ast.walk(tree)
+        if isinstance(node, ast.FunctionDef) and node.name == "_main"
+    )
+    gen_calls = [
+        call.lineno
+        for call in ast.walk(main_def)
+        if isinstance(call, ast.Call)
+        and isinstance(call.func, ast.Name)
+        and call.func.id == "generate_package"
+    ]
+    assert gen_calls and all(line > guard for line in gen_calls), (
+        f"generate_package is called at {gen_calls}, but the non-gen commands "
+        f"only return before line {guard}; a call above that line is "
+        "reachable from clean, install, list or version."
+    )
+
 
 # --- stn-cfby: clean unlinks through a descriptor on the entry's parent ------
 #
