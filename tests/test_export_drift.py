@@ -15,6 +15,7 @@ from pathlib import Path
 import pytest
 
 SCRIPT = Path(__file__).parent.parent / "scripts" / "check_bd_export_drift.py"
+HOOK = Path(__file__).parent.parent / ".beads" / "hooks" / "pre-push"
 
 
 @pytest.fixture(scope="module")
@@ -464,3 +465,80 @@ def test_the_wrapper_hands_over_only_real_local_shas():
     ).stdout.split()
 
     assert out == ["a" * 40, "b" * 40], "a deletion leaked through, or a sha was lost"
+
+
+def _run_pre_push(tmp_path, stdin: str):
+    """Drive the real .beads/hooks/pre-push in a subprocess, as git would.
+
+    'bd' is stubbed to a no-op so the BEADS INTEGRATION block passes through, and
+    PRE_COMMIT_PYTHON points at a stub that records the exact bytes it was handed
+    on stdin, plus the BD_PUSHED_REVISIONS it saw in its environment.
+    """
+    import os
+    import subprocess
+
+    stub_dir = tmp_path / "stub"
+    stub_dir.mkdir()
+    record = tmp_path / "record.bin"
+    record_env = tmp_path / "record_env.txt"
+
+    bd_stub = stub_dir / "bd"
+    bd_stub.write_text("#!/bin/sh\nexit 0\n")
+    bd_stub.chmod(0o755)
+
+    python_stub = tmp_path / "python-stub"
+    python_stub.write_text(
+        '#!/bin/sh\ncat > "$RECORD"\nprintf %s "$BD_PUSHED_REVISIONS" > "$RECORD_ENV"\nexit 0\n'
+    )
+    python_stub.chmod(0o755)
+
+    env = {
+        **os.environ,
+        "PATH": f"{stub_dir}:{os.environ['PATH']}",
+        "PRE_COMMIT_PYTHON": str(python_stub),
+        "RECORD": str(record),
+        "RECORD_ENV": str(record_env),
+    }
+
+    result = subprocess.run(
+        [str(HOOK), "origin", "url"],
+        input=stdin,
+        text=True,
+        capture_output=True,
+        env=env,
+    )
+    return result, record, record_env
+
+
+def test_pre_push_replays_no_lines_for_an_empty_ref_list(tmp_path):
+    """git sends nothing when every ref is already current -- not a blank line.
+
+    Before the fix, `_bd_updates="$(cat)"` on empty stdin is the empty string, but
+    `printf '%s\\n' "$_bd_updates"` still emits its own trailing newline: one blank
+    line handed to `pre-commit hook-impl`, which unpacks each line into four fields
+    and aborts on the empty one with `ValueError: not enough values to unpack
+    (expected 4, got 0)`.
+    """
+    result, record, record_env = _run_pre_push(tmp_path, "")
+
+    assert result.returncode == 0
+    assert result.stdout == ""
+    assert result.stderr == ""
+    assert record.read_bytes() == b""
+    assert record_env.read_text() == ""
+
+
+def test_pre_push_replays_real_ref_updates_byte_identical(tmp_path):
+    """Non-empty stdin still reaches pre-commit exactly as git sent it."""
+    import textwrap
+
+    updates = textwrap.dedent("""\
+        refs/heads/a aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa refs/heads/a 1111111111111111111111111111111111111111
+        refs/heads/b bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb refs/heads/b 2222222222222222222222222222222222222222
+        """)
+
+    result, record, record_env = _run_pre_push(tmp_path, updates)
+
+    assert result.returncode == 0
+    assert record.read_text() == updates
+    assert record_env.read_text().split() == ["a" * 40, "b" * 40]

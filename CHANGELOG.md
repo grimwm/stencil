@@ -11,6 +11,87 @@ How the version gets bumped is written down in
 
 ## 0.39.0
 
+- **Two generated files with the same destination are refused instead of clobbering each other**
+  (`stn-8hap`). With `dest: .stencil-manifest.json`, `gen` printed `Generated:` twice for one path
+  and the manifest — written last — replaced the rendered template. With `brand: logo.png` beside a
+  template whose `dest` was `logo.png`, the brand bytes were left on disk and the rendered template
+  was gone. Both at exit 0, the only hint a duplicate `Generated:` line nobody reads. The pre-flight
+  now refuses a config in which
+  two **different sources** write one path, naming both and the file. Different sources, not a
+  repeated path: a config may legitimately list a template stencil also injects, which renders the
+  same bytes twice and discards nothing — eight test modules do it. Paths compare by
+  `as_posix()`, so `./x` against `x` and `sub//f` against `sub/f` are caught everywhere.
+  **Two stated limits**: a case-only collision (`Makefile` / `makefile`) and a
+  normalisation-only one are *not* refused, because folding them is right on a case-insensitive
+  volume and wrong on ext4, where they are genuinely two files; and the check is intra-package, so
+  two packages sharing a `dir` still overwrite each other's manifest — inherent to `dir` sharing
+  rather than a mistake an author can correct, since every package writes one, and changing it means
+  deciding what a shared `dir` *means*.
+
+- **The managed `.gitignore` section matches a package directory written in NFD** (`stn-vd6v`). A
+  `dir` typed or pasted as `cafe` + U+0301 went into the section as NFD, `git check-ignore` did not
+  match it, and `install` printed every line while ignoring nothing, at exit 0. Measured rather than
+  reasoned about: APFS *preserves* NFD rather than normalising it, and `core.precomposeunicode` is a
+  per-repo value `git init` writes after a filesystem probe — not a platform default, so
+  `sys.platform` is the wrong discriminator in both directions. Under precomposition git normalises
+  the queried path and *not* the pattern text, so only an NFC line matches; without it only the
+  literal bytes match. The section therefore carries **both spellings** when they differ, which
+  matches in either configuration with no probe and no platform branch. For any ASCII name the two
+  are equal and exactly one line is emitted. Reading the git setting would have identified the
+  single right spelling and was deliberately not done: it needs a subprocess, and `generate.py`
+  executing nothing is what the entry below rests on. **Stated limit**: on a normalisation-sensitive
+  filesystem the extra line names a genuinely different path, so a repository holding both spellings
+  of a name would have the unrelated one ignored too — only possible where the extra line was never
+  needed, and it withholds a file from `git status` rather than destroying anything.
+
+- **`clean` removes through a descriptor, so the directory it checked is the directory it deleted
+  from** (`stn-cfby`). `_remove_entries` resolved each entry's parent and then unlinked by path;
+  swapping that parent for a symlink in between deleted a file *outside* the output tree while
+  printing a `Removed` line naming a path inside the package, and recorded no failure at all. This
+  is the delete half of `stn-avv`, which closed the write side and said so. `clean` now walks from a
+  descriptor on the package directory and calls `os.unlink(name, dir_fd=…)`; glob entries list
+  through the same descriptor. **Two behaviours deliberately unchanged**: an intermediate directory
+  that is a symlink pointing back *inside* the package is still followed — resolved and required to
+  land under the package directory — because `gen` refuses such a package and tells the author to
+  run `stencil clean`, so refusing it here would leave it neither generable nor cleanable; and a
+  generated file replaced by a symlink is still removed as the link, never followed. A missing
+  intermediate is a silent skip, so a second `clean` still exits 0. **Still path-based**, listed in
+  STENCIL.md: the manifest delete, the empty-parent sweep, and the type checks that decide what is
+  printed. Windows keeps the path-based behaviour throughout, as it does for writes.
+
+- **A false security claim that had been cited in scope decisions is replaced with the measured
+  one** (`stn-axi`). `tests/test_path_containment.py` said the path checks were not a privilege
+  boundary because "`pre_build.run` is arbitrary execution by design, so whoever writes
+  `.config.yaml` can already run anything". stencil never executes `pre_build.run` — it writes the
+  command into a generated Makefile — and that sentence was the stated reason these checks were
+  allowed to be lenient, quoted forward into `stn-9rn` and `stn-vhr`. The true split, measured:
+  `clean`, `install`, `list` and `version` execute **nothing** from the config, and these checks are
+  a boundary for them — which matters, because per `stn-h5q` and `stn-17h` a config got arbitrary
+  named-file deletion and an arbitrary managed-`.gitignore` rewrite out of commands that ran no code
+  at all. `gen` and `gen --dry-run` **do** execute arbitrary code: `render_templates` calls
+  `template.render()` above its `dry_run` branch, on a non-sandboxed Jinja2 environment whose loader
+  searches the config's own `templates_dir` first, so `--dry-run` writes nothing and still runs
+  whatever is on that path. That is the documented extension mechanism working as intended — a
+  template is code — and it is now stated in STENCIL.md beside `templates_dir` rather than implied
+  away, with an AST-based guard in place of a text grep that was green while the hole was open.
+  *This corrects a claim this changelog itself shipped in an earlier release*; that entry is left as
+  it was written, since this file is a record and not retroactive.
+
+- **The overridden-lockfile trap is documented for both lockfiles** (`stn-x53`). STENCIL.md warned
+  that overriding `browser-package-lock.json.j2` does not work on its own, and the trap applies
+  identically to `format-package-lock.json.j2` — whose refusal, since `stn-jjw`, ends "See
+  STENCIL.md" and sent readers to a page covering only the other file. The bullet now covers both,
+  and names each one's own guard: `Dockerfile.browser.j2` for the browser image,
+  `docker-compose-html.yml.j2` for `format-md`. Overriding the wrong one leaves the trap standing.
+
+- **An up-to-date `git push` no longer fails** (`stn-vynu`). `.beads/hooks/pre-push` captured git's
+  ref-update stream with `$(cat)` and replayed it with `printf '%s\n'`, so when every ref was
+  current and git sent no lines at all, the replay emitted exactly one *blank* line —
+  `pre-commit hook-impl` unpacks each line into four fields, got zero, and aborted the push with
+  `ValueError: not enough values to unpack`, which reads as a real failure. One shared
+  `_bd_replay` now feeds both the venv and the `PATH` branch and the `BD_PUSHED_REVISIONS` awk, so
+  an empty stream replays as an empty stream and the two cannot drift apart.
+
 - **A manifest may narrow what the config authorises, never widen it** (`stn-jez`). A planted
   `.stencil-manifest.json` with no `package` key walked past `clean`'s ownership guard and deleted
   hand-written files at exit 0: the guard only refused a `package` field that was present *and*

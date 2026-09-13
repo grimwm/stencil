@@ -271,6 +271,22 @@ packages:
 Templates are searched in order: `templates_dir` (if specified), then bundled stencil templates.
 This allows projects to override or extend the default templates.
 
+**A `templates_dir` is executable, so treat it like source, not like data.** A Jinja2 template is
+code — stencil renders it in an ordinary, non-sandboxed environment — and the search path puts your
+directory *first*, so a file there named after any bundled or auto-injected template replaces it.
+Two consequences worth being deliberate about:
+
+- `stencil gen` and `stencil gen --dry-run` both run whatever is on that path. `--dry-run` writes
+  nothing to the output tree and still renders every template, so it is not a safe way to inspect an
+  untrusted config; the render's output also lands in the preview, and therefore in any CI log.
+- `stencil clean`, `stencil install`, `stencil list` and `stencil version` execute nothing from the
+  config at all. Those are the ones that are safe to point at a config you have not read.
+
+None of this is a defect to be fixed — overriding a template *is* the extension mechanism, and a
+template that could not run code could not generate anything. It is a reason to give a
+`templates_dir` the same review a `.py` file in your repository gets, and to be as careful running
+`stencil gen` over someone else's pull request as you would be running their test suite.
+
 `output_dir` is resolved **relative to this file**, not to the working directory, and it must stay
 under this file's directory. A value that escapes — `../build`, an absolute path, or a directory
 that is itself a symlink pointing out — is refused with an error naming the key. That is a change
@@ -334,7 +350,7 @@ carries — while `gen` printed `Generated:` and exited 0.
 there. Stated rather than implied away.
 
 Two limits remain on the **write** side, each pinned by a test so this paragraph cannot quietly go
-stale — and one on the **delete** side, which this release does not touch:
+stale:
 
 - **The output base itself**, and its own ancestors, are resolved by ordinary path lookup. There is
   no descriptor further up to walk from — `output_dir` *is* the start — and the declared output root
@@ -343,11 +359,31 @@ stale — and one on the **delete** side, which this release does not touch:
   that is a symlink resolving back inside the output base is permitted and has been since 0.38.0.
   For that one component, containment rests on the earlier resolve rather than on the open.
   Everything *below* the package directory is descriptor-walked.
-- **The delete side is unchanged**, and is not a write-side limit at all — it is listed here so the
-  set is complete. `clean` still resolves an entry's parent and then unlinks by path, so that window
-  is open; it is filed as `stn-cfby` and no test on this branch pins it, because closing it means
-  touching code this release deliberately left alone. This release closed the write side, and says
-  only that.
+  The **delete side** is now descriptor-based too (`stn-cfby`), with limits of its own. `clean` walks
+  from a descriptor on the package directory and removes with `os.unlink(name, dir_fd=…)`, so the
+  directory it checked is the directory it deleted from; the glob listing for an entry like
+  `Guide*.html` goes through the same descriptor, so the names come from the directory the removal
+  then happens in. Before this, swapping an entry's parent for a symlink between the containment
+  check and the unlink deleted a file *outside* the output tree while printing a `Removed` line naming
+  a path inside the package, and recorded no failure at all.
+
+Three things about `clean` are worth knowing:
+
+- **A symlinked intermediate directory pointing back *inside* the package is still followed**, and
+  that is deliberate. `gen` refuses such a package; `clean` has always been able to remove it, and
+  `gen`'s own refusal tells you to run `stencil clean`. Making `clean` refuse it too would leave the
+  package neither generable nor cleanable, so the link is resolved, *required* to land under the
+  package directory, and walked through. That one component is opened by path, so a swap between
+  that check and the open is not caught — the narrow residual this choice accepts, against a
+  capability it keeps.
+- **A generated file replaced by a symlink is removed as the link**, never followed to its target.
+  That is the same asymmetry as before: removing the link is the only way such a package becomes
+  regenerable, and `gen` is the side that refuses a link there.
+- **Three deletes are still path-based**: the manifest (always the last delete of a run), the
+  empty-parent-directory sweep, and the `exists`/`is_file` type checks that decide what gets
+  printed. `rmdir` only removes an empty directory, so the sweep's blast radius is an empty
+  directory elsewhere. On **Windows** none of the delete side applies, exactly as none of the write
+  side does.
 
 A `.stencil-manifest.json` is **not** authenticated, and cannot be — every field stencil writes into
 one is guessable. What holds instead is an authority rule (`stn-jez`): **a manifest may narrow what
@@ -682,14 +718,18 @@ Two consequences worth knowing before you override either file:
   providing, not one that stopped reading a key stencil still provides. If you keep the guard, keep
   `{{ browser_lockfile_digest }}` with it; that value is derived from the vendored lockfile on every
   `stencil gen`, so it follows a re-vendor on its own.
-- **Overriding `browser-package-lock.json.j2` is the one combination that does not work on its
-  own.** That template resolves through the same search path, so you can replace it — but the digest
-  in `Dockerfile.browser` comes from stencil's *vendored* lockfile, not from your rendered one, so
-  the build refuses a package that is exactly what you asked for. Worse, the refusal tells you to run
-  `stencil gen`, which regenerates your override and refuses again. If you override the lockfile,
-  override `Dockerfile.browser.j2` in the same breath and put your own digest in its guard — or drop
-  the lockfile override and pin what you need through `pipeline.py` instead. The refusal message says
-  so too, so nobody has to find this page first.
+- **Overriding either lockfile template is the one move that does not work on its own.**
+  `browser-package-lock.json.j2` and `format-package-lock.json.j2` both resolve through
+  the same search path, so you can replace either one — but the digest that checks it comes from
+  stencil's *vendored* copy, not your rendered one, so the build refuses a package that is exactly
+  what you asked for. Worse, the refusal tells you to run `stencil gen`, which regenerates your
+  override and refuses again. The two guards live in different templates, so overriding the wrong
+  one leaves the trap standing: `browser-package-lock.json.j2`'s guard is the `RUN … sha256sum -c …`
+  in `Dockerfile.browser.j2` (`{{ browser_lockfile_digest }}`); `format-package-lock.json.j2`'s is
+  inlined in the compose template, `docker-compose-html.yml.j2` (`{{ format_lockfile_digest }}`). If
+  you override a lockfile, override its own guard template in the same breath and put your own
+  digest in it — or drop the lockfile override and pin what you need through `pipeline.py` instead.
+  Both refusal messages say so too, so nobody has to find this page first.
 - `docker compose run --rm pdf …` on its own now runs whichever script was baked the last time the
   image was built. `make pdf` runs `docker compose build pdf` first and is unaffected; if you
   invoke the service by hand while editing the script, build first. The `check-access` service does

@@ -423,7 +423,11 @@ the local shas first and passes them as `BD_PUSHED_REVISIONS`, then replays
 stdin so pre-commit still sees what git sent; the check falls back to
 `PRE_COMMIT_TO_REF` and then `HEAD`. Without this, `git push origin other-branch` from `main` checked `main`'s export, and `git push --all` checked
 one branch and let the rest through — branches can carry different historical
-exports, so one of them agreeing proves nothing about the others.
+exports, so one of them agreeing proves nothing about the others. An empty
+stream — every ref already up to date, so git sends nothing — is replayed as
+an empty stream: `printf '%s\n' "$_bd_updates"` on an empty capture still
+emits its own newline, and that one blank line made `pre-commit hook-impl`
+abort with `ValueError: not enough values to unpack`.
 
 `.beads/hooks/pre-push` resolves `pre-commit` from the repo's venv before
 falling back to `PATH`, and exits non-zero when it finds neither — the same

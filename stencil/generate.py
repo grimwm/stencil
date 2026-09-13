@@ -12,12 +12,14 @@ Usage:
 """
 
 import argparse
+import fnmatch
 import json
 import os
 import re
 import shutil
 import stat
 import sys
+import unicodedata
 from pathlib import Path
 from typing import NoReturn
 
@@ -1660,6 +1662,44 @@ def _checked_template_defs(
     return kept, problems
 
 
+def _collision_who(writers: set[tuple[str, str]]) -> str:
+    """Name the colliding writers the way the AUTHOR can act on: the config key
+    each one came from, plus the source that key names.
+
+    The source is what tells two colliding templates apart -- both are `dest`,
+    and "'dest' and 'dest'" names nothing to edit. `manifest` is the one writer
+    no key names, because stencil writes it unasked, so it reads as itself
+    rather than as "manifest '<its own name>'" (stn-8hap).
+    """
+    return " and ".join(
+        sorted(
+            "the manifest" if where == "manifest" else f"{where} {source!r}"
+            for where, source in writers
+        )
+    )
+
+
+def _collision_scope(
+    package_id: str, package: dict, writers: set[tuple[str, str]]
+) -> str:
+    """`config` when every key in a collision is config-level, `Package <id>`
+    when a package-level key is involved.
+
+    THE SAME PRECEDENT `brand_problem`'s caller follows, and for the identical
+    reason: `templates` and the manifest name are config-level, so ONE
+    `dest: .stencil-manifest.json` typo is inherited by every package in the
+    file. Prefixing each with its own id would produce N distinct strings that
+    `_raise_config_problems`' dedup cannot collapse -- N bullets for one line of
+    YAML, none of them naming the line. `brand` is the one key here that may be
+    either, so it is read off the package the way `brand_of` resolves it.
+    """
+    package_level = any(
+        where == "brand" and package.get("brand") is not None
+        for where, _source in writers
+    )
+    return f"Package {package_id}" if package_level else "config"
+
+
 def package_contexts(
     config: dict, config_dir: Path | None = None, trailer: str | None = None
 ) -> dict[str, dict]:
@@ -1897,7 +1937,120 @@ def package_contexts(
                 problems.append(f"{where}: {problem}")
                 continue
 
+        # stn-8hap. Two DIFFERENT sources writing one path inside the package
+        # directory: whichever stencil writes last silently destroys the other.
+        # Measured, both at exit 0 -- `dest: .stencil-manifest.json` made `gen`
+        # print "Generated:" TWICE for one path and the manifest, written last,
+        # replaced the rendered template; `brand: logo.png` beside a template
+        # whose `dest` is `logo.png` left the BRAND bytes on disk with the
+        # rendered template gone. The only hint either way was a duplicate
+        # "Generated:" line nobody reads.
+        #
+        # DIFFERENT SOURCES, NEVER A REPEATED PATH, and that distinction is the
+        # whole correctness of this check rather than a refinement of it. A
+        # config may legitimately list a template stencil also injects --
+        # `templates: [{src: html-template.html.j2}]` on a package with docs --
+        # and `generate_package` concatenates injected + config, so the path
+        # appears twice from ONE source. Measured: eight test modules do
+        # exactly that. Identical bytes written twice discard nothing, and
+        # `package_entries` already collapses it to one set entry, so the
+        # manifest and the managed .gitignore section have always been right
+        # about it. Refusing it would refuse a working config.
+        #
+        # Checked HERE rather than in `generate_package`'s write-side pre-pass,
+        # for the reason this whole function exists: this is the one pre-flight
+        # `gen`, `install` and `clean` all pass through, so ONE spelling of the
+        # rule refuses the config on every command, and it joins the
+        # aggregation below instead of raising past it.
+        #
+        # COMPARED BY `as_posix()`, NOT BY THE RAW STRING, and that is not
+        # tidiness. Measured, all four passing `check_config_path` and
+        # `check_no_glob`: `./Makefile` and `Makefile` both land on
+        # `out/Makefile`, and `sub//file` and `sub/./file` both land on
+        # `out/sub/file` -- on EVERY platform, not just this one. A raw-string
+        # comparison calls those distinct and lets the silent clobber through a
+        # refusal that will be cited as closing it.
+        #
+        # WHAT IS DELIBERATELY NOT FOLDED, stated rather than implied away.
+        # Measured on this APFS volume: it is case-insensitive (`Makefile` then
+        # `makefile` leaves ONE inode holding the second write) and
+        # normalization-insensitive (the NFD and NFC spellings of `café.txt`
+        # are one inode). Neither collision is refused here, because folding
+        # them is right on APFS and WRONG on ext4, where they are genuinely two
+        # files and refusing would break a config that works -- the same
+        # platform-conditional trap `get_generated_files` runs into for
+        # stn-vd6v one function below. `as_posix()` is platform-independent and
+        # therefore safe to fold; case and normalization are not. The limit is
+        # pinned by a test rather than left to be rediscovered.
+        try:
+            targets = write_targets(
+                context, injected_templates(context) + kept_templates
+            )
+        except ValueError as error:
+            # A `dest` that fails `check_config_path` or `check_no_glob`, which
+            # `template_destinations` re-runs. Collected rather than swallowed:
+            # the config-level loop above runs only `check_config_path`, and it
+            # skips a missing `dest` entirely, so this is the only aggregator
+            # for the glob case and for an `src`-derived destination on
+            # `install` and `clean`. `_raise_config_problems` already dedupes
+            # identical strings, so a problem both loops see is reported once
+            # without a guard here deciding which.
+            problems.append(str(error))
+            continue
+        # Keyed on (where, source), NOT on source alone. A template whose `src`
+        # happens to equal the manifest's own name -- reachable with a
+        # `templates_dir` holding a file called `.stencil-manifest.json`, and
+        # MEASURED: the rendered template was silently clobbered at exit 0,
+        # which is this ticket's bug walking straight past this ticket's check --
+        # collides as a bare source string while being a genuinely different
+        # writer. The pair keeps the dedup that matters (a template listed as
+        # well as injected is one ("dest", src) either way) and separates the
+        # writers that differ.
+        claimed: dict[str, set[tuple[str, str]]] = {}
+        for where, relative, source in targets:
+            claimed.setdefault(Path(relative).as_posix(), set()).add((where, source))
+        collisions = [
+            (relative, writers)
+            for relative, writers in sorted(claimed.items())
+            if len(writers) > 1
+        ]
+        if collisions:
+            for relative, writers in collisions:
+                problems.append(
+                    f"{_collision_scope(package_id, package, writers)}: "
+                    f"{_collision_who(writers)} both write {relative!r}. "
+                    "Whichever stencil writes last silently replaces the "
+                    "other; give them different names."
+                )
+            continue
+
         contexts[package_id] = context
+
+    # stn-8hap, THE CROSS-PACKAGE CASE, AND WHY IT IS NOT REFUSED HERE.
+    # Stated rather than implied away, because it is the harm the ticket
+    # describes one level up and a reader will reasonably expect this check to
+    # cover it.
+    #
+    # Two packages sharing a `dir` both write `.stencil-manifest.json` into it,
+    # and that file is where `clean` gets its authority. Measured on two doc
+    # packages both on `dir: shared`: after `gen --all` the manifest names only
+    # the package generated LAST (`package = beta`, alpha's record gone), and
+    # `stencil clean alpha` then removes beta's output at exit 0.
+    #
+    # It is not refused because the collision is INHERENT TO THE FEATURE rather
+    # than a mistake an author can correct. Every package writes a manifest, so
+    # EVERY pair sharing a `dir` collides on it, always -- a refusal would ban
+    # `dir` sharing outright, which `_clean_one_directory` is built around and
+    # four tests in tests/test_manifest.py pin as supported. Measured again: the
+    # other shared files are all rendered from the SAME source for both packages
+    # and are byte-identical, so the manifest is the whole of the harm.
+    #
+    # `clean`'s side of this is already deliberate, not accidental: stn-2x4.8
+    # requirement 5 and stn-jez's `all_members` rule exist precisely because
+    # "the manifest names whichever package `gen` wrote last". Changing what a
+    # shared `dir` MEANS -- a manifest per package, or a refusal -- is a design
+    # decision with its own blast radius, not a P3 fix, and it is not this one.
+    # So: intra-package only, said out loud here and in the changelog.
 
     if problems:
         _raise_config_problems(problems, trailer)
@@ -2326,14 +2479,25 @@ def template_destinations(template_defs: list, context: dict) -> list[tuple[str,
     return destinations
 
 
-def write_targets(context: dict, template_defs: list) -> list[tuple[str, str]]:
-    """Every (where, path-relative-to-the-package-directory) `gen` is about
-    to write for one package: each surviving template's destination, the
+def write_targets(context: dict, template_defs: list) -> list[tuple[str, str, str]]:
+    """Every (where, path-relative-to-the-package-directory, source) `gen` is
+    about to write for one package: each surviving template's destination, the
     copied brand image, and the manifest.
 
     `where` is the config key to name in a refusal, so an author reading one
     is pointed at the line they wrote rather than at a filename stencil
     derived.
+
+    `source` is WHAT produces those bytes -- a template's `src`, the brand
+    image's config string, or the manifest -- and it exists because `where`
+    cannot tell two colliding templates apart: both are `dest`, and a refusal
+    reading "'dest' and 'dest'" names nothing an author can act on. stn-8hap
+    compares sources rather than paths for a second reason that matters more:
+    a config may legitimately LIST a template stencil also injects (`templates:
+    [{src: html-template.html.j2}]` on a package with docs), so the same path
+    appears twice from ONE source. That renders identical bytes twice and
+    discards nothing, and eight test modules do it; only two DIFFERENT sources
+    claiming one path is the silent clobber worth refusing.
 
     Deliberately NOT `package_entries`. That function lists what a package
     PRODUCES, including build artifacts `gen` never writes itself -- the
@@ -2341,7 +2505,10 @@ def write_targets(context: dict, template_defs: list) -> list[tuple[str, str]]:
     what THIS CALL writes, which is the only set a write-side check can say
     anything about.
     """
-    targets = [("dest", dest) for _src, dest in template_destinations(template_defs, context)]
+    targets = [
+        ("dest", dest, src)
+        for src, dest in template_destinations(template_defs, context)
+    ]
     if context.get("has_pages"):
         # Named from the unresolved config string, which is how
         # copy_brand_image names its destination and how package_entries
@@ -2349,8 +2516,8 @@ def write_targets(context: dict, template_defs: list) -> list[tuple[str, str]]:
         # drift with a new author.
         brand_image = brand_image_path(context.get("config_brand"))
         if brand_image:
-            targets.append(("brand", Path(brand_image).name))
-    targets.append(("manifest", MANIFEST_NAME))
+            targets.append(("brand", Path(brand_image).name, brand_image))
+    targets.append(("manifest", MANIFEST_NAME, MANIFEST_NAME))
     return targets
 
 
@@ -2430,10 +2597,83 @@ _DIR_FD_CAPABLE = (
     and hasattr(os, "O_NOFOLLOW")
     and os.open in os.supports_dir_fd
     and os.mkdir in os.supports_dir_fd
+    # stn-cfby. The delete side calls `os.unlink(name, dir_fd=...)` and
+    # `os.stat(part, dir_fd=...)`, so both are measured here rather than
+    # assumed from the two above -- this file's discipline is to measure what it
+    # uses, and `gen` already relied on unlink's support without testing for it.
+    # Measured present on darwin and Linux, absent on Windows along with the
+    # rest, so this widens nothing for the write side.
+    and os.unlink in os.supports_dir_fd
+    and os.stat in os.supports_dir_fd
 )
 
 
-def walk_dir_fd(base_fd: int, relative: str) -> tuple[int, str]:
+def _open_contained_link(
+    part: str,
+    current_fd: int,
+    walked: list[str],
+    relative: str,
+    contain_under: Path,
+    verb: str,
+    refusal: str,
+    cause: OSError,
+) -> int:
+    """Resolve an intermediate component that O_NOFOLLOW just refused, and open
+    it only if it lands under `contain_under` (stn-cfby, operator ruling A).
+
+    This is what lets `clean` keep removing through a symlinked intermediate
+    that points back inside the package -- the capability
+    `test_a_symlinked_intermediate_directory_does_not_traceback_after_deleting`
+    pins -- while still refusing one that points out of the tree, which is the
+    window stn-cfby exists to close.
+
+    THE ONE PATH-BASED OPEN ON THE DELETE SIDE, stated rather than implied away,
+    exactly as `_open_package_base_fd` states its own. `os.readlink` gives a
+    path, so the target is opened BY PATH and a swap between the containment
+    check and that open is not caught. What that costs is bounded and much
+    smaller than what it buys: reaching here at all requires a component that is
+    already a symlink resolving back inside the package, and the alternative --
+    refusing it -- removes a documented capability to close a narrower window.
+    Every non-symlink component on the walk is still descriptor-protected, which
+    is the ordinary case and the one the attack used.
+    """
+    try:
+        target = os.readlink(part, dir_fd=current_fd)
+    except OSError:
+        raise ValueError(
+            f"could not open {part!r} as a directory while {verb} "
+            f"{relative!r} ({cause.strerror}) -- refusing to {refusal} "
+            "through it"
+        ) from cause
+
+    resolved = Path(
+        os.path.normpath(contain_under.joinpath(*walked, target))
+    ).resolve()
+    if not resolved.is_relative_to(contain_under):
+        raise ValueError(
+            f"{part!r} is a symlink to {resolved}, outside {contain_under}, "
+            f"while {verb} {relative!r} -- refusing to {refusal} through it"
+        ) from cause
+
+    try:
+        return os.open(resolved, os.O_RDONLY | os.O_DIRECTORY)
+    except OSError as error:
+        raise ValueError(
+            f"could not open {part!r} as a directory while {verb} "
+            f"{relative!r} ({error.strerror}) -- refusing to {refusal} "
+            "through it"
+        ) from error
+
+
+def walk_dir_fd(
+    base_fd: int,
+    relative: str,
+    *,
+    create: bool = True,
+    contain_under: Path | None = None,
+    verb: str = "writing",
+    refusal: str = "write",
+) -> tuple[int, str]:
     """Walk `relative`'s INTERMEDIATE components below `base_fd` by
     descriptor rather than by path, returning `(parent_fd, final_name)` for
     the caller to write through with `os.open(final_name, ..., dir_fd=
@@ -2448,6 +2688,31 @@ def walk_dir_fd(base_fd: int, relative: str) -> tuple[int, str]:
     False; it refuses loudly with `NotImplementedError` rather than passing
     an unsupported `dir_fd=` keyword to `os.open` and letting a raw
     `TypeError` stand in for a real diagnosis.
+
+    FOUR KEYWORDS, ALL DEFAULTING TO THE WRITE SIDE'S BEHAVIOUR, so `gen`'s
+    every call is byte-for-byte what it was before stn-cfby added the delete
+    side:
+
+    - `create=False` skips the per-component `os.mkdir`, because `clean` must
+      never create what it is about to remove. It also makes a MISSING component
+      raise `FileNotFoundError` rather than being papered over by the mkdir --
+      a THIRD OUTCOME, distinct from the refusal below, and the caller must
+      handle it. For `clean` a missing component means the entry is already
+      gone, which is an ordinary silent skip: measured on main, `clean` twice in
+      a row is rc 0 both times, because the first run's
+      `_remove_empty_parent_dirs` sweeps the now-empty parent away. Reporting
+      that as a problem would make `clean` non-idempotent, since problems are
+      fatal. `FileNotFoundError` is one exception CLASS everywhere, so telling
+      it apart costs no errno branch -- see DO NOT BRANCH ON ERRNO below.
+    - `contain_under` makes a symlinked intermediate resolvable-and-allowed when
+      it lands under that root, instead of refused outright. `clean` passes the
+      package directory; `gen` passes nothing and so still refuses every link.
+      See `_open_contained_link` for why the delete side needs this and what the
+      one surviving path-based open costs.
+    - `verb` and `refusal` put the caller's own word in the message. The text
+      used to be hardcoded to "while writing" / "refusing to write through it",
+      which `clean` would have printed under a heading about removal -- in a
+      file whose convention is that the message IS the feature.
 
     OWNERSHIP, AND IT IS UNIFORM ON PURPOSE: the returned `parent_fd` is
     ALWAYS the caller's to close, in every case, with no test for which case
@@ -2516,15 +2781,26 @@ def walk_dir_fd(base_fd: int, relative: str) -> tuple[int, str]:
     # never ours to close.
     pending_fd = None
     succeeded = False
+    walked: list[str] = []
     try:
         for part in parts[:-1]:
-            try:
-                os.mkdir(part, dir_fd=current_fd)
-            except FileExistsError:
-                # Proves nothing by itself -- see the docstring. The open
-                # immediately below is what actually decides whether `part`
-                # is a directory this walk may descend into.
-                pass
+            if create:
+                try:
+                    os.mkdir(part, dir_fd=current_fd)
+                except FileExistsError:
+                    # Proves nothing by itself -- see the docstring. The open
+                    # immediately below is what actually decides whether `part`
+                    # is a directory this walk may descend into.
+                    pass
+            else:
+                # `clean` must never create what it is about to remove. The
+                # stat is ALSO how "gone" is told from "hostile" without
+                # branching on errno: `FileNotFoundError` is one exception
+                # class on every platform, where the refusal below is ENOTDIR
+                # on macOS and ELOOP on Linux for the identical attack.
+                # `follow_symlinks=False` so a dangling link is "hostile", not
+                # "gone" -- the open is what rules on it.
+                os.stat(part, dir_fd=current_fd, follow_symlinks=False)
 
             try:
                 next_fd = os.open(
@@ -2533,16 +2809,46 @@ def walk_dir_fd(base_fd: int, relative: str) -> tuple[int, str]:
                     dir_fd=current_fd,
                 )
             except OSError as error:
-                raise ValueError(
-                    f"could not open {part!r} as a directory while writing "
-                    f"{relative!r} ({error.strerror}) -- refusing to write "
-                    "through it"
-                ) from error
+                # stn-cfby, operator ruling A. O_NOFOLLOW refuses a symlinked
+                # component -- which is right for `gen` and WRONG for `clean`,
+                # whose permissiveness here is a documented capability rather
+                # than an oversight: `_remove_entries` has always cleaned a
+                # package whose intermediate directory is a link pointing back
+                # INSIDE it, `gen` refuses such a package, and
+                # `test_gen_refuses_a_symlinked_subdirectory_pointing_back_inside`
+                # states the invariant in words -- "gen is at least as strict
+                # as clean", not "gen and clean agree". Refusing it here would
+                # have made `gen`'s own recovery advice ("`stencil clean`
+                # removes it") a lie and left such a package neither generable
+                # nor cleanable.
+                #
+                # So when a containment root is supplied, a link is resolved
+                # and REQUIRED to land under it, then walked through. A link
+                # out of the tree is still refused -- which is the whole of
+                # stn-cfby -- and `gen`, which passes no root, still refuses
+                # every link exactly as before.
+                if contain_under is None:
+                    raise ValueError(
+                        f"could not open {part!r} as a directory while "
+                        f"{verb} {relative!r} ({error.strerror}) -- refusing "
+                        f"to {refusal} through it"
+                    ) from error
+                next_fd = _open_contained_link(
+                    part,
+                    current_fd,
+                    walked,
+                    relative,
+                    contain_under,
+                    verb,
+                    refusal,
+                    error,
+                )
 
             if pending_fd is not None:
                 os.close(pending_fd)
             pending_fd = next_fd
             current_fd = next_fd
+            walked.append(part)
 
         succeeded = True
         return current_fd, parts[-1]
@@ -2566,7 +2872,7 @@ _MAKE_PRECEDENCE = ("GNUmakefile", "makefile", "Makefile")
 
 
 def refuse_shadowed_makefile(
-    package_id: str, pkg_path: Path, targets: list[tuple[str, str]]
+    package_id: str, pkg_path: Path, targets: list[tuple[str, str, str]]
 ) -> None:
     """Refuse when `pkg_path` already holds a make-file name STRICTLY
     HIGHER in `_MAKE_PRECEDENCE` than the one `targets` is about to write,
@@ -2610,7 +2916,7 @@ def refuse_shadowed_makefile(
     """
     own_names = {
         Path(relative).parts[0]
-        for _where, relative in targets
+        for _where, relative, _source in targets
         if Path(relative).parts and Path(relative).parts[0] in _MAKE_PRECEDENCE
     }
     if not own_names:
@@ -3157,7 +3463,7 @@ def generate_package(
     config_templates = list(config.get("templates", []))
     template_defs = injected_templates(context) + config_templates
     targets = write_targets(context, template_defs)
-    for where, relative in targets:
+    for where, relative, _source in targets:
         checked_write_target(
             package_id, where, output_base, pkg_resolved, relative
         )
@@ -3530,11 +3836,89 @@ def get_generated_files(config: dict) -> list[str]:
         pkg_segment = "/".join(Path(pkg_dir).parts)
 
         for entry in package_entries(package_id, package, context, config_templates):
-            entries.add(f"{prefix}{pkg_segment}/{entry}")
+            _add_gitignore_line(entries, f"{prefix}{pkg_segment}/{entry}")
 
-        entries.add(f"{prefix}{pkg_segment}/{MANIFEST_NAME}")
+        _add_gitignore_line(entries, f"{prefix}{pkg_segment}/{MANIFEST_NAME}")
 
     return sorted(entries)
+
+
+def _add_gitignore_line(entries: set[str], line: str) -> None:
+    """Add one managed-section line, plus its NFC spelling when that differs.
+
+    stn-vd6v. A package dir typed or pasted as NFD -- `cafe` + U+0301 -- was
+    written here as NFD, and `git check-ignore` did not match it, so `install`
+    printed every line and ignored NOTHING at exit 0. Reaches an author by
+    copy-paste from a browser or from Finder.
+
+    MEASURED on this Mac (macOS 26.6.2, APFS, git 2.50.1), because every
+    plausible one-line fix is wrong and the measurement is the only thing that
+    says which:
+
+    - APFS is normalization-PRESERVING, not normalization-performing: a
+      directory created with NFD bytes stays NFD on disk (`ls | xxd` ->
+      `cafe cc81`). The filesystem does nothing. (Legacy HFS+ forced NFD; that
+      is NOT what happens here, and assuming it is leads straight to the wrong
+      fix.)
+    - `git init` WRITES `precomposeunicode = true` into `.git/config` after a
+      filesystem probe. It is NOT a live platform default: with the key absent
+      from local and global config, the same APFS repo behaves as false and
+      reports raw NFD. So `sys.platform == "darwin"` is the wrong
+      discriminator, and it is wrong in BOTH directions.
+    - Under precompose=true, a pattern matches only if the `.gitignore` LINE is
+      NFC: git normalizes the queried pathspec and does NOT normalize the
+      pattern text it reads. An NFD line never matches, in either direction.
+    - Under precompose=false (Linux, and macOS with the key off) it is literal
+      byte comparison, so only the config's own spelling matches.
+
+    Hence BOTH spellings, and neither one alone. Measured end to end, with real
+    git, on a generated package whose `dir` is NFD `café`:
+
+        precompose=true   NFD line -> rc 1 (the bug)   NFC line -> rc 0
+        precompose=false  NFD line -> rc 0             NFC line -> rc 1
+        both lines        -> rc 0 in both cells
+
+    Reading `core.precomposeunicode` would identify the right single spelling,
+    and is deliberately NOT done: it needs a `git config` subprocess, and
+    `generate.py` executing nothing is exactly what the stn-axi paragraph in
+    tests/test_path_containment.py now states about `install` and `clean`.
+
+    For any ASCII name -- every real package -- `NFC(line) == line`, so exactly
+    ONE line is emitted and nothing changes.
+
+    THE RESIDUAL, stated rather than implied away. On a normalization-SENSITIVE
+    filesystem (Linux ext4/xfs/btrfs) the extra NFC line names a genuinely
+    different path, so a repository that happens to hold both spellings of a
+    name would have the one stencil did not generate ignored too. That can only
+    happen where git does not precompose -- which is exactly where the extra
+    line was never needed -- and the harm is that a file is not offered as
+    untracked: visible, non-destructive, and the same harm class as the bug this
+    fixes, but rarer. APFS cannot reach it at all: measured, it is
+    normalization-INSENSITIVE, so creating the NFC spelling over an existing NFD
+    file raises FileExistsError -- one inode, not two.
+
+    The NFC form is checked against `_UNSAFE_IN_PATH` before it is emitted, and
+    against that set ONLY. Three codepoints in all of Unicode normalize to pure
+    ASCII -- U+037E GREEK QUESTION MARK to `;`, U+1FEF GREEK VARIA to a
+    backtick, U+212A KELVIN SIGN to `K` -- and the first two would put a
+    character every path check refuses into a line they had already approved.
+    Measured across all 0x110000 codepoints: NFC introduces no GLOB
+    metacharacter for any of them, so the pattern shape is safe without a
+    check. It is deliberately not `check_gitignore_literal`, which refuses
+    globs: these lines legitimately carry `README*.html`, so that function
+    would reject every doc package's own entries.
+    """
+    entries.add(line)
+    precomposed = unicodedata.normalize("NFC", line)
+    if precomposed == line:
+        return
+    if _UNSAFE_IN_PATH.search(precomposed):
+        # Normalizing introduced a character the declared spelling did not have
+        # and no path check allows. Emit only what the author wrote: refusing
+        # the config here would turn a cosmetic gitignore improvement into a
+        # hard failure over a name that is perfectly legal on disk.
+        return
+    entries.add(precomposed)
 
 
 def _clean_scope(
@@ -3814,6 +4198,34 @@ def _remove_entries(
          entry because its target resolves outside would make such a
          package permanently un-cleanable, which is the opposite of the
          guarantee this function exists to provide.
+
+    WHAT stn-cfby CLOSED AND WHAT IT DID NOT, stated rather than implied away,
+    because the changelog entry would otherwise claim more than the code does.
+
+    Closed: the unlink itself. `_unlink_entry` walks from a descriptor on the
+    package directory and removes through `dir_fd=`, so the directory checked is
+    the directory deleted from. Reproduced before the fix -- swapping an entry's
+    parent for a symlink between the resolve above and the unlink deleted a
+    victim's file OUTSIDE the output tree, printed a `Removed` line naming a path
+    inside the package, and recorded no problem at exit 0. The glob listing moved
+    onto the same descriptor for the same reason.
+
+    NOT closed, all three still path-based and all three in the same window:
+
+    - the manifest, removed by `_remove_path` in `_clean_one_directory`. It is
+      deliberately the LAST delete of every run, so the final write of a clean
+      stays unhardened.
+    - `_remove_empty_parent_dirs`, which is `exists`/`is_dir`/`iterdir`/`rmdir`
+      on a resolved path. `rmdir` only removes an EMPTY directory, so the harm
+      is bounded to removing an empty directory somewhere else.
+    - the `is_symlink()`/`exists()`/`is_file()` type checks in the removal loop
+      below, which answer about whatever the path resolves to at that moment
+      rather than about the inode `_unlink_entry` then addresses. A swap between
+      the two changes which of `Would remove`/`Removed` is printed, not which
+      object is removed.
+
+    Each is convertible -- `os.rmdir` and `os.lstat` both take `dir_fd=` here
+    (measured) -- and none of them is in stn-cfby's scope.
     """
     paths_with_depth = []
     for entry in entries:
@@ -3855,7 +4267,36 @@ def _remove_entries(
         # test_removing_a_generated_symlink_removes_the_link_not_its_target.
         name = Path(entry).name
         if "*" in name:
-            for match in parent_resolved.glob(name):
+            # LISTED THROUGH A DESCRIPTOR ON THE PARENT, not through
+            # `parent_resolved.glob(name)` (stn-cfby). The unlink now goes
+            # through `parent_fd`, so listing by path would take the names from
+            # whatever the path resolves to at that moment and remove from a
+            # directory reached a different way -- contained either way, so
+            # nothing escapes, but potentially the wrong names. `Guide*.html`
+            # and `Guide*.pdf` are every doc package's own entries, so this is
+            # the common case rather than an edge. `os.listdir` does not accept
+            # a bare fd; `os.scandir` does.
+            # Guarded exactly like the unlink below, and for the same reason.
+            # `contained_entry_parent` above has already refused a parent that
+            # resolves outside, so this only fires when the component is swapped
+            # BETWEEN that check and this listing -- the very window stn-cfby is
+            # about, reached through a glob instead of a plain name. Measured
+            # before this guard: the refusal escaped `_remove_entries` as an
+            # unhandled ValueError, so containment held (the victim's files were
+            # untouched) and `clean` still ended in a bare traceback mid-run,
+            # which is the shape `_main`'s clean branch says in a comment that it
+            # refuses to create. A named problem, and the rest of the package is
+            # still processed.
+            try:
+                matches = _scandir_match(parent_resolved, name, pkg_path)
+            except (ValueError, OSError) as error:
+                problems.append(
+                    f"Package {package_id}: {entry!r} could not be listed: "
+                    f"{error}"
+                )
+                continue
+            for match_name in matches:
+                match = parent_resolved / match_name
                 paths_with_depth.append((len(match.parts), match))
         else:
             resolved_join = parent_resolved / name
@@ -3888,21 +4329,190 @@ def _remove_entries(
                 # correct for an ordinary symlink living inside the package
                 # even though the type checks above follow it.
                 try:
-                    path.unlink()
-                except OSError as error:
+                    _unlink_entry(path, pkg_path)
+                except (OSError, ValueError) as error:
                     # A named failure, never a traceback mid-delete: a
                     # read-only parent directory, a file removed by
                     # something else between the check and here, a
-                    # filesystem going away. The rest of the package is
-                    # still processed, exactly as a refused entry is.
+                    # filesystem going away, or -- since stn-cfby -- a parent
+                    # component that turned into a link out of the tree
+                    # between the check above and this unlink.
+                    # The rest of the package is still processed, exactly as
+                    # a refused entry is.
                     problems.append(
                         f"Package {package_id}: {str(path)!r} could not be "
                         f"removed: {error}"
                     )
                     continue
+                except _EntryAlreadyGone:
+                    # An intermediate disappeared between the listing above
+                    # and here -- the entry is already absent, which is what
+                    # was wanted. Silent, because `problems` is FATAL: the
+                    # ordinary second `clean` reaches this every time, since
+                    # the first run's `_remove_empty_parent_dirs` sweeps the
+                    # parent away. Measured on main: `clean` twice is rc 0
+                    # both times, and it must stay that way.
+                    continue
                 print(f"Removed {path}")
             removed.append(path)
     return removed
+
+
+def _scandir_match(parent_resolved: Path, pattern: str, pkg_path: Path) -> list[str]:
+    """Names in `parent_resolved` matching one glob `pattern`, listed through a
+    descriptor rather than by path (stn-cfby).
+
+    `fnmatch.filter` rather than `Path.glob`, because the listing now comes from
+    `os.scandir(fd)` and there is no path to glob against. `check_glob_vocabulary`
+    has already bounded what the pattern may be, so this is a plain name match
+    against one directory's entries -- never a recursive walk, and never `**`.
+
+    Falls back to `Path.glob` where `_DIR_FD_CAPABLE` is False (Windows), which
+    is today's behaviour exactly.
+    """
+    if not _DIR_FD_CAPABLE:
+        return [match.name for match in parent_resolved.glob(pattern)]
+
+    relative = parent_resolved.relative_to(pkg_path)
+    try:
+        dir_fd = _open_entry_dir(pkg_path, relative)
+    except (FileNotFoundError, _EntryAlreadyGone):
+        # A parent that is not there matches nothing, which is exactly what
+        # `Path.glob` returned here before and what the removal loop's own
+        # existence check expects. NOT a problem: a second `clean` reaches this
+        # every time, because the first run's `_remove_empty_parent_dirs` swept
+        # the parent away.
+        return []
+    try:
+        with os.scandir(dir_fd) as entries:
+            names = [entry.name for entry in entries]
+    finally:
+        os.close(dir_fd)
+    return sorted(fnmatch.filter(names, pattern))
+
+
+def _open_entry_dir(pkg_path: Path, relative: Path) -> int:
+    """A descriptor on `pkg_path / relative`, walked by descriptor from
+    `pkg_path` with the delete side's containment rule. The caller closes it.
+
+    `relative` may be empty, which is the common case -- an entry directly in
+    the package directory -- and is why this is not just a `walk_dir_fd` call:
+    that function walks INTERMEDIATE components and hands back the final name
+    for the caller to act on, whereas here the whole of `relative` is a
+    directory to end up inside.
+    """
+    base_fd = os.open(pkg_path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        if not relative.parts:
+            return os.dup(base_fd)
+        parent_fd, final = walk_dir_fd(
+            base_fd,
+            str(relative),
+            create=False,
+            contain_under=pkg_path,
+            verb="listing",
+            refusal="remove",
+        )
+        try:
+            os.stat(final, dir_fd=parent_fd, follow_symlinks=False)
+            try:
+                return os.open(
+                    final,
+                    os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                    dir_fd=parent_fd,
+                )
+            except OSError as error:
+                # The last component of the parent path may itself be a
+                # contained symlink -- the ruling-A case -- so it gets the same
+                # resolve-and-contain treatment every intermediate got.
+                return _open_contained_link(
+                    final,
+                    parent_fd,
+                    list(relative.parts[:-1]),
+                    str(relative),
+                    pkg_path,
+                    "listing",
+                    "remove",
+                    error,
+                )
+        finally:
+            os.close(parent_fd)
+    finally:
+        os.close(base_fd)
+
+
+class _EntryAlreadyGone(Exception):
+    """An entry's parent component vanished mid-removal, so there is nothing
+    left to unlink. Not a problem -- see `_remove_entries`' removal loop."""
+
+
+def _unlink_entry(path: Path, pkg_path: Path) -> None:
+    """Unlink one entry through a descriptor on its PARENT, so the directory
+    checked is the directory deleted from (stn-cfby).
+
+    THE WINDOW THIS CLOSES, reproduced before the fix: `_remove_entries`
+    resolved each entry's parent with `contained_entry_parent` and then called
+    `Path.unlink()` BY PATH. Swap that parent for a symlink to a victim
+    directory in between and the unlink follows it -- measured, `clean` printed
+    `Removed .../out/demo/sub/target.txt`, deleted the victim's file OUTSIDE the
+    output tree, and recorded NO problem at exit 0. The window does not depend
+    on the manifest being honest, so it is reachable from a manifest written
+    before stn-avv, one written on Windows where the descriptor walk is a
+    documented no-op, or a planted one.
+
+    The walk re-runs per entry rather than holding a descriptor from the
+    collection pass: `_remove_entries` sorts deepest-first between collecting
+    and removing, so a per-entry fd would be held across the sort -- one fd per
+    entry, multiplied by every glob match, against a 256-fd soft limit. That is
+    the leak this function exists to avoid creating.
+
+    THE ASYMMETRY IS PRESERVED, and it is the thing most easily broken here:
+    the FINAL component is passed as a plain name and is never resolved.
+    `os.unlink(name, dir_fd=...)` does not follow a final-component symlink --
+    measured: the link was removed and its target outside the tree survived --
+    so a generated file replaced by a link is still removed AS THE LINK, which
+    is the only way such a package is ever cleanable again. `gen` refuses a
+    symlink there; `clean` must not.
+
+    Falls back to today's path-based `unlink` where `_DIR_FD_CAPABLE` is False
+    (Windows), the same stated limit the write side carries.
+    """
+    if not _DIR_FD_CAPABLE:
+        path.unlink()
+        return
+
+    relative = path.relative_to(pkg_path)
+    # O_NOFOLLOW at every component, INCLUDING the last, because `pkg_path` is
+    # already resolved (`_validated_package_dirs` resolves it once per package)
+    # so none of its own components should be a link by the time we walk them.
+    # A single `os.open(pkg_path)` instead would resolve `output_base`, every
+    # intermediate of a multi-part `dir: a/b`, and the final name by ordinary
+    # path lookup -- which would MOVE the window up a level rather than close
+    # it, since `pkg_path` is resolved near the top of the command and the open
+    # would happen much later.
+    base_fd = os.open(pkg_path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        try:
+            parent_fd, name = walk_dir_fd(
+                base_fd,
+                str(relative),
+                create=False,
+                contain_under=pkg_path,
+                verb="removing",
+                refusal="remove",
+            )
+        except FileNotFoundError as error:
+            raise _EntryAlreadyGone(str(relative)) from error
+        try:
+            os.unlink(name, dir_fd=parent_fd)
+        finally:
+            # Closed per entry, in a `finally`, because the caller's `except`
+            # arm `continue`s -- a close placed after the unlink would leak on
+            # every failure, which is exactly the kind of leak a long
+            # `clean --all` turns into an exhausted fd table.
+            os.close(parent_fd)
+    finally:
+        os.close(base_fd)
 
 
 def _remove_empty_parent_dirs(

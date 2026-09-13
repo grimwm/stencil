@@ -21,13 +21,43 @@ different way out of the package:
   brand lands under a name `clean` cannot see and git happily tracks
   (stn-8wt).
 
-NOT A PRIVILEGE BOUNDARY, and worth repeating from check_config_path's own
-comment: `pre_build.run` is arbitrary execution by design, so whoever writes
-.config.yaml can already run anything. What these close is a filename quietly
-doing something other than naming a file -- and, for `brand`, a read of a
-file nobody asked to publish reaching a distributed artifact. `stencil gen
---dry-run` over a pull request's config executes nothing today, which is the
-case that makes the brand one worth more than its severity suggests.
+WHAT THESE ARE AND ARE NOT A BOUNDARY FOR. The previous version of this
+paragraph said they were not a privilege boundary at all, because "pre_build.run
+is arbitrary execution by design, so whoever writes .config.yaml can already run
+anything". That is false, it was the stated reason these checks were allowed to
+be lenient, and it had been quoted forward into stn-9rn's and stn-vhr's scope
+decisions (stn-axi). stencil never executes `pre_build.run`: it writes the
+command into a generated Makefile, and execution happens only when a human later
+runs `make` inside the generated package.
+
+The true split, measured rather than reasoned about:
+
+- `clean`, `install`, `list` and `version` execute NOTHING from the config.
+  These checks ARE a boundary for them -- and the harms they close are real, not
+  theoretical: per stn-h5q and stn-17h, a config got arbitrary named-file
+  deletion out of `clean` and an arbitrary managed-.gitignore rewrite out of
+  `install`, both at exit 0, from commands that ran no code at all. What closed
+  those: #102, #115, #122, #124, #125.
+- `gen` and `gen --dry-run` DO execute arbitrary code, and these checks are not
+  a boundary for them. `render_templates` calls `template.render()` above its
+  `dry_run` branch on a non-sandboxed jinja2.Environment whose FileSystemLoader
+  searches the config's own `templates_dir` FIRST. Measured: a payload in a
+  `templates/Makefile.j2` ran under `stencil gen demo --dry-run` at exit 0 with
+  nothing written to the output tree, while `install` and `clean` over the same
+  config executed nothing. That is the documented extension mechanism working as
+  designed -- a template is code, and overriding one is the feature -- so
+  whoever controls a `templates_dir` controls execution. It is stated here and in
+  STENCIL.md rather than implied away; see test_gen_is_the_only_command_that_
+  executes_anything below, which pins the half that must stay true.
+- `make` on a generated package is outside all of this. These checks are not a
+  boundary against whoever runs it, and are not trying to be.
+
+So what these close is a filename quietly doing something other than naming a
+file -- and, for `brand`, a read of a file nobody asked to publish reaching a
+distributed artifact. A reviewer or CI job running `clean` or `install` over a
+pull request's config is the case that makes them worth more than their
+severity suggests, because those commands execute nothing and still wrote and
+deleted named files.
 """
 
 from __future__ import annotations
@@ -2748,3 +2778,545 @@ def test_a_gnumakefile_symlinked_to_the_makefile_is_not_refused_on_a_fresh_check
         f"on disk yet: {result.stderr!r}"
     )
     assert (package / "Makefile").exists()
+
+
+def test_gen_is_the_only_command_that_executes_anything():
+    """stn-axi. Pins the half of this module's docstring that must stay true.
+
+    The claim being defended is narrow and precise: `generate.py` contains no
+    process-spawning surface at all, so `clean`, `install`, `list` and `version`
+    execute nothing from the config, and the ONE execution surface `gen` has is
+    `render_templates`' `template.render()`.
+
+    SCANNED BY AST, not by grepping the text. A text scan for "subprocess" is
+    green today while the render hole is wide open, and it would fail the day
+    someone writes the word in a comment -- in a file whose comments discuss
+    exactly this subject at length, including the stn-vd6v comment a few hundred
+    lines away that explains why a `git config` subprocess was NOT added.
+
+    `pipeline.py` is deliberately exempt and that is not a gap. Its one
+    `subprocess.run` is `compose_command`'s probe for a compose implementation,
+    which takes no config value and which `generate.py` never calls -- grep the
+    callers. Do not "strengthen" this to the whole package; it will fail
+    immediately, on the wrong thing, for the wrong reason.
+    """
+    import ast
+
+    source = (Path(generate.__file__)).read_text(encoding="utf-8")
+    tree = ast.parse(source)
+
+    spawning_modules = {"subprocess", "runpy", "ctypes", "multiprocessing", "pty"}
+    spawning_os_calls = {
+        "system",
+        "popen",
+        "execv",
+        "execve",
+        "execl",
+        "execlp",
+        "execvp",
+        "spawnv",
+        "spawnve",
+        "spawnl",
+        "posix_spawn",
+        "posix_spawnp",
+        "fork",
+        "forkpty",
+    }
+
+    # Bare-name surfaces too (CodeRabbit, local review). `eval`, `exec`,
+    # `compile` and `__import__` execute code without importing anything and
+    # without touching `os`, so the two sets above would not see them -- and the
+    # claim being defended is "this file executes nothing", not "this file
+    # imports nothing dangerous".
+    spawning_builtins = {"eval", "exec", "compile", "__import__"}
+
+    imported = set()
+    os_called = set()
+    builtins_called = set()
+    rendered_at = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            imported.update(alias.name.split(".")[0] for alias in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            imported.add(node.module.split(".")[0])
+        elif isinstance(node, ast.Call):
+            func = node.func
+            if isinstance(func, ast.Name) and func.id in spawning_builtins:
+                builtins_called.add(func.id)
+            if isinstance(func, ast.Attribute):
+                if (
+                    isinstance(func.value, ast.Name)
+                    and func.value.id == "os"
+                    and func.attr in spawning_os_calls
+                ):
+                    os_called.add(func.attr)
+                if func.attr in {"render", "get_template"}:
+                    rendered_at.append(node.lineno)
+
+    assert not (imported & spawning_modules), (
+        f"generate.py now imports {sorted(imported & spawning_modules)}. The "
+        "module docstring's claim that clean/install/list/version execute "
+        "nothing rests on this file having no spawning surface -- update the "
+        "docstring deliberately, or drop the import."
+    )
+    assert not os_called, (
+        f"generate.py now calls os.{sorted(os_called)}, so the docstring's "
+        "claim is no longer true as written."
+    )
+    assert not builtins_called, (
+        f"generate.py now calls {sorted(builtins_called)}, which executes code "
+        "without importing anything -- the docstring's claim that clean, "
+        "install, list and version execute nothing no longer holds."
+    )
+
+    # The render surface is expected, and expected to stay in ONE function, so
+    # "gen executes templates" does not quietly become "several things do".
+    assert rendered_at, (
+        "no .render()/.get_template() call found at all -- if template "
+        "rendering moved, this test and the module docstring both need updating"
+    )
+    enclosing = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef):
+            span = range(node.lineno, (node.end_lineno or node.lineno) + 1)
+            if any(line in span for line in rendered_at):
+                enclosing.add(node.name)
+    assert enclosing == {"render_templates"}, (
+        f"templates are now rendered from {sorted(enclosing)}, not only from "
+        "render_templates. Every one of those is a code-execution surface "
+        "reachable from whichever command calls it -- update this module's "
+        "docstring to say so before widening this assertion."
+    )
+
+    # And render_templates itself must stay reachable from ONE command. The
+    # assertion above pins where the .render() calls live; this pins who calls
+    # that function and who calls its caller, so a future clean or install
+    # branch that reaches render_templates fails here rather than quietly
+    # turning "gen executes templates" into "clean does too".
+    def callers_of(name):
+        # Top-level functions only: a helper nested inside _main (its
+        # per-package _generate) belongs to _main for reachability.
+        found = set()
+        for node in tree.body:
+            if not isinstance(node, ast.FunctionDef):
+                continue
+            for call in ast.walk(node):
+                if (
+                    isinstance(call, ast.Call)
+                    and isinstance(call.func, ast.Name)
+                    and call.func.id == name
+                ):
+                    found.add(node.name)
+        return found
+
+    assert callers_of("render_templates") == {"generate_package"}, (
+        f"render_templates is now called from "
+        f"{sorted(callers_of('render_templates'))}; only generate_package may "
+        "reach it, or the docstring's command split is wrong."
+    )
+    assert callers_of("generate_package") == {"_main"}, (
+        f"generate_package is now called from "
+        f"{sorted(callers_of('generate_package'))}; only the CLI dispatch may "
+        "reach it."
+    )
+    # Inside _main, every non-gen command returns before this guard, so the
+    # generate_package call must sit below it.
+    guard = next(
+        node.lineno
+        for node in ast.walk(tree)
+        if isinstance(node, ast.If)
+        and ast.unparse(node.test) == "args.command != 'gen'"
+    )
+    main_def = next(
+        node for node in ast.walk(tree)
+        if isinstance(node, ast.FunctionDef) and node.name == "_main"
+    )
+    gen_calls = [
+        call.lineno
+        for call in ast.walk(main_def)
+        if isinstance(call, ast.Call)
+        and isinstance(call.func, ast.Name)
+        and call.func.id == "generate_package"
+    ]
+    assert gen_calls and all(line > guard for line in gen_calls), (
+        f"generate_package is called at {gen_calls}, but the non-gen commands "
+        f"only return before line {guard}; a call above that line is "
+        "reachable from clean, install, list or version."
+    )
+
+
+# --- stn-cfby: clean unlinks through a descriptor on the entry's parent ------
+#
+# Beside stn-avv's write-side tests above. The write side closed "gen writes
+# somewhere else"; these close "and later deletes there too", which stn-avv's
+# own comment says is a different sentence and left filed as stn-cfby.
+
+
+def _removable_package(tmp_path, dest="sub/target.txt"):
+    """A resolved package directory holding one nested generated file, plus a
+    victim directory outside it. Returns (root, pkg_path, victim).
+
+    `_remove_entries` is called directly rather than through the CLI: the window
+    under test is inside it, and driving the whole command would need a manifest
+    the attack does not depend on.
+    """
+    root = tmp_path / "out"
+    pkg_path = root / "demo"
+    (pkg_path / Path(dest).parent).mkdir(parents=True, exist_ok=True)
+    (pkg_path / dest).write_text("generated\n")
+
+    victim = tmp_path / "victim"
+    victim.mkdir()
+    (victim / Path(dest).name).write_text("A FILE NOBODY ASKED TO DELETE\n")
+    return root.resolve(), pkg_path.resolve(), victim
+
+
+def test_clean_refuses_a_parent_swapped_for_an_outside_symlink_mid_removal(
+    tmp_path, monkeypatch
+):
+    """THE WINDOW stn-cfby closes, made deterministic.
+
+    `_remove_entries` resolved each entry's parent with `contained_entry_parent`
+    and then unlinked BY PATH. The seam below replaces the parent with a symlink
+    to a victim directory in between -- exactly what an attacker with write
+    access to the output tree races for -- and the path-based unlink followed it.
+
+    Measured on the commit before the fix: `clean` printed
+    `Removed .../out/demo/sub/target.txt`, deleted the VICTIM's file outside the
+    output tree, returned it in `removed`, and recorded NO problem, at exit 0.
+    """
+    root, pkg_path, victim = _removable_package(tmp_path)
+    real_parent = generate.contained_entry_parent
+
+    def swap_after_resolving(package_id, where, declared, unresolved, rootp, pkg):
+        resolved = real_parent(package_id, where, declared, unresolved, rootp, pkg)
+        if resolved.name == "sub":
+            shutil.rmtree(resolved)
+            os.symlink(victim, resolved)
+        return resolved
+
+    monkeypatch.setattr(generate, "contained_entry_parent", swap_after_resolving)
+
+    problems = []
+    removed = generate._remove_entries(
+        "demo", root, pkg_path, {"sub/target.txt"}, False, problems
+    )
+
+    assert (victim / "target.txt").exists(), (
+        "the victim's file outside the output tree was deleted -- the "
+        "resolve-then-unlink-by-path window is still open"
+    )
+    assert removed == [], f"clean reported removing something it did not: {removed}"
+    assert len(problems) == 1, problems
+    assert "could not be removed" in problems[0]
+    assert "outside" in problems[0]
+    assert "Traceback" not in problems[0]
+
+
+def test_clean_still_follows_an_intermediate_symlink_that_lands_inside(tmp_path):
+    """Operator ruling A, and the invariant it protects.
+
+    `test_gen_refuses_a_symlinked_subdirectory_pointing_back_inside` states it in
+    words: "gen is at least as strict as clean", NOT "gen and clean agree".
+    `clean` has always removed through an intermediate directory that is a link
+    pointing back inside the package, and `gen` refuses such a package while
+    telling the author to run `stencil clean` -- so making the descriptor walk
+    refuse it too would have left the package neither generable nor cleanable,
+    and turned gen's own recovery advice into a lie.
+
+    So the walk resolves the link, REQUIRES it under the package directory, and
+    continues through it. The out-of-tree case is still refused; that is the test
+    above.
+    """
+    root = (tmp_path / "out").resolve()
+    pkg_path = (root / "demo")
+    pkg_path.mkdir(parents=True)
+    (pkg_path / "real").mkdir()
+    (pkg_path / "real" / "target.txt").write_text("generated\n")
+    os.symlink("real", pkg_path / "sub")
+    pkg_path = pkg_path.resolve()
+
+    problems = []
+    removed = generate._remove_entries(
+        "demo", root, pkg_path, {"sub/target.txt"}, False, problems
+    )
+
+    assert problems == [], problems
+    assert len(removed) == 1, removed
+    assert not (pkg_path / "real" / "target.txt").exists(), (
+        "clean no longer removes through an inside-pointing intermediate link, "
+        "which is a capability removal rather than a fix -- see ruling A"
+    )
+
+
+def test_clean_removes_a_final_component_symlink_and_not_its_target(tmp_path):
+    """THE ASYMMETRY, through the descriptor path specifically.
+
+    `os.unlink(name, dir_fd=...)` must not follow a final-component symlink, the
+    same way `Path.unlink()` does not. Removing the LINK is the only way a
+    package whose generated file was replaced by one becomes regenerable, so
+    `gen` refuses a link there and `clean` must keep unlinking it.
+    `tests/test_manifest.py` pins the CLI-level behaviour; this pins it at the
+    function the descriptor change actually touched.
+    """
+    root = (tmp_path / "out").resolve()
+    pkg_path = root / "demo"
+    pkg_path.mkdir(parents=True)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    target = outside / "precious.txt"
+    target.write_text("PRECIOUS\n")
+    link = pkg_path / "Makefile"
+    os.symlink(target, link)
+    pkg_path = pkg_path.resolve()
+
+    problems = []
+    removed = generate._remove_entries(
+        "demo", root, pkg_path, {"Makefile"}, False, problems
+    )
+
+    assert problems == [], problems
+    assert removed == [pkg_path / "Makefile"], removed
+    assert not link.is_symlink(), "the link survived, so the package stays un-cleanable"
+    assert target.exists(), "the link's target outside the package was deleted"
+    assert target.read_text() == "PRECIOUS\n"
+
+
+def test_a_missing_intermediate_is_a_silent_skip_not_a_problem(tmp_path):
+    """Idempotency, which `problems` being FATAL makes easy to break.
+
+    A gone intermediate is the ORDINARY case for a second `clean`: the first
+    run's `_remove_empty_parent_dirs` sweeps the now-empty parent away, so the
+    second walk finds it missing. Measured on main, `clean` twice in a row is
+    rc 0 both times. Reporting "gone" as a problem would make the second run
+    exit 1.
+
+    Told apart from a refusal by exception CLASS -- `FileNotFoundError` -- never
+    by errno, because the refusal is ENOTDIR on macOS and ELOOP on Linux for the
+    identical attack.
+    """
+    root = (tmp_path / "out").resolve()
+    pkg_path = root / "demo"
+    pkg_path.mkdir(parents=True)
+    pkg_path = pkg_path.resolve()
+
+    problems = []
+    removed = generate._remove_entries(
+        "demo", root, pkg_path, {"sub/never-existed.txt"}, False, problems
+    )
+
+    assert problems == [], f"a path that was never there was reported: {problems}"
+    assert removed == []
+
+
+def test_the_descriptor_walk_creates_nothing_on_the_delete_side(tmp_path):
+    """`create=False` is wired the right way round.
+
+    If it were inverted, `clean` would CREATE the directories it is about to
+    remove -- leaving `sub/` behind on a package where nothing was ever
+    generated, which is both wrong and invisible unless something looks.
+    """
+    root = (tmp_path / "out").resolve()
+    pkg_path = root / "demo"
+    pkg_path.mkdir(parents=True)
+    pkg_path = pkg_path.resolve()
+
+    generate._remove_entries(
+        "demo", root, pkg_path, {"a/b/c.txt"}, False, []
+    )
+
+    assert not (pkg_path / "a").exists(), (
+        "clean created an intermediate directory while removing -- create=False "
+        "is inverted"
+    )
+
+
+def test_both_a_nested_and_a_top_level_entry_remove_correctly(tmp_path):
+    """The single-component case is where `walk_dir_fd`'s `os.dup` ownership rule
+    bites: a caller that closed a non-dup `base_fd` would break every removal
+    after the first top-level one. Both shapes in one call, so the fd lifecycle
+    is exercised rather than assumed.
+    """
+    root = (tmp_path / "out").resolve()
+    pkg_path = root / "demo"
+    (pkg_path / "sub").mkdir(parents=True)
+    (pkg_path / "sub" / "nested.txt").write_text("x\n")
+    (pkg_path / "Makefile").write_text("y\n")
+    (pkg_path / "docker-compose.yml").write_text("z\n")
+    pkg_path = pkg_path.resolve()
+
+    problems = []
+    removed = generate._remove_entries(
+        "demo",
+        root,
+        pkg_path,
+        {"sub/nested.txt", "Makefile", "docker-compose.yml"},
+        False,
+        problems,
+    )
+
+    assert problems == [], problems
+    assert len(removed) == 3, removed
+    for name in ("sub/nested.txt", "Makefile", "docker-compose.yml"):
+        assert not (pkg_path / name).exists(), name
+
+
+def test_a_glob_entry_is_listed_through_the_descriptor_and_removed(tmp_path):
+    """`Guide*.html` and `Guide*.pdf` are every doc package's own entries, so the
+    glob path is the common case rather than an edge. The listing moved onto the
+    same descriptor the unlink uses, so the names come from the directory the
+    removal happens in.
+    """
+    root = (tmp_path / "out").resolve()
+    pkg_path = root / "demo"
+    pkg_path.mkdir(parents=True)
+    for name in ("Guide.html", "Guide-hidden.html", "Other.html"):
+        (pkg_path / name).write_text("x\n")
+    pkg_path = pkg_path.resolve()
+
+    problems = []
+    removed = generate._remove_entries(
+        "demo", root, pkg_path, {"Guide*.html"}, False, problems
+    )
+
+    assert problems == [], problems
+    assert {p.name for p in removed} == {"Guide.html", "Guide-hidden.html"}
+    assert (pkg_path / "Other.html").exists(), "the glob matched too widely"
+
+
+def test_a_glob_under_a_missing_parent_matches_nothing_quietly(tmp_path):
+    """What `Path.glob` did here before, preserved: a parent that is not there
+    matches nothing. A second `clean` reaches this every time.
+    """
+    root = (tmp_path / "out").resolve()
+    pkg_path = root / "demo"
+    pkg_path.mkdir(parents=True)
+    pkg_path = pkg_path.resolve()
+
+    problems = []
+    removed = generate._remove_entries(
+        "demo", root, pkg_path, {"gone/Guide*.html"}, False, problems
+    )
+
+    assert problems == [], problems
+    assert removed == []
+
+
+def test_the_delete_side_falls_back_to_paths_where_dir_fd_is_unsupported(
+    tmp_path, monkeypatch
+):
+    """Windows, or `_DIR_FD_CAPABLE` forced False on a capable platform -- the
+    same seam stn-avv's write-side fallback tests use. Today's path-based
+    behaviour, unchanged, and stated in STENCIL.md rather than implied away.
+    """
+    monkeypatch.setattr(generate, "_DIR_FD_CAPABLE", False)
+
+    root = (tmp_path / "out").resolve()
+    pkg_path = root / "demo"
+    (pkg_path / "sub").mkdir(parents=True)
+    (pkg_path / "sub" / "target.txt").write_text("generated\n")
+    (pkg_path / "Makefile").write_text("y\n")
+    pkg_path = pkg_path.resolve()
+
+    problems = []
+    removed = generate._remove_entries(
+        "demo", root, pkg_path, {"sub/target.txt", "Makefile"}, False, problems
+    )
+
+    assert problems == [], problems
+    assert len(removed) == 2, removed
+    assert not (pkg_path / "sub" / "target.txt").exists()
+    assert not (pkg_path / "Makefile").exists()
+
+
+def test_the_removal_refusal_says_removing_rather_than_writing(tmp_path, monkeypatch):
+    """In this file the message IS the feature. `walk_dir_fd`'s refusal used to be
+    hardcoded to "while writing ... refusing to write through it", which `clean`
+    would have printed under a heading about removal.
+    """
+    root, pkg_path, victim = _removable_package(tmp_path)
+    real_parent = generate.contained_entry_parent
+
+    def swap(package_id, where, declared, unresolved, rootp, pkg):
+        resolved = real_parent(package_id, where, declared, unresolved, rootp, pkg)
+        if resolved.name == "sub":
+            shutil.rmtree(resolved)
+            os.symlink(victim, resolved)
+        return resolved
+
+    monkeypatch.setattr(generate, "contained_entry_parent", swap)
+
+    problems = []
+    generate._remove_entries("demo", root, pkg_path, {"sub/target.txt"}, False, problems)
+
+    assert problems, "expected a refusal to inspect"
+    assert "removing" in problems[0] or "remove" in problems[0], problems[0]
+    assert "writing" not in problems[0], (
+        f"clean printed a write-flavoured refusal: {problems[0]!r}"
+    )
+
+
+def test_dir_fd_capability_covers_every_syscall_the_delete_side_uses():
+    """`_DIR_FD_CAPABLE` gates clean's descriptor path, and clean calls
+    `os.unlink(..., dir_fd=)` and `os.stat(..., dir_fd=)` -- neither of which the
+    original conjunction tested. This file's discipline is to measure what it
+    uses; `gen` relied on unlink's support without ever checking for it.
+    """
+    if not generate._DIR_FD_CAPABLE:
+        pytest.skip("platform has no dir_fd support at all")
+
+    assert os.unlink in os.supports_dir_fd
+    assert os.stat in os.supports_dir_fd
+
+
+def test_a_glob_entry_under_the_same_window_is_a_problem_not_a_traceback(
+    tmp_path, monkeypatch
+):
+    """THE WINDOW REACHED THROUGH A GLOB, found by CodeRabbit on the local
+    pre-PR pass and reproduced before fixing.
+
+    `_scandir_match` runs in the COLLECTION loop, where the plain-name branch has
+    no unlink to fail. `contained_entry_parent` has already refused a parent that
+    resolves outside, so the listing only refuses when the component is swapped
+    between that check and the listing -- the same window, one branch over.
+
+    Measured before the guard: the refusal escaped `_remove_entries` as an
+    unhandled `ValueError`. Containment HELD -- the victim's files were never
+    touched -- so the harm was not a deletion; it was `clean` ending in a bare
+    traceback part-way through, which is exactly the shape `_main`'s clean branch
+    says in a comment that it refuses to create. `Guide*.html` is every doc
+    package's own entry, so this is the ordinary branch rather than an exotic one.
+    """
+    root = (tmp_path / "out").resolve()
+    pkg_path = root / "demo"
+    (pkg_path / "sub").mkdir(parents=True)
+    (pkg_path / "sub" / "Guide.html").write_text("ours\n")
+    pkg_path = pkg_path.resolve()
+
+    victim = tmp_path / "victim"
+    victim.mkdir()
+    (victim / "Guide.html").write_text("NOT OURS\n")
+
+    real_parent = generate.contained_entry_parent
+
+    def swap_after_resolving(package_id, where, declared, unresolved, rootp, pkg):
+        resolved = real_parent(package_id, where, declared, unresolved, rootp, pkg)
+        if resolved.name == "sub":
+            shutil.rmtree(resolved)
+            os.symlink(victim, resolved)
+        return resolved
+
+    monkeypatch.setattr(generate, "contained_entry_parent", swap_after_resolving)
+
+    problems = []
+    removed = generate._remove_entries(
+        "demo", root, pkg_path, {"sub/Guide*.html"}, False, problems
+    )
+
+    assert removed == [], removed
+    assert len(problems) == 1, problems
+    assert "could not be listed" in problems[0], problems[0]
+    assert "outside" in problems[0], problems[0]
+    assert (victim / "Guide.html").read_text() == "NOT OURS\n", (
+        "the victim's file was touched through the swapped listing"
+    )

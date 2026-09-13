@@ -193,11 +193,19 @@ def test_run_is_required(demo_config):
 # I checked the check STATUS and not the review itself. Both findings were
 # reproduced against the real generator before being accepted.
 #
-# SCOPE IT HONESTLY: this is not a privilege boundary. `run` is arbitrary
-# command execution by design, so anyone who can edit .config.yaml can already
-# run anything, and `run` is deliberately NOT validated -- pretending to
-# sanitise a command would invite the belief that a hostile config is
-# contained, which it is not.
+# SCOPE IT HONESTLY, and the honest scope is not the one this comment used to
+# claim (stn-axi). It said these are not a privilege boundary because "`run` is
+# arbitrary command execution by design, so anyone who can edit .config.yaml can
+# already run anything". stencil executes `run` NEVER: it writes the command
+# into a generated Makefile, and execution happens when a human later runs
+# `make`. `run` is still deliberately NOT validated -- pretending to sanitise a
+# command would invite the belief that a hostile config is contained from the
+# person who runs make, which it is not -- but the reason is about THEM, not
+# about stencil's own commands. `clean`, `install`, `list` and `version` execute
+# nothing from the config at all; `gen` and `gen --dry-run` execute whatever is
+# on the config's template search path, which is the documented extension
+# mechanism. tests/test_path_containment.py's module docstring carries the full
+# split and the measurement.
 #
 # What makes it worth fixing is that outputs, inputs and name are DECLARATIVE.
 # An author writing a glob does not expect it to execute, and a `..` breaks the
@@ -278,9 +286,11 @@ def test_run_is_not_validated_and_that_is_deliberate():
 def test_docs_and_slides_are_validated_too():
     """stn-zmf. They reach the same Make recipes pre_build's paths do.
 
-    Same scope argument as the pre_build fields: not a privilege boundary,
-    because `run` is arbitrary execution by design. What this prevents is a
-    filename quietly doing something other than naming a file.
+    Same scope argument as the pre_build fields, as corrected by stn-axi:
+    stencil executes nothing from the config on `clean`, `install`, `list` or
+    `version`, and these paths still reach the Make recipes a human runs. What
+    this prevents is a filename quietly doing something other than naming a
+    file.
     """
     from stencil.generate import get_template_context
 
