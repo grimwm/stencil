@@ -2823,8 +2823,16 @@ def test_gen_is_the_only_command_that_executes_anything():
         "forkpty",
     }
 
+    # Bare-name surfaces too (CodeRabbit, local review). `eval`, `exec`,
+    # `compile` and `__import__` execute code without importing anything and
+    # without touching `os`, so the two sets above would not see them -- and the
+    # claim being defended is "this file executes nothing", not "this file
+    # imports nothing dangerous".
+    spawning_builtins = {"eval", "exec", "compile", "__import__"}
+
     imported = set()
     os_called = set()
+    builtins_called = set()
     rendered_at = []
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
@@ -2833,6 +2841,8 @@ def test_gen_is_the_only_command_that_executes_anything():
             imported.add(node.module.split(".")[0])
         elif isinstance(node, ast.Call):
             func = node.func
+            if isinstance(func, ast.Name) and func.id in spawning_builtins:
+                builtins_called.add(func.id)
             if isinstance(func, ast.Attribute):
                 if (
                     isinstance(func.value, ast.Name)
@@ -2852,6 +2862,11 @@ def test_gen_is_the_only_command_that_executes_anything():
     assert not os_called, (
         f"generate.py now calls os.{sorted(os_called)}, so the docstring's "
         "claim is no longer true as written."
+    )
+    assert not builtins_called, (
+        f"generate.py now calls {sorted(builtins_called)}, which executes code "
+        "without importing anything -- the docstring's claim that clean, "
+        "install, list and version execute nothing no longer holds."
     )
 
     # The render surface is expected, and expected to stay in ONE function, so
@@ -3196,3 +3211,56 @@ def test_dir_fd_capability_covers_every_syscall_the_delete_side_uses():
 
     assert os.unlink in os.supports_dir_fd
     assert os.stat in os.supports_dir_fd
+
+
+def test_a_glob_entry_under_the_same_window_is_a_problem_not_a_traceback(
+    tmp_path, monkeypatch
+):
+    """THE WINDOW REACHED THROUGH A GLOB, found by CodeRabbit on the local
+    pre-PR pass and reproduced before fixing.
+
+    `_scandir_match` runs in the COLLECTION loop, where the plain-name branch has
+    no unlink to fail. `contained_entry_parent` has already refused a parent that
+    resolves outside, so the listing only refuses when the component is swapped
+    between that check and the listing -- the same window, one branch over.
+
+    Measured before the guard: the refusal escaped `_remove_entries` as an
+    unhandled `ValueError`. Containment HELD -- the victim's files were never
+    touched -- so the harm was not a deletion; it was `clean` ending in a bare
+    traceback part-way through, which is exactly the shape `_main`'s clean branch
+    says in a comment that it refuses to create. `Guide*.html` is every doc
+    package's own entry, so this is the ordinary branch rather than an exotic one.
+    """
+    root = (tmp_path / "out").resolve()
+    pkg_path = root / "demo"
+    (pkg_path / "sub").mkdir(parents=True)
+    (pkg_path / "sub" / "Guide.html").write_text("ours\n")
+    pkg_path = pkg_path.resolve()
+
+    victim = tmp_path / "victim"
+    victim.mkdir()
+    (victim / "Guide.html").write_text("NOT OURS\n")
+
+    real_parent = generate.contained_entry_parent
+
+    def swap_after_resolving(package_id, where, declared, unresolved, rootp, pkg):
+        resolved = real_parent(package_id, where, declared, unresolved, rootp, pkg)
+        if resolved.name == "sub":
+            shutil.rmtree(resolved)
+            os.symlink(victim, resolved)
+        return resolved
+
+    monkeypatch.setattr(generate, "contained_entry_parent", swap_after_resolving)
+
+    problems = []
+    removed = generate._remove_entries(
+        "demo", root, pkg_path, {"sub/Guide*.html"}, False, problems
+    )
+
+    assert removed == [], removed
+    assert len(problems) == 1, problems
+    assert "could not be listed" in problems[0], problems[0]
+    assert "outside" in problems[0], problems[0]
+    assert (victim / "Guide.html").read_text() == "NOT OURS\n", (
+        "the victim's file was touched through the swapped listing"
+    )

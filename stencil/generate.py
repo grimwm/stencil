@@ -4276,7 +4276,26 @@ def _remove_entries(
             # and `Guide*.pdf` are every doc package's own entries, so this is
             # the common case rather than an edge. `os.listdir` does not accept
             # a bare fd; `os.scandir` does.
-            for match_name in _scandir_match(parent_resolved, name, pkg_path):
+            # Guarded exactly like the unlink below, and for the same reason.
+            # `contained_entry_parent` above has already refused a parent that
+            # resolves outside, so this only fires when the component is swapped
+            # BETWEEN that check and this listing -- the very window stn-cfby is
+            # about, reached through a glob instead of a plain name. Measured
+            # before this guard: the refusal escaped `_remove_entries` as an
+            # unhandled ValueError, so containment held (the victim's files were
+            # untouched) and `clean` still ended in a bare traceback mid-run,
+            # which is the shape `_main`'s clean branch says in a comment that it
+            # refuses to create. A named problem, and the rest of the package is
+            # still processed.
+            try:
+                matches = _scandir_match(parent_resolved, name, pkg_path)
+            except (ValueError, OSError) as error:
+                problems.append(
+                    f"Package {package_id}: {entry!r} could not be listed: "
+                    f"{error}"
+                )
+                continue
+            for match_name in matches:
                 match = parent_resolved / match_name
                 paths_with_depth.append((len(match.parts), match))
         else:

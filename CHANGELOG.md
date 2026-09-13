@@ -12,10 +12,11 @@ How the version gets bumped is written down in
 ## 0.39.0
 
 - **Two generated files with the same destination are refused instead of clobbering each other**
-  (`stn-8hap`). `dest: .stencil-manifest.json` made `gen` print `Generated:` twice for one path and
-  the manifest, written last, replace the rendered template; `brand: logo.png` beside a template
-  whose `dest` was `logo.png` left the brand bytes on disk with the rendered template gone. Both at
-  exit 0, the only hint a duplicate `Generated:` line. The pre-flight now refuses a config in which
+  (`stn-8hap`). With `dest: .stencil-manifest.json`, `gen` printed `Generated:` twice for one path
+  and the manifest — written last — replaced the rendered template. With `brand: logo.png` beside a
+  template whose `dest` was `logo.png`, the brand bytes were left on disk and the rendered template
+  was gone. Both at exit 0, the only hint a duplicate `Generated:` line nobody reads. The pre-flight
+  now refuses a config in which
   two **different sources** write one path, naming both and the file. Different sources, not a
   repeated path: a config may legitimately list a template stencil also injects, which renders the
   same bytes twice and discards nothing — eight test modules do it. Paths compare by
