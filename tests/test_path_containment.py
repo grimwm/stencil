@@ -2894,8 +2894,10 @@ def test_gen_is_the_only_command_that_executes_anything():
     # branch that reaches render_templates fails here rather than quietly
     # turning "gen executes templates" into "clean does too".
     def callers_of(name):
+        # Top-level functions only: a helper nested inside _main (its
+        # per-package _generate) belongs to _main for reachability.
         found = set()
-        for node in ast.walk(tree):
+        for node in tree.body:
             if not isinstance(node, ast.FunctionDef):
                 continue
             for call in ast.walk(node):
