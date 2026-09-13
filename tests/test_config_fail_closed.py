@@ -1005,3 +1005,372 @@ def test_a_well_formed_when_still_passes():
             "packages": {"demo": package()},
         }
         package_contexts(config)
+
+
+# --- stn-8hap: two DIFFERENT sources writing one destination collide --------
+#
+# write_targets(context, template_defs) already returns every (where,
+# relative, source) triple one `gen` call is about to write: each surviving
+# template's dest, the copied brand image, and the manifest. Two DIFFERENT
+# sources claiming the same relative path is a config mistake nothing used to
+# notice -- measured on main, both at exit 0: a template whose `dest` is
+# `.stencil-manifest.json` made `gen` print "Generated:" twice for one path
+# and the manifest, written last, silently destroyed the rendered template;
+# a `brand` image sharing a template's `dest` left the BRAND bytes on disk
+# with the rendered template gone. package_contexts is where this is caught,
+# because it is the one aggregating pre-flight `gen`, `install` and `clean`
+# all pass through -- one refusal, on every command.
+#
+# THE MESSAGES ASSERTED BELOW ARE THE ACTUAL WORDING THE IMPLEMENTATION
+# PRODUCES (verified against stencil/generate.py's `_collision_who` and
+# `_collision_scope`), not invented text -- so these tests fail for real if
+# the wording drifts, not because they guessed wrong. Assertions target the
+# load-bearing substrings (scope, both sources, the destination) rather than
+# the whole sentence, so a harmless rewording of the trailing "give them
+# different names" clause does not break every test in this section.
+
+
+def test_a_dest_colliding_with_the_manifest_is_refused():
+    config = {
+        "templates": [{"src": "Makefile-pkg.j2", "dest": ".stencil-manifest.json"}],
+        "packages": {"demo": package()},
+    }
+    with pytest.raises(ValueError) as exc:
+        package_contexts(config)
+    message = str(exc.value)
+    assert "config:" in message, f"not scoped to config: {message!r}"
+    assert "dest 'Makefile-pkg.j2'" in message, message
+    assert "the manifest" in message, message
+    assert "'.stencil-manifest.json'" in message, message
+
+
+def test_cli_refuses_a_dest_colliding_with_the_manifest_and_writes_nothing(tmp_path):
+    write_config(
+        tmp_path,
+        {
+            "templates": [
+                {"src": "Makefile-pkg.j2", "dest": ".stencil-manifest.json"}
+            ],
+            "packages": {"demo": {"name": "Demo", "package_type": "none"}},
+        },
+    )
+    result = run_cli("gen", "--all", cwd=tmp_path)
+
+    assert result.returncode != 0, "gen exited 0 on a dest/manifest collision"
+    assert "Traceback" not in result.stderr, result.stderr
+    assert "the manifest" in result.stderr, result.stderr
+    assert "'.stencil-manifest.json'" in result.stderr, result.stderr
+    assert not (tmp_path / "demo").exists(), (
+        "nothing should have been written for a config this broken"
+    )
+
+
+def test_a_template_whose_src_equals_the_manifest_name_still_collides_with_it():
+    """A REAL HOLE in an earlier version of this same check, found by review
+    and then reproduced: keying the dedup on the SOURCE STRING alone
+    collapsed two DIFFERENT writers into one dict entry whenever their
+    source strings happened to be equal by coincidence -- reachable with a
+    `templates_dir` template literally named `.stencil-manifest.json` (no
+    declared `dest`, so it renders to that same name unchanged). That
+    template's write-target source is its own `src`, `.stencil-manifest.json`
+    -- the SAME STRING the manifest's own write-target uses as its source --
+    so a dict keyed by source string alone (`{source: where}`) let the
+    second write silently overwrite the first key rather than accumulate a
+    second one, and the collision went unreported: this ticket's exact bug
+    walking straight past this ticket's own check. Keying on the (where,
+    source) PAIR instead is what closes it, and this is that regression
+    pinned directly."""
+    config = {
+        "templates": [{"src": ".stencil-manifest.json"}],
+        "packages": {"demo": package()},
+    }
+    with pytest.raises(ValueError) as exc:
+        package_contexts(config)
+    message = str(exc.value)
+    assert "dest '.stencil-manifest.json'" in message, message
+    assert "the manifest" in message, message
+
+
+def test_a_brand_colliding_with_a_dest_is_refused():
+    """No config_dir here, so brand_problem skips the file-existence check
+    (decision d-96da97d8) and only brand-alt has to be set -- the collision
+    check itself needs no real file on disk, only the config STRING, which
+    is what write_targets names the brand target from."""
+    config = {
+        "brand": "logo.png",
+        "brand-alt": "Logo",
+        "templates": [{"src": "Makefile-pkg.j2", "dest": "logo.png"}],
+        "packages": {"demo": package()},
+    }
+    with pytest.raises(ValueError) as exc:
+        package_contexts(config)
+    message = str(exc.value)
+    assert "config:" in message, f"not scoped to config: {message!r}"
+    assert "brand 'logo.png'" in message, message
+    assert "dest 'Makefile-pkg.j2'" in message, message
+    assert "both write 'logo.png'" in message, message
+
+
+def test_cli_refuses_a_brand_colliding_with_a_dest_and_writes_nothing(tmp_path):
+    """Through `stencil gen`, which DOES pass config_dir -- so this is the
+    case that needs a real logo file on disk, or the earlier
+    file-existence check would report first and never reach the collision.
+
+    `docs` has to be non-empty too: both `brand_problem` and the brand
+    write-target are gated on `has_pages`, so a page-less package never
+    even reaches the brand check, let alone the collision."""
+    (tmp_path / "logo.png").write_bytes(b"\x89PNG\r\n\x1a\n")
+    write_config(
+        tmp_path,
+        {
+            "brand": "logo.png",
+            "brand-alt": "Logo",
+            "templates": [{"src": "Makefile-pkg.j2", "dest": "logo.png"}],
+            "packages": {
+                "demo": {
+                    "name": "Demo",
+                    "package_type": "none",
+                    "docs": ["a.md"],
+                }
+            },
+        },
+    )
+    result = run_cli("gen", "--all", cwd=tmp_path)
+
+    assert result.returncode != 0, "gen exited 0 on a brand/dest collision"
+    assert "Traceback" not in result.stderr, result.stderr
+    assert "brand 'logo.png'" in result.stderr, result.stderr
+    assert "dest 'Makefile-pkg.j2'" in result.stderr, result.stderr
+    assert not (tmp_path / "demo").exists(), (
+        "nothing should have been written for a config this broken"
+    )
+
+
+def test_two_templates_with_the_same_dest_are_refused_once():
+    """DIFFERENT srcs, same dest -- named as two 'dest' entries, not
+    collapsed into one and not reported as two separate ValueErrors."""
+    config = {
+        "templates": [
+            {"src": "Makefile-pkg.j2", "dest": "shared.txt"},
+            {"src": "Makefile.j2", "dest": "shared.txt"},
+        ],
+        "packages": {"demo": package()},
+    }
+    with pytest.raises(ValueError) as exc:
+        package_contexts(config)
+    message = str(exc.value)
+    assert "dest 'Makefile-pkg.j2'" in message, message
+    assert "dest 'Makefile.j2'" in message, message
+    assert message.count("both write 'shared.txt'") == 1, (
+        f"the same collision must be named once, not twice: {message!r}"
+    )
+
+
+def test_cli_refuses_two_templates_with_the_same_dest_and_writes_nothing(tmp_path):
+    write_config(
+        tmp_path,
+        {
+            "templates": [
+                {"src": "Makefile-pkg.j2", "dest": "shared.txt"},
+                {"src": "Makefile.j2", "dest": "shared.txt"},
+            ],
+            "packages": {"demo": {"name": "Demo", "package_type": "none"}},
+        },
+    )
+    result = run_cli("gen", "--all", cwd=tmp_path)
+
+    assert result.returncode != 0, "gen exited 0 on two templates sharing a dest"
+    assert "Traceback" not in result.stderr, result.stderr
+    assert "dest 'Makefile-pkg.j2'" in result.stderr, result.stderr
+    assert "dest 'Makefile.j2'" in result.stderr, result.stderr
+    assert not (tmp_path / "demo").exists(), (
+        "nothing should have been written for a config this broken"
+    )
+
+
+@pytest.mark.parametrize(
+    "dest_a, dest_b",
+    [
+        pytest.param("./out.txt", "out.txt", id="dot-slash-prefix"),
+        pytest.param("sub//f.txt", "sub/f.txt", id="doubled-separator"),
+    ],
+)
+def test_differently_spelled_but_identical_paths_still_collide(dest_a, dest_b):
+    """Compared by `Path(relative).as_posix()`, not the raw string: both
+    pairs land on the SAME file on every platform, not just this one, so a
+    raw-string comparison would call them distinct and let the clobber
+    through a refusal that would be cited as closing it."""
+    config = {
+        "templates": [
+            {"src": "a.j2", "dest": dest_a},
+            {"src": "b.j2", "dest": dest_b},
+        ],
+        "packages": {"demo": package()},
+    }
+    with pytest.raises(ValueError) as exc:
+        package_contexts(config)
+    message = str(exc.value)
+    assert "'a.j2'" in message, message
+    assert "'b.j2'" in message, message
+
+
+def test_a_config_listed_template_stencil_also_injects_still_generates():
+    """THE CRITICAL REGRESSION GUARD (adversarial review of the
+    implementation, reproduced independently here). The first version of
+    this check compared raw DESTINATION PATHS and refused any config that
+    lists a template stencil also injects on its own -- exactly what
+    `templates: [{src: html-template.html.j2}]` does on a package with
+    `docs` (has_docs injects DOC_PAGE_TEMPLATES, generate_package
+    concatenates injected + config). EIGHT existing test modules
+    (test_download.py, test_pdf.py, test_brand.py, test_title_block.py,
+    test_config_validation.py, test_manifest.py, test_theme.py,
+    test_task_lists.py) list a template stencil also injects, so an
+    exact-path rule would break all of them and this task's own acceptance
+    (a green suite) could never be met.
+
+    It is also wrong on the merits, not just inconvenient: the SAME src
+    renders the SAME bytes to the SAME path twice, so nothing is discarded --
+    only two DIFFERENT sources landing on one path is the silent clobber
+    worth refusing. This must NOT raise, and must still return a context for
+    the package -- do not "fix" this test to expect a refusal.
+    """
+    config = {
+        "templates": [{"src": "html-template.html.j2"}],
+        "packages": {"demo": package()},
+    }
+    contexts = package_contexts(config)
+    assert "demo" in contexts
+
+
+def test_a_case_only_collision_is_deliberately_not_refused():
+    """DOCUMENTED RESIDUAL, pinned as deliberate rather than left to be
+    "fixed" by a future reader (review comment d-ebfffe1b, measured on this
+    APFS volume: `echo one > Makefile; echo two > makefile` leaves ONE file
+    holding "two"). `dest: Notes.txt` and `dest: notes.txt` clobber each
+    other on disk while being distinct STRINGS, so the exact-equality check
+    used here does not -- and must not -- catch this. Folding case would be
+    right on APFS and WRONG on ext4, where they name two genuinely different
+    files and folding would refuse a config that works there. Do not add
+    casefolding to close this "gap"; it would break a legitimate config on
+    every case-sensitive filesystem."""
+    config = {
+        "templates": [
+            {"src": "a.j2", "dest": "Notes.txt"},
+            {"src": "b.j2", "dest": "notes.txt"},
+        ],
+        "packages": {"demo": package()},
+    }
+    contexts = package_contexts(config)
+    assert "demo" in contexts
+
+
+def test_a_normalization_only_collision_is_deliberately_not_refused():
+    """Same documented residual, the Unicode form (measured: the NFC and NFD
+    spellings of "café.txt" are one inode on this APFS volume, same as the
+    case-only pair above). `Path(relative).as_posix()` does not fold
+    Unicode normalization forms, deliberately and for the identical reason
+    case is not folded: right on APFS, wrong on a filesystem where the two
+    spellings are genuinely different files."""
+    nfc = "café.txt"  # precomposed e-acute
+    nfd = "café.txt"  # 'e' + combining acute accent
+    assert nfc != nfd, "the two spellings must actually differ as strings"
+    config = {
+        "templates": [
+            {"src": "a.j2", "dest": nfc},
+            {"src": "b.j2", "dest": nfd},
+        ],
+        "packages": {"demo": package()},
+    }
+    contexts = package_contexts(config)
+    assert "demo" in contexts
+
+
+def test_a_collision_suppressed_by_an_unmet_when_is_not_reported():
+    """The collision scan runs on `write_targets`, which already applies
+    `when_holds` -- so a template this call would never actually write must
+    not be named as though it collided with something."""
+    config = {
+        "templates": [
+            {"src": "a.j2", "dest": "shared.txt", "when": "has_slides"},
+            {"src": "b.j2", "dest": "shared.txt"},
+        ],
+        "packages": {"demo": package(slides=[])},
+    }
+    contexts = package_contexts(config)
+    assert "demo" in contexts
+
+
+def test_a_package_with_no_destination_collision_still_generates():
+    config = {
+        "templates": [
+            {"src": "a.j2", "dest": "one.txt"},
+            {"src": "b.j2", "dest": "two.txt"},
+        ],
+        "packages": {"demo": package()},
+    }
+    contexts = package_contexts(config)
+    assert "demo" in contexts
+    assert contexts["demo"]["package_id"] == "demo"
+
+
+def test_a_config_level_collision_across_three_packages_is_reported_once():
+    """SCOPE PREFIX. A config-level collision (the `templates:` list and the
+    manifest name are both config-level, like `dest` elsewhere in this file)
+    applies identically to every package that shares it, so each package's
+    pass through the per-package loop produces the byte-identical bullet --
+    `_raise_config_problems` dedupes it to exactly ONE bullet prefixed
+    `config:`, not three prefixed `Package a:`/`Package b:`/`Package c:`."""
+    config = {
+        "templates": [{"src": "a.j2", "dest": ".stencil-manifest.json"}],
+        "packages": {"a": package(), "b": package(), "c": package()},
+    }
+    with pytest.raises(ValueError) as exc:
+        package_contexts(config)
+    message = str(exc.value)
+    assert message.count("config:") == 1, (
+        f"expected exactly one config: bullet, got: {message!r}"
+    )
+    assert "Package a:" not in message, message
+    assert "Package b:" not in message, message
+    assert "Package c:" not in message, message
+
+
+def test_a_package_level_brand_collision_is_scoped_to_that_package():
+    """The counterpart to the config-level scope test above: `brand` is the
+    one key in a collision that may be either config- or package-level, and
+    `_collision_scope` reads it off the PACKAGE the same way `brand_of`
+    resolves it -- a package-level brand scopes the whole bullet to that
+    package, not to `config`."""
+    config = {
+        "templates": [{"src": "a.j2", "dest": "logo.png"}],
+        "packages": {
+            "demo": package(brand="logo.png", **{"brand-alt": "Logo"}),
+        },
+    }
+    with pytest.raises(ValueError) as exc:
+        package_contexts(config)
+    message = str(exc.value)
+    assert "Package demo:" in message, message
+
+
+def test_a_config_level_bad_dest_is_reported_once_not_twice():
+    """CRITICAL GUARD from the adversarial review. `dest: "*.txt"` passes
+    the config-level loop's `check_config_path` (a glob metacharacter is not
+    a shell/Make metacharacter) and is only caught later, inside
+    `write_targets` -> `template_destinations`, by `check_no_glob` --
+    reached from THIS function's per-package try/except. That problem must
+    be COLLECTED (appended to `problems`), never swallowed by a blanket
+    `except ValueError: continue` -- and, with two packages sharing the
+    same config-level `templates:`, the byte-identical message from each
+    package's pass collapses to ONE bullet via `_raise_config_problems`'s
+    dedup, not two."""
+    config = {
+        "templates": [{"src": "a.j2", "dest": "*.txt"}],
+        "packages": {"one": package(), "two": package()},
+    }
+    with pytest.raises(ValueError) as exc:
+        package_contexts(config)
+    message = str(exc.value)
+    assert message.count("glob metacharacter") == 1, (
+        f"expected exactly one glob-metacharacter bullet, got: {message!r}"
+    )

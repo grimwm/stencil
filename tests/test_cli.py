@@ -8,8 +8,10 @@ the person nothing about which file stencil wanted or where to put it.
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 import sys
+import unicodedata
 from pathlib import Path
 
 import pytest
@@ -701,4 +703,287 @@ def test_the_cli_subprocess_imports_the_tree_under_test(tmp_path):
         f"the CLI subprocess imported {imported}, but this test run is "
         f"exercising {expected}. Every subprocess test in this file is "
         f"measuring the wrong copy of stencil."
+    )
+
+
+# --- stn-vd6v: the managed .gitignore section must match an NFD package dir -
+#
+# NFD fixtures deliberately live HERE and nowhere else. tests/test_manifest.py
+# (lines 88-111, 195, 222) pins "the manifest and get_generated_files are one
+# derivation" by SET EQUALITY between package_entries' slice and
+# get_generated_files' output for the same package. That equality goes false
+# for a non-ASCII name: the manifest keeps exactly one spelling (the config's
+# own) while the managed .gitignore section now carries two (the config's
+# spelling plus its NFC form, when they differ). tests/test_manifest.py is
+# out of this ticket's boundary, so no NFD fixture may be moved there or into
+# a shared conftest.py helper -- doing so would make that invariant false and
+# turn a green suite red for a reason nobody at that call site would expect.
+#
+# Background, from the ticket and its measurement comments (stn-vd6v):
+# APFS is normalization-PRESERVING (an NFD-typed dir stays NFD on disk), and
+# `git init` WRITES core.precomposeunicode=true into .git/config after a
+# filesystem probe -- it is not a live platform default. Under precompose=
+# true, `git check-ignore` matches only an NFC .gitignore line; under
+# precompose=false (Linux, and macOS with the key off) it is literal byte
+# comparison and only the exact spelling matches. Neither spelling alone
+# covers both cells, so the fix emits both when they differ.
+
+_CAFE_NFD = unicodedata.normalize("NFD", "café")  # 'cafe' + U+0301
+_CAFE_NFC = unicodedata.normalize("NFC", _CAFE_NFD)  # single-codepoint é
+
+
+def _byte_lines(entries) -> set:
+    """Compare BYTES, not str equality -- two Python str objects that are
+    canonically equivalent (one NFD, one NFC) are still different str values,
+    but encoding first makes that difference impossible to paper over by
+    accident (e.g. by comparing an entry against itself)."""
+    return {entry.encode("utf-8") for entry in entries}
+
+
+def test_an_nfd_package_dir_produces_both_the_nfd_and_nfc_lines():
+    """The ticket's core fix, exercised directly against get_generated_files
+    (no subprocess needed -- package_type: none needs no files on disk)."""
+    assert _CAFE_NFD != _CAFE_NFC, "setup: café did not actually round-trip"
+
+    config = {
+        "templates": _TEMPLATES,
+        "packages": {"demo": {"package_type": "none", "dir": _CAFE_NFD}},
+    }
+
+    entries = generate.get_generated_files(config)
+    byte_entries = _byte_lines(entries)
+
+    nfd_line = f"{_CAFE_NFD}/Makefile"
+    nfc_line = f"{_CAFE_NFC}/Makefile"
+    assert nfd_line.encode("utf-8") in byte_entries, (
+        "the config's own NFD spelling must still be emitted -- it is the "
+        "one that matches on a normalization-sensitive filesystem/git "
+        f"(precompose=false): {entries!r}"
+    )
+    assert nfc_line.encode("utf-8") in byte_entries, (
+        "the NFC form must also be emitted -- it is the one git's "
+        f"precomposeunicode=true (the git init default) needs: {entries!r}"
+    )
+
+
+def test_an_ascii_config_emits_exactly_one_line_per_entry():
+    """The regression guard against doubling every package's lines: for any
+    ASCII name NFC(line) == line, so the fix must not emit a line twice, and
+    it must not add a spurious second entry either. Checked two ways: exact
+    set equality against the hand-computed expected content (so an entry
+    cannot silently become plural), and a list/set length match (so a future
+    refactor away from a de-duplicating set does not reintroduce a literal
+    doubled line)."""
+    config = {
+        "templates": _TEMPLATES,
+        "packages": {
+            "demo": {"package_type": "none"},
+            "other": {"package_type": "none"},
+        },
+    }
+
+    entries = generate.get_generated_files(config)
+
+    expected = {
+        "demo/Makefile",
+        "demo/docker-compose.yml",
+        "demo/format-package-lock.json",
+        f"demo/{generate.MANIFEST_NAME}",
+        "other/Makefile",
+        "other/docker-compose.yml",
+        "other/format-package-lock.json",
+        f"other/{generate.MANIFEST_NAME}",
+    }
+    assert set(entries) == expected, (
+        f"an all-ASCII config produced unexpected entries: {entries!r}"
+    )
+    assert len(entries) == len(set(entries)), (
+        "the managed section carries a literal duplicate line for an ASCII "
+        f"config: {entries!r}"
+    )
+
+
+def test_an_nfd_dest_filename_produces_both_spellings():
+    """Same doubling requirement, for a template's `dest` rather than for
+    `dir` -- a different assembled line, same _add_gitignore_line call."""
+    dest_nfd = f"{_CAFE_NFD}.txt"
+    dest_nfc = f"{_CAFE_NFC}.txt"
+    assert dest_nfd != dest_nfc, "setup: the dest spellings did not differ"
+
+    config = {
+        "templates": [{"src": "Makefile.j2", "dest": dest_nfd}],
+        "packages": {"demo": {"package_type": "none"}},
+    }
+
+    entries = generate.get_generated_files(config)
+    byte_entries = _byte_lines(entries)
+
+    assert f"demo/{dest_nfd}".encode("utf-8") in byte_entries
+    assert f"demo/{dest_nfc}".encode("utf-8") in byte_entries
+
+
+def test_an_nfd_output_dir_segment_produces_both_spellings():
+    """Same doubling requirement, for the top-level output_dir prefix that
+    leads every line in the managed section (stn-jl3)."""
+    config = {
+        "output_dir": _CAFE_NFD,
+        "templates": _TEMPLATES,
+        "packages": {"demo": {"package_type": "none"}},
+    }
+
+    entries = generate.get_generated_files(config)
+    byte_entries = _byte_lines(entries)
+
+    nfd_line = f"{_CAFE_NFD}/demo/Makefile"
+    nfc_line = f"{_CAFE_NFC}/demo/Makefile"
+    assert nfd_line.encode("utf-8") in byte_entries
+    assert nfc_line.encode("utf-8") in byte_entries
+
+
+def _git_init_nfd(root):
+    """A hermetic repository to ask `git check-ignore` in, local to this
+    section on purpose -- see the boundary comment above for why this does
+    not become a shared conftest.py fixture. Mirrors
+    tests/test_manifest.py's own `_git_init`, which is out of this file's
+    boundary to import from (it is a private helper there, not a fixture)."""
+    if shutil.which("git") is None:
+        pytest.skip("git is not on PATH")
+    for command in (
+        ["git", "-c", "init.defaultBranch=main", "init"],
+        ["git", "config", "user.email", "test@example.com"],
+        ["git", "config", "user.name", "Test"],
+    ):
+        subprocess.run(command, cwd=root, check=True, capture_output=True)
+
+
+def test_an_nfd_package_dir_is_actually_ignored_by_git_both_ways(tmp_path):
+    """THE test that would actually have caught the bug -- the unit tests
+    above only pin the shape of the emitted lines, never asking git anything.
+
+    Reproduces the ticket's own end-to-end measurement: `git init` writes
+    core.precomposeunicode=true (the repo default on this machine, and
+    documented as such), so an NFD-only .gitignore line missed the file
+    stencil generated (rc 1). `-c core.precomposeunicode=false` reproduces
+    the Linux case, where only the exact byte spelling matches. Before the
+    fix: rc=1 then rc=0. After the fix, both cells must be rc=0.
+    """
+    _git_init_nfd(tmp_path)
+
+    config = {
+        "templates": _TEMPLATES,
+        "packages": {
+            "demo": {
+                "package_type": "doc",
+                "dir": _CAFE_NFD,
+                "docs": ["README.md"],
+            }
+        },
+    }
+    write_config(tmp_path, config)
+
+    package_dir = tmp_path / _CAFE_NFD
+    package_dir.mkdir()
+    (package_dir / "README.md").write_text("# Demo\n")
+
+    gen_result = run_cli("gen", "demo", cwd=tmp_path)
+    assert gen_result.returncode == 0, gen_result.stderr
+
+    install_result = run_cli("install", cwd=tmp_path)
+    assert install_result.returncode == 0, install_result.stderr
+
+    generated = f"{_CAFE_NFD}/Makefile"
+    assert (tmp_path / _CAFE_NFD / "Makefile").is_file(), (
+        "setup: gen did not write the file this test asks git about"
+    )
+
+    precompose_true = subprocess.run(
+        ["git", "check-ignore", "-q", generated], cwd=tmp_path
+    )
+    assert precompose_true.returncode == 0, (
+        "git check-ignore did not match the generated NFD path under the "
+        "repo default (precomposeunicode=true, as `git init` writes it) -- "
+        "this is the bug: an NFD-only .gitignore line never matches the NFC "
+        "pathspec git queries with under precompose=true"
+    )
+
+    precompose_false = subprocess.run(
+        ["git", "-c", "core.precomposeunicode=false", "check-ignore", "-q", generated],
+        cwd=tmp_path,
+    )
+    assert precompose_false.returncode == 0, (
+        "git check-ignore did not match the generated NFD path under "
+        "precomposeunicode=false (the Linux case) -- an NFC-only line would "
+        "fail exactly this cell, which is why both spellings are required"
+    )
+
+
+def test_clean_still_removes_an_nfd_packages_files(tmp_path):
+    """The removal side keeps the config's exact bytes (get_generated_files
+    is scoped to install_gitignore only; clean derives its own entries
+    through _config_derived_entries), so clean must still find and remove an
+    NFD package's files by the one spelling that actually exists on disk."""
+    config = {
+        "templates": _TEMPLATES,
+        "packages": {"demo": {"package_type": "none", "dir": _CAFE_NFD}},
+    }
+    write_config(tmp_path, config)
+
+    gen_result = run_cli("gen", "demo", cwd=tmp_path)
+    assert gen_result.returncode == 0, gen_result.stderr
+
+    makefile = tmp_path / _CAFE_NFD / "Makefile"
+    assert makefile.is_file(), "setup: gen did not write the NFD package"
+
+    clean_result = run_cli("clean", "demo", cwd=tmp_path)
+    assert clean_result.returncode == 0, clean_result.stderr
+
+    assert not makefile.exists(), (
+        "clean did not remove a file generated under an NFD package dir"
+    )
+    # `_remove_empty_parent_dirs` never removes the package directory
+    # itself (only empty parents above it), for any package -- ASCII or
+    # not -- so the directory surviving, empty, is the correct outcome here.
+    assert list((tmp_path / _CAFE_NFD).iterdir()) == [], (
+        "clean left files behind in the NFD package directory"
+    )
+
+
+def test_nfc_introducing_an_unsafe_character_is_not_emitted():
+    """U+037E GREEK QUESTION MARK is one of three codepoints in all of
+    Unicode whose NFC form is pure ASCII -- it normalizes to ';', which
+    _UNSAFE_IN_PATH refuses everywhere else in this module. The fix checks
+    the NFC candidate against that set before adding it, so the managed
+    section must carry the author's own spelling and nothing that introduces
+    a shell metacharacter no path check would otherwise allow through.
+
+    Checked first, per the ticket: does config validation even accept a
+    U+037E dir at all? check_package_dir -> check_config_path /
+    check_gitignore_literal refuse `~`, absolute paths, `..`, whitespace,
+    control characters, glob metacharacters, and a leading '!' or '#' --
+    none of which U+037E is, and it is confirmed here to still be a plain
+    printable character once composed. So the config IS accepted, and the
+    assertion below is the real one: no unsafe-character line leaks through.
+    """
+    dir_value = f"ab{chr(0x037E)}cd"
+    assert unicodedata.normalize("NFC", dir_value) == "ab;cd", (
+        "setup: U+037E no longer normalizes to ';' -- the premise of this "
+        "test has changed"
+    )
+
+    config = {
+        "templates": _TEMPLATES,
+        "packages": {"demo": {"package_type": "none", "dir": dir_value}},
+    }
+
+    # The config is accepted -- ValueError here would mean check_package_dir
+    # started refusing U+037E, and this test's docstring's premise no longer
+    # holds; see the docstring for what to do in that case.
+    entries = generate.get_generated_files(config)
+
+    assert f"{dir_value}/Makefile" in entries, (
+        "the author's own spelling must still be emitted"
+    )
+    assert not any(";" in entry for entry in entries), (
+        "an unsafe character reached the managed .gitignore section via the "
+        f"NFC normalization: {entries!r}"
     )
