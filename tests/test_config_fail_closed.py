@@ -734,3 +734,274 @@ def test_an_ordinary_message_is_not_truncated():
     message = str(caught.value)
     assert "has invalid package_type: bogus" in message
     assert "truncated" not in message
+
+
+# --- stn-dl3r: a malformed `templates:` entry is one named refusal, not a
+# traceback, across gen, install and clean -----------------------------------
+#
+# package_contexts' own `templates` loop used to `continue` past a
+# non-mapping entry, and skip the shape check entirely for a non-list value,
+# so `gen` (validate_config's `when:` loop) and `install` (when_holds, via
+# get_generated_files -> package_entries) each tracebacked with a bare
+# AttributeError/KeyError -- while `clean` alone named it, via
+# `_config_template_defs`. Both now share ONE shape check
+# (`_checked_template_defs`), so all three commands read the same message.
+
+MALFORMED_TEMPLATES_CASES = [
+    pytest.param(["Makefile.j2"], id="entries-not-mappings"),
+    pytest.param([{"dest": "out.txt"}], id="mapping-missing-src"),
+    pytest.param([{"src": 2024}], id="mapping-non-string-src"),
+    pytest.param({}, id="templates-not-a-list"),
+]
+
+
+@pytest.mark.parametrize("templates", MALFORMED_TEMPLATES_CASES)
+def test_a_malformed_templates_entry_is_named_through_package_contexts(templates):
+    config = {"templates": templates, "packages": {"demo": package()}}
+    with pytest.raises(ValueError) as exc:
+        package_contexts(config)
+    message = str(exc.value)
+    assert "templates" in message, f"the key is not named: {message!r}"
+    assert "demo" in message, f"the affected package is not named: {message!r}"
+    for class_name in ("AttributeError", "KeyError", "TypeError"):
+        assert class_name not in message, (
+            f"a Python class name leaked into a config message: {message!r}"
+        )
+
+
+@pytest.mark.parametrize("templates", MALFORMED_TEMPLATES_CASES)
+@pytest.mark.parametrize(
+    "args", [("gen", "--all"), ("install",)], ids=["gen", "install"]
+)
+def test_a_malformed_templates_entry_fails_closed_through_the_cli(
+    tmp_path, templates, args
+):
+    write_config(
+        tmp_path,
+        {
+            "templates": templates,
+            "packages": {"demo": {"name": "Demo", "package_type": "none"}},
+        },
+    )
+    result = run_cli(*args, cwd=tmp_path)
+
+    assert result.returncode != 0, (
+        f"{' '.join(args)} exited 0 on a malformed templates:"
+    )
+    assert "Traceback" not in result.stderr, result.stderr
+    assert "templates" in result.stderr, result.stderr
+    for class_name in ("AttributeError", "KeyError", "TypeError"):
+        assert class_name not in result.stderr, (
+            f"a Python class name reached the terminal: {result.stderr!r}"
+        )
+    assert not (tmp_path / "demo").exists(), (
+        "nothing should have been written for a config this broken"
+    )
+    if args[0] == "install":
+        assert not (tmp_path / ".gitignore").exists(), (
+            "install must not touch the managed .gitignore section on a "
+            "config it refused"
+        )
+
+
+def test_gen_and_install_report_the_same_message_for_a_non_list_templates(tmp_path):
+    """stn-dl3r's thesis, pinned directly. Before this change, gen's
+    emptiness check ran ABOVE validate_config, and `templates: {}` is
+    falsy -- so gen printed 'No templates defined in config' while install
+    (which has no such check) went straight to package_contexts, which did
+    not check the shape at all and let a non-list `templates:` straight
+    through. Moving gen's emptiness check below validate_config, and giving
+    package_contexts the same shape check `clean` already had, makes gen and
+    install agree on the same config."""
+    write_config(
+        tmp_path,
+        {
+            "templates": {},
+            "packages": {"demo": {"name": "Demo", "package_type": "none"}},
+        },
+    )
+    gen_result = run_cli("gen", "--all", cwd=tmp_path)
+    install_result = run_cli("install", cwd=tmp_path)
+
+    assert gen_result.returncode != 0
+    assert install_result.returncode != 0
+    assert gen_result.stderr == install_result.stderr, (
+        "gen and install disagree about the same malformed config:\n"
+        f"gen:     {gen_result.stderr!r}\n"
+        f"install: {install_result.stderr!r}"
+    )
+
+
+def test_an_absent_templates_key_is_not_a_config_problem():
+    """An ABSENT `templates:` key is a different statement from a malformed
+    one -- `config.get('templates')` is None either way, so the check has to
+    be keyed on whether the key is PRESENT, not on the value alone."""
+    config = {"packages": {"demo": package()}}
+    contexts = package_contexts(config)
+    assert "demo" in contexts
+
+
+def test_an_explicit_null_templates_key_is_still_a_named_problem():
+    """`templates:` with no value is a YAML null: present, but not a list.
+    `_config_template_defs` already refused this shape, so this keeps the
+    two consistent rather than letting a null slip through as though the
+    key were absent."""
+    config = {"templates": None, "packages": {"demo": package()}}
+    with pytest.raises(ValueError) as exc:
+        package_contexts(config)
+    assert "templates" in str(exc.value)
+
+
+def test_an_empty_templates_list_is_still_legal():
+    """stn-jez's own reproduction config is `templates: []`; refusing an
+    empty list would turn that config red for a reason that has nothing to
+    do with what it is testing."""
+    config = {"templates": [], "packages": {"demo": package()}}
+    contexts = package_contexts(config)
+    assert "demo" in contexts
+
+
+def test_an_absent_templates_key_still_works_for_install_and_clean(tmp_path):
+    """The regression the new non-list check could cause: `install` and
+    `clean` have always treated a missing `templates:` key as 'no
+    templates', via `config.get('templates', [])`, and must keep doing so."""
+    write_config(
+        tmp_path, {"packages": {"demo": {"name": "Demo", "package_type": "none"}}}
+    )
+    for args in [("install",), ("clean", "--all")]:
+        result = run_cli(*args, cwd=tmp_path)
+        assert result.returncode == 0, f"{' '.join(args)}: {result.stderr}"
+
+
+def test_a_directory_whose_own_packages_cannot_be_derived_keeps_the_manifest(
+    tmp_path,
+):
+    """When the authorised set for THIS directory cannot be computed, the
+    manifest is trusted and the clean proceeds -- the documented stn-p9a
+    trade, reached here directly rather than through the CLI.
+
+    THIS TEST ASSERTED THE OPPOSITE UNTIL THE ADVERSARIAL PASS, and the
+    change is worth recording rather than quietly editing. Refusing here was
+    right while this branch was gated on `config_readable`: reaching it then
+    meant the config had already satisfied `package_contexts`, so a local
+    derivation failure was an unexplained fault worth failing closed on.
+
+    That gate has been removed, because it was a WHOLE-CONFIG boolean and a
+    fault in any unrelated package switched the authority rule off for every
+    package -- restoring the original stn-jez attack at exit 0. With the
+    question narrowed to this directory, the branch now means what stn-p9a
+    always described: this package's own config cannot be read, so the
+    manifest `gen` wrote is the only thing that can name what is here.
+    Refusing here instead would deny the capability to precisely the
+    packages it was built for.
+
+    The group below includes a package id the config does not have at all,
+    so `_config_derived_entries` cannot derive what this directory
+    authorises, for a reason that has nothing to do with `templates:`.
+    """
+    from stencil.generate import MANIFEST_NAME, _clean_one_directory, write_manifest
+
+    pkg_dir = tmp_path / "demo"
+    pkg_dir.mkdir()
+    (pkg_dir / "Makefile").write_text("all:\n\techo hi\n")
+    write_manifest(pkg_dir, "demo", "demo", ["Makefile"])
+
+    config = {"packages": {"demo": package()}}
+    problems: list[str] = []
+    _clean_one_directory(
+        tmp_path,
+        pkg_dir,
+        ["demo"],
+        ["demo", "phantom"],
+        config,
+        True,
+        False,
+        problems,
+    )
+
+    assert not (pkg_dir / "Makefile").exists(), (
+        "the manifest is the only authority here and it names Makefile"
+    )
+    assert not (pkg_dir / MANIFEST_NAME).exists(), (
+        "a clean that removed everything the manifest named removes it last"
+    )
+
+
+
+# --- stn-dl3r, the sibling key: `when` is part of the shape ----------------
+#
+# `_checked_template_defs` promises "the only shape a caller can go on to read
+# without checking again", and `validate_config` / `when_holds` both read
+# `tdef["when"]` with no check of their own. Found by the adversarial pass over
+# the implementation: with `when:` malformed, this ticket's own bug reproduced
+# verbatim for the neighbouring key.
+
+MALFORMED_WHEN_CASES = [
+    pytest.param(5, id="when-is-an-int"),
+    pytest.param({"a": "b"}, id="when-is-a-mapping"),
+    pytest.param([], id="when-is-an-empty-list"),
+    pytest.param(["ok", 7], id="when-list-has-a-non-string"),
+    pytest.param("", id="when-is-an-empty-string"),
+]
+
+
+@pytest.mark.parametrize("when", MALFORMED_WHEN_CASES)
+def test_a_malformed_when_is_named_through_package_contexts(when):
+    config = {
+        "templates": [{"src": "Makefile.j2", "when": when}],
+        "packages": {"demo": package()},
+    }
+    with pytest.raises(ValueError) as exc:
+        package_contexts(config)
+    message = str(exc.value)
+    assert "templates" in message, f"the key is not named: {message!r}"
+    assert "demo" in message, f"the affected package is not named: {message!r}"
+    for class_name in ("AttributeError", "KeyError", "TypeError"):
+        assert class_name not in message, (
+            f"a Python class name leaked into a config message: {message!r}"
+        )
+
+
+@pytest.mark.parametrize("when", MALFORMED_WHEN_CASES)
+@pytest.mark.parametrize(
+    "args", [("gen", "--all"), ("install",)], ids=["gen", "install"]
+)
+def test_a_malformed_when_fails_closed_through_the_cli(tmp_path, when, args):
+    """`install` is the half that matters most here.
+
+    Measured before the check covered `when`: `when: {a: b}` made `install`
+    exit 0 having written a managed `.gitignore` with `Makefile` MISSING from
+    it -- `all(...)` over a mapping walks its keys, so the template was
+    silently skipped -- while `gen` refused the same config outright. A config
+    one command calls broken and the other quietly acts on is worse than
+    either answer alone.
+    """
+    write_config(
+        tmp_path,
+        {
+            "templates": [{"src": "Makefile.j2", "when": when}],
+            "packages": {"demo": package()},
+        },
+    )
+
+    result = run_cli(*args, cwd=tmp_path)
+
+    assert result.returncode != 0, (
+        f"{args[0]} must refuse a malformed `when`, not act on it: "
+        f"{result.stdout + result.stderr!r}"
+    )
+    assert "Traceback" not in result.stderr, result.stderr
+    assert "templates" in (result.stdout + result.stderr)
+    assert not (tmp_path / ".gitignore").exists(), (
+        "nothing may be written by a run that refuses"
+    )
+
+
+def test_a_well_formed_when_still_passes():
+    """The regression guard: both legal spellings survive the new check."""
+    for when in ("has_pages", ["has_pages", "has_slides"]):
+        config = {
+            "templates": [{"src": "Makefile.j2", "when": when}],
+            "packages": {"demo": package()},
+        }
+        package_contexts(config)

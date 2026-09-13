@@ -32,13 +32,17 @@ case that makes the brand one worth more than its severity suggests.
 
 from __future__ import annotations
 
+import errno
 import json
 import os
+import shutil
 import sys
+from pathlib import Path
 
 import pytest
 
 from stencil import __version__ as stencil_version
+from stencil import generate
 from stencil.generate import (
     MANIFEST_NAME,
     MANIFEST_VERSION,
@@ -1019,6 +1023,7 @@ def test_clean_refuses_a_package_dir_that_is_the_config_directory(tmp_path):
         json.dumps(
             {
                 "manifest_version": MANIFEST_VERSION,
+                "stencil_version": "0.1.0",
                 "package": "demo",
                 "dir": ".",
                 "entries": ["IMPORTANT.md", ".env", "src/app.py"],
@@ -1689,3 +1694,1057 @@ def test_a_template_dest_with_a_glob_metacharacter_is_refused(tmp_path, dest):
         f"rc={result.returncode}, stdout={result.stdout[:400]!r}"
     )
     assert "glob metacharacter" in result.stderr, result.stderr
+
+
+# --- stn-jez: an ordinary dir with a planted manifest -----------------------
+#
+# NOT stn-17h. That ticket closed `dir: "."` -- a package directory that
+# resolves to the output base itself -- which the containment checks above
+# already refuse before any manifest is ever read. The attack here needs
+# none of that: `src` is an ordinary, hand-populated source directory,
+# strictly beneath the output base, with no `output_dir` prefix and no
+# templates at all. It clears every containment check in this file. What
+# lets a planted manifest delete a hand-written file here is
+# `_clean_one_directory`'s ownership guard reading a MISSING `package` key
+# as "no opinion" rather than as untrusted -- `isinstance(None, str)` is
+# False, so `isinstance(manifest_pkg, str) and ...` was False too, and the
+# manifest was used.
+
+
+def test_an_ordinary_package_dir_with_a_manifest_missing_package_survives_clean(
+    tmp_path,
+):
+    """The ticket's verbatim reproduction.
+
+    BEFORE (stn-jez): `stencil clean src` printed a `Removed` line for
+    `important.txt` and exited 0, having deleted a hand-written file that
+    `gen` never produced -- through a manifest with no `package` key at all,
+    which the old guard's `isinstance` check let straight through.
+
+    Asserted on the FILE, not on the exit code alone. A refusal that still
+    deletes is the failure worth catching, and an exit code cannot see it.
+    """
+    write_config(
+        tmp_path,
+        {
+            "templates": [],
+            "packages": {"src": {"package_type": "none"}},
+        },
+    )
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "important.txt").write_text("HAND WRITTEN - DO NOT DELETE\n")
+    (src / MANIFEST_NAME).write_text(
+        json.dumps({"manifest_version": MANIFEST_VERSION, "entries": ["important.txt"]})
+    )
+
+    result = run_cli("clean", "src", cwd=tmp_path)
+
+    assert result.returncode != 0, (
+        f"rc={result.returncode}, stdout={result.stdout!r}, "
+        f"stderr={result.stderr!r}"
+    )
+    assert "Traceback" not in result.stderr, result.stderr
+    assert (src / "important.txt").exists(), (
+        f"important.txt was deleted by a planted manifest missing "
+        f"'package': stdout={result.stdout!r}"
+    )
+    combined = result.stdout + result.stderr
+    assert '"package"' in combined, (
+        f"the missing field should be named in the refusal: {combined!r}"
+    )
+    assert MANIFEST_NAME in combined, (
+        f"the manifest should be named in the refusal: {combined!r}"
+    )
+
+
+# --- stn-avv: the object checked is the object written ----------------------
+#
+# stn-6mcb.7 is the MECHANISM ONLY -- the capability flag, the descriptor
+# walk helper, and the `dir_fd` keyword on the two nofollow writers. No call
+# site (render_templates, write_manifest, copy_brand_image, generate_package)
+# changes here; that wiring is stn-6mcb.5. Every test below exercises the
+# mechanism directly rather than through `stencil gen`, which is why this
+# section calls `generate.walk_dir_fd` / `generate.open_for_write_nofollow` /
+# `generate.write_text_nofollow` rather than `run_cli`.
+
+pytestmark_avv = pytest.mark.skipif(
+    not generate._DIR_FD_CAPABLE,
+    reason=(
+        "dir_fd is not supported on this platform -- "
+        "generate._DIR_FD_CAPABLE is False"
+    ),
+)
+
+
+def test_the_capability_flag_matches_the_measured_conditions():
+    """Pins the exact formula stn-6mcb.7 measured, not just its value on
+    this machine, so a future edit that quietly narrows or widens it fails
+    here rather than only on whichever platform CI happens to run."""
+    expected = (
+        hasattr(os, "O_DIRECTORY")
+        and hasattr(os, "O_NOFOLLOW")
+        and os.open in os.supports_dir_fd
+        and os.mkdir in os.supports_dir_fd
+    )
+    assert generate._DIR_FD_CAPABLE is expected
+
+
+@pytestmark_avv
+def test_walk_dir_fd_write_lands_in_the_original_inode_after_a_swap(tmp_path):
+    """The direct unit test of the walk (stn-6mcb.7 spike note 2): once the
+    walk has opened `sub`'s descriptor, replacing `sub` on disk with a
+    symlink to a victim directory must not move where a write through that
+    descriptor lands. The fd is pinned to the inode it opened, not to the
+    name that found it.
+    """
+    root = tmp_path / "root"
+    root.mkdir()
+    victim = tmp_path / "victim"
+    victim.mkdir()
+
+    base_fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        parent_fd, name = generate.walk_dir_fd(base_fd, "sub/file.txt")
+        try:
+            # Move the REAL "sub" out of the way and plant a symlink to the
+            # victim directory in its place. `parent_fd` was already opened
+            # against the original inode before this happens.
+            renamed = tmp_path / "sub-renamed"
+            (root / "sub").rename(renamed)
+            (root / "sub").symlink_to(victim)
+
+            generate.write_text_nofollow(Path(name), "hello\n", dir_fd=parent_fd)
+        finally:
+            os.close(parent_fd)
+    finally:
+        os.close(base_fd)
+
+    assert (renamed / "file.txt").read_text() == "hello\n", (
+        "the write did not land in the original inode the walk opened"
+    )
+    assert list(victim.iterdir()) == [], (
+        "the victim directory received a write through the swapped symlink"
+    )
+
+
+@pytestmark_avv
+def test_walk_dir_fd_hands_back_a_descriptor_the_caller_owns_for_a_top_level_name(
+    tmp_path,
+):
+    """A single-component `relative` returns a fd the caller may close, and
+    closing it must NOT close `base_fd`.
+
+    This is the COMMON case -- `Makefile`, the manifest, the brand image and
+    every other top-level file a package contains -- and it is the one where
+    the natural implementation hands back `base_fd` itself. A caller doing
+    the obvious thing with what it was given would then close its own
+    long-lived package-directory descriptor after the first top-level write,
+    and every write after that would fail on a stale fd. One `os.dup` makes
+    "close what you were given" correct in both cases; this test is what
+    holds that, because nothing about the happy path reveals it.
+    """
+    base_fd = os.open(tmp_path, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        parent_fd, name = generate.walk_dir_fd(base_fd, "Makefile")
+        assert name == "Makefile"
+        assert parent_fd != base_fd, (
+            "a top-level name must not hand back base_fd itself: the caller "
+            "closes what it is given, and that would be the package directory"
+        )
+
+        os.close(parent_fd)
+
+        # base_fd must still be usable -- this is the assertion the bug would
+        # fail, with EBADF.
+        second_fd, second_name = generate.walk_dir_fd(base_fd, "Makefile")
+        try:
+            assert second_name == "Makefile"
+            generate.write_text_nofollow(
+                Path("Makefile"), "after the first close\n", dir_fd=second_fd
+            )
+        finally:
+            os.close(second_fd)
+
+        assert (tmp_path / "Makefile").read_text() == "after the first close\n"
+    finally:
+        os.close(base_fd)
+
+
+@pytestmark_avv
+def test_walk_dir_fd_refuses_a_symlinked_intermediate_component(tmp_path):
+    """A symlink at an intermediate component is refused, and the message
+    names THAT component -- not only the declared relative path, which for
+    a nested dest is a different string the author would edit in vain.
+    """
+    root = tmp_path / "root"
+    root.mkdir()
+    victim = tmp_path / "victim"
+    victim.mkdir()
+    (root / "sub").symlink_to(victim)
+
+    base_fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        with pytest.raises(ValueError) as excinfo:
+            generate.walk_dir_fd(base_fd, "sub/file.txt")
+    finally:
+        os.close(base_fd)
+
+    assert "sub" in str(excinfo.value), (
+        f"the refusal must name the symlinked component: {excinfo.value}"
+    )
+    assert "Traceback" not in str(excinfo.value)
+    assert list(victim.iterdir()) == [], (
+        "nothing should have been written through the symlink"
+    )
+
+
+@pytestmark_avv
+def test_walk_dir_fd_closes_every_intermediate_fd_on_the_failure_path(
+    tmp_path, monkeypatch
+):
+    """No fd leak on the failure path. `a` and `b` are opened successfully as
+    the walk descends; `c` is a symlink and refuses. Every fd the walk
+    itself opened (tracked by the `dir_fd=` keyword, which only ITS opens
+    use) must be closed by the time the ValueError propagates -- `gen --all`
+    over many packages must not leak one descriptor per refused component.
+    """
+    root = tmp_path / "root"
+    (root / "a" / "b").mkdir(parents=True)
+    victim = tmp_path / "victim"
+    victim.mkdir()
+    (root / "a" / "b" / "c").symlink_to(victim)
+
+    opened = []
+    closed = []
+    real_open = os.open
+    real_close = os.close
+
+    def tracking_open(*args, **kwargs):
+        fd = real_open(*args, **kwargs)
+        if "dir_fd" in kwargs:
+            opened.append(fd)
+        return fd
+
+    def tracking_close(fd):
+        closed.append(fd)
+        real_close(fd)
+
+    monkeypatch.setattr(os, "open", tracking_open)
+    monkeypatch.setattr(os, "close", tracking_close)
+
+    base_fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        with pytest.raises(ValueError):
+            generate.walk_dir_fd(base_fd, "a/b/c/d.txt")
+    finally:
+        os.close(base_fd)
+
+    assert opened, "test setup: the walk should have opened 'a' and 'b'"
+    assert set(opened) <= set(closed), (
+        f"the walk leaked a descriptor on the failure path: "
+        f"opened={opened}, closed={closed}"
+    )
+
+
+@pytestmark_avv
+def test_write_text_nofollow_writes_through_an_explicit_dir_fd(tmp_path):
+    """Regression guard for the new keyword: `write_text_nofollow` still
+    does exactly what it always did -- UTF-8, fchmod through the same
+    descriptor for `executable` -- when the destination is named relative
+    to a `dir_fd` instead of by an absolute path."""
+    root = tmp_path / "root"
+    root.mkdir()
+    base_fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        generate.write_text_nofollow(
+            Path("file.txt"), "via dir_fd\n", executable=True, dir_fd=base_fd
+        )
+    finally:
+        os.close(base_fd)
+
+    written = root / "file.txt"
+    assert written.read_text() == "via dir_fd\n"
+    assert written.stat().st_mode & 0o111, "the executable bit must still be set"
+
+
+# --- stn-avv: the write-time fstat gate --------------------------------------
+#
+# checked_write_target's pre-pass refuses three things -- a symlink, a
+# hardlink, and "not the kind of file gen writes" -- but it is a snapshot.
+# These tests plant the hardlink/FIFO AFTER any such pre-pass would have run
+# (there is none here; this calls the write function directly) and confirm
+# the refusal now holds at the moment of the write itself, against the
+# object `os.open` actually returned.
+
+pytestmark_fstat_gate = pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="hardlinks, FIFOs and O_NOFOLLOW do not behave the same on Windows",
+)
+
+
+@pytestmark_fstat_gate
+def test_open_for_write_nofollow_refuses_a_hardlink_at_write_time(tmp_path):
+    """Reproduction of the snapshot gap the notes describe: a hardlink
+    planted after any pre-pass is still refused, because the check now runs
+    against the fd `os.open` returned rather than only a path stat taken
+    earlier. Asserted on the file OUTSIDE the tree: a refusal that still
+    truncates it would defeat the point.
+    """
+    outside = tmp_path / "outside.txt"
+    outside.write_text("PRECIOUS\n")
+    target = tmp_path / "target.txt"
+    os.link(outside, target)
+    assert target.stat().st_nlink == 2, "test setup"
+
+    with pytest.raises(ValueError) as excinfo:
+        generate.open_for_write_nofollow(target)
+
+    assert "target.txt" in str(excinfo.value), (
+        f"the refusal must name the file: {excinfo.value}"
+    )
+    assert outside.read_text() == "PRECIOUS\n", (
+        "a hardlink refusal must not truncate the shared inode -- dropping "
+        "O_TRUNC in favour of the fstat-gated ftruncate is what makes that "
+        "true"
+    )
+
+
+@pytestmark_fstat_gate
+def test_open_for_write_nofollow_refuses_a_fifo_before_fstat_is_reached(tmp_path):
+    """Measured (stn-6mcb.7 spike): O_NONBLOCK refuses a FIFO with ENXIO at
+    `os.open` itself, before fstat is ever reached -- so a FIFO planted at a
+    destination cannot block `gen` forever waiting for a reader that will
+    never come.
+
+    The refusal now travels as a `ValueError` carrying the kernel's own
+    `strerror`, like the two `fstat` refusals beside it, rather than as a
+    raw `OSError` -- so this asserts on the CHAIN rather than on an errno
+    the message no longer hardcodes. `__cause__` is where the ENXIO lives,
+    and it is still ENXIO, which is the property this test is named for: had
+    the open blocked instead, there would be no exception at all and this
+    test would hang rather than fail.
+    """
+    target = tmp_path / "target"
+    os.mkfifo(target)
+
+    with pytest.raises(ValueError) as excinfo:
+        generate.open_for_write_nofollow(target)
+
+    cause = excinfo.value.__cause__
+    assert isinstance(cause, OSError) and cause.errno == errno.ENXIO, (
+        f"expected ENXIO from O_NONBLOCK under the ValueError, got: {cause!r}"
+    )
+    assert "refusing to write it" in str(excinfo.value)
+
+
+def test_open_for_write_nofollow_still_replaces_a_longer_existing_file(tmp_path):
+    """Regression guard for dropping O_TRUNC: `open_for_write_nofollow` now
+    truncates via `os.ftruncate` AFTER the fstat gate approves the
+    descriptor, rather than via O_TRUNC at open time. If that ftruncate
+    were ever dropped or misordered, a shorter replacement would leave the
+    old file's tail bytes behind."""
+    target = tmp_path / "file.txt"
+    target.write_text("a much longer line that must be fully replaced\n")
+
+    generate.write_text_nofollow(target, "new\n")
+
+    assert target.read_text() == "new\n"
+
+
+# --- stn-avv: the fallback (capability flag forced False) -------------------
+#
+# `open_for_write_nofollow` and `write_text_nofollow` never consult
+# `_DIR_FD_CAPABLE` themselves -- `dir_fd` is an explicit, caller-supplied
+# keyword that defaults to None, which is exactly today's behaviour. The
+# flag only gates whether a caller (stn-6mcb.5, not this task) may attempt
+# the descriptor walk at all. These tests force the flag False -- something
+# only possible because it is a module global read at CALL time rather than
+# captured in a default argument -- to prove that forcing it has no effect
+# on the code path every existing caller still uses.
+
+
+def test_write_text_nofollow_ignores_the_capability_flag_on_the_default_path(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(generate, "_DIR_FD_CAPABLE", False)
+
+    target = tmp_path / "file.txt"
+    generate.write_text_nofollow(target, "hello\n")
+
+    assert target.read_text() == "hello\n"
+
+
+def test_walk_dir_fd_refuses_cleanly_when_the_capability_flag_is_forced_false(
+    tmp_path, monkeypatch
+):
+    """Without this, the 'fallback still behaves as today' pin above could
+    never actually run on a machine where dir_fd IS supported -- the flag
+    would always read True and there would be no way to exercise the
+    unsupported-platform path at all."""
+    monkeypatch.setattr(generate, "_DIR_FD_CAPABLE", False)
+
+    root = tmp_path / "root"
+    root.mkdir()
+    base_fd = os.open(root, os.O_RDONLY)
+    try:
+        with pytest.raises(NotImplementedError):
+            generate.walk_dir_fd(base_fd, "a/b.txt")
+    finally:
+        os.close(base_fd)
+
+
+# --- stn-6mcb.5: wiring the descriptor walk into gen -------------------------
+#
+# stn-6mcb.7 (above) is the MECHANISM: the capability flag, `walk_dir_fd`, and
+# `dir_fd` on the two nofollow writers, exercised directly and with no call
+# site changed. This section is the WIRING: `generate_package` now acquires a
+# descriptor on the package directory with `_open_package_base_fd` and
+# threads it through `render_templates`, `write_manifest` and
+# `copy_brand_image`, so the object `checked_write_target`'s pre-pass looked
+# at and the object those three functions write are the same inode by
+# construction, below the package directory. Every test here calls
+# `generate_package` directly (the same pattern as the stn-vhr direct-call
+# tests above), not `run_cli`, because several of them need to reach in with
+# `monkeypatch` at the exact moment between two writes.
+
+
+def _direct_call_package(tmp_path, config_overrides):
+    """Common setup for a direct ``generate_package`` call: a config
+    directory with ``out/`` and the loaded config's env, exactly the shape
+    ``test_generate_package_raises_valueerror_for_a_symlinked_package_dir``
+    above already uses. Returns ``(env, loaded, output_base, config_dir)``.
+    """
+    from stencil.generate import build_environment, load_config
+
+    config_dir = tmp_path / "cfg"
+    config_dir.mkdir()
+    (config_dir / "out").mkdir()
+
+    cfg = {"output_dir": "out", "packages": {"demo": {"name": "Demo", "package_type": "none"}}}
+    cfg.update(config_overrides)
+    config_path = write_config(config_dir, cfg)
+
+    loaded = load_config(config_path)
+    env = build_environment(loaded, config_dir)
+    output_base = config_dir / "out"
+    return env, loaded, output_base, config_dir
+
+
+@pytestmark_avv
+def test_a_symlink_swapped_between_two_nested_writes_is_refused(tmp_path, monkeypatch):
+    """The ticket's own reproduction (stn-avv), made deterministic instead of
+    raced. Two nested destinations share one intermediate directory, `sub`:
+    `checked_write_target`'s pre-pass clears BOTH before anything exists, so
+    before this task `render_templates` wrote `sub/a.txt` (creating a REAL
+    `sub`), and replacing `sub` with a symlink to a victim directory between
+    the two writes sent `sub/b.txt` into the victim at exit 0 -- with
+    `write_manifest` then recording `sub/b.txt`, so a later `clean` would
+    delete there too.
+
+    The swap is forced right after the FIRST nested write returns --
+    `write_text_nofollow` is wrapped to perform it -- so this fails on every
+    run rather than only when a race wins. `sub`'s directory entry is
+    replaced (not merely its target); the fd `render_templates` already
+    closed after the first write is not reused.
+    """
+    from stencil.generate import generate_package
+
+    env, loaded, output_base, config_dir = _direct_call_package(
+        tmp_path,
+        {
+            "templates": [
+                {"src": "Makefile.j2", "dest": "sub/a.txt"},
+                {"src": "docker-compose.yml.j2", "dest": "sub/b.txt"},
+            ],
+        },
+    )
+    package_dir = output_base / "demo"
+    victim = config_dir / "victim"
+    victim.mkdir()
+
+    real_write = generate.write_text_nofollow
+
+    def swap_after_first_write(path, text, *args, **kwargs):
+        real_write(path, text, *args, **kwargs)
+        # Only "a.txt" -- the FIRST of the two nested writes -- triggers the
+        # swap. Several top-level, injected files (lockfiles and the like)
+        # write before this one; swapping on the very first call of any kind
+        # would fire before "sub" even exists.
+        if path.name == "a.txt":
+            sub = package_dir / "sub"
+            shutil.rmtree(sub)
+            sub.symlink_to(victim)
+
+    monkeypatch.setattr(generate, "write_text_nofollow", swap_after_first_write)
+
+    with pytest.raises(ValueError, match="sub"):
+        generate_package(env, loaded, output_base, "demo", False, config_dir)
+
+    assert list(victim.iterdir()) == [], (
+        "the second nested write must not land in the victim directory"
+    )
+    manifest_path = package_dir / MANIFEST_NAME
+    assert not manifest_path.exists(), (
+        "a refused render must not leave a manifest naming the escaping "
+        "entry -- write_manifest runs only after render_templates returns"
+    )
+
+
+@pytestmark_avv
+def test_an_ordinary_nested_dest_still_generates_through_the_descriptor_walk(
+    tmp_path, monkeypatch
+):
+    """Regression guard, and proof the NEW wiring is what ran rather than a
+    coincidence: a `.vscode/settings.json`-shaped nested destination must
+    still generate correctly now that it is written by walking `base_fd`
+    with `walk_dir_fd` instead of `output_path.parent.mkdir(parents=True)`.
+    """
+    from stencil.generate import generate_package
+
+    env, loaded, output_base, config_dir = _direct_call_package(
+        tmp_path, {"templates": [{"src": "Makefile.j2", "dest": "sub/Makefile"}]}
+    )
+
+    calls = []
+    real_walk = generate.walk_dir_fd
+
+    def spying_walk(base_fd, relative):
+        calls.append(relative)
+        return real_walk(base_fd, relative)
+
+    monkeypatch.setattr(generate, "walk_dir_fd", spying_walk)
+
+    result = generate_package(env, loaded, output_base, "demo", False, config_dir)
+
+    assert result == output_base / "demo"
+    assert (output_base / "demo" / "sub" / "Makefile").exists()
+    assert "sub/Makefile" in calls, (
+        "the nested write must go through walk_dir_fd -- if this list is "
+        "empty the old path-based mkdir(parents=True) ran instead"
+    )
+
+
+@pytestmark_avv
+def test_regenerating_over_an_existing_package_is_still_descriptor_protected(
+    tmp_path, monkeypatch
+):
+    """The most common operation this tool performs, and the one place the
+    wiring must NOT be skipped just because `output_dir` already exists:
+    `_open_package_base_fd` is acquired unconditionally on every non-dry-run
+    call, not only inside the branch that creates a brand-new directory."""
+    from stencil.generate import generate_package
+
+    env, loaded, output_base, config_dir = _direct_call_package(
+        tmp_path, {"templates": [{"src": "Makefile.j2"}]}
+    )
+
+    generate_package(env, loaded, output_base, "demo", False, config_dir)
+    assert (output_base / "demo" / "Makefile").exists(), "test setup: first run"
+
+    calls = []
+    real_open_base_fd = generate._open_package_base_fd
+
+    def spying_open(*args, **kwargs):
+        calls.append(args)
+        return real_open_base_fd(*args, **kwargs)
+
+    monkeypatch.setattr(generate, "_open_package_base_fd", spying_open)
+
+    result = generate_package(env, loaded, output_base, "demo", False, config_dir)
+
+    assert result == output_base / "demo"
+    assert calls, (
+        "the base fd must be acquired on regeneration too, not only when "
+        "output_dir does not exist yet"
+    )
+    assert (output_base / "demo" / "Makefile").exists()
+
+
+@pytestmark_avv
+def test_the_package_base_fd_is_closed_when_render_templates_raises(
+    tmp_path, monkeypatch
+):
+    """Without a `try/finally` around the descriptor, `gen --all` leaks one
+    open fd per package the moment any single package fails to render --
+    every package after the first failure in a long run, in the worst case.
+    `render_templates` itself is replaced with something that always raises,
+    so this is independent of WHY it might fail.
+    """
+    from stencil.generate import generate_package
+
+    env, loaded, output_base, config_dir = _direct_call_package(
+        tmp_path, {"templates": [{"src": "Makefile.j2"}]}
+    )
+
+    captured = {}
+    real_open_base_fd = generate._open_package_base_fd
+
+    def capturing_open(*args, **kwargs):
+        fd = real_open_base_fd(*args, **kwargs)
+        captured["fd"] = fd
+        return fd
+
+    def boom(*args, **kwargs):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(generate, "_open_package_base_fd", capturing_open)
+    monkeypatch.setattr(generate, "render_templates", boom)
+
+    with pytest.raises(RuntimeError, match="boom"):
+        generate_package(env, loaded, output_base, "demo", False, config_dir)
+
+    assert "fd" in captured, "test setup: the base fd must have been opened"
+    with pytest.raises(OSError):
+        os.fstat(captured["fd"])  # a closed fd raises EBADF -- an open one would not
+
+
+def test_generate_package_falls_back_to_path_based_writes_when_dir_fd_is_unsupported(
+    tmp_path, monkeypatch
+):
+    """Windows, or `_DIR_FD_CAPABLE` forced False on a capable platform for
+    this test: `generate_package` must not acquire a base fd at all, and
+    must keep generating exactly as it did before this task. Not marked
+    `pytestmark_avv` -- forcing the flag makes this exercise the fallback on
+    every platform, which is the whole reason the flag is a module global
+    read at call time rather than captured anywhere.
+    """
+    from stencil.generate import generate_package
+
+    monkeypatch.setattr(generate, "_DIR_FD_CAPABLE", False)
+
+    env, loaded, output_base, config_dir = _direct_call_package(
+        tmp_path, {"templates": [{"src": "Makefile.j2", "dest": "sub/Makefile"}]}
+    )
+
+    def refuses_if_called(*args, **kwargs):
+        raise AssertionError("the fallback path must not acquire a base fd at all")
+
+    monkeypatch.setattr(generate, "_open_package_base_fd", refuses_if_called)
+
+    result = generate_package(env, loaded, output_base, "demo", False, config_dir)
+
+    assert result == output_base / "demo"
+    assert (output_base / "demo" / "sub" / "Makefile").exists()
+
+
+@pytestmark_avv
+def test_the_stale_manifest_delete_goes_through_the_base_fd(tmp_path, monkeypatch):
+    """Operator ruling: `manifest_path.unlink()` was the one path-based
+    delete left in the middle of a function everything else in this task
+    converts to descriptors. If `output_dir` were swapped for a symlink to a
+    victim directory right after `base_fd` is opened, a path-based unlink
+    here would delete the VICTIM's manifest -- a delete OUTSIDE the tree,
+    performed by the very run meant to make `gen` descriptor-safe.
+
+    The swap happens inside a wrapped `_open_package_base_fd`, immediately
+    after the real one returns: `package_dir`'s real directory entry (with
+    its stale manifest already inside) is renamed aside, pinned by the fd
+    that is already open, and `package_dir`'s NAME is replaced with a
+    symlink to a victim directory that carries its own, different,
+    manifest.
+    """
+    from stencil.generate import generate_package
+
+    env, loaded, output_base, config_dir = _direct_call_package(
+        tmp_path, {"templates": [{"src": "Makefile.j2"}]}
+    )
+    package_dir = output_base / "demo"
+    package_dir.mkdir(parents=True)
+    (package_dir / MANIFEST_NAME).write_text('{"kept": "real"}\n')
+
+    victim = config_dir / "victim"
+    victim.mkdir()
+    (victim / MANIFEST_NAME).write_text('{"kept": "victim"}\n')
+
+    renamed = tmp_path / "demo-renamed"
+    real_open_base_fd = generate._open_package_base_fd
+
+    def swap_after_open(*args, **kwargs):
+        fd = real_open_base_fd(*args, **kwargs)
+        package_dir.rename(renamed)
+        package_dir.symlink_to(victim)
+        return fd
+
+    monkeypatch.setattr(generate, "_open_package_base_fd", swap_after_open)
+
+    generate_package(env, loaded, output_base, "demo", False, config_dir)
+
+    new_manifest = json.loads((renamed / MANIFEST_NAME).read_text())
+    assert new_manifest["package"] == "demo", (
+        "the manifest in the PINNED original directory must be the one "
+        "this run rewrote, not left as the stale one"
+    )
+    assert (renamed / "Makefile").exists(), (
+        "the render must land in the pinned original directory, not "
+        "through the swapped symlink"
+    )
+    assert json.loads((victim / MANIFEST_NAME).read_text())["kept"] == "victim", (
+        "the victim's manifest must be untouched -- a path-based "
+        "manifest_path.unlink() here would have deleted it instead of the "
+        "stale one in the real directory"
+    )
+    assert not (victim / "Makefile").exists(), (
+        "nothing may be written into the victim directory"
+    )
+
+
+@pytestmark_avv
+def test_a_symlinked_ancestor_of_the_output_base_is_not_caught(tmp_path):
+    """THE STATED RESIDUAL (STENCIL.md), pinned so the statement stays
+    honest rather than aspirational. `_open_package_base_fd` starts its
+    descriptor walk FROM `output_base` -- everything below it, including
+    every component of a multi-part package `dir`, is now protected.
+    `output_base` ITSELF, and everything ABOVE it, is still resolved by the
+    kernel's ordinary path lookup at the single `os.open(output_base, ...)`
+    call: there is no descriptor to start a walk from further up, because
+    `output_base` IS the start. `O_NOFOLLOW` on that call only ever governs
+    the LAST name in the path it is given; an ANCESTOR component is
+    resolved by the kernel exactly as any ordinary path resolves one,
+    symlink and all.
+
+    A DIRECT UNIT TEST of `_open_package_base_fd`, deliberately not routed
+    through `generate_package`/`checked_write_target`: that pre-pass has its
+    own, unrelated containment check (`contained_entry_parent`) which
+    compares a resolved write target against the CALLER'S OWN, unresolved
+    `output_base` string -- so it refuses this exact setup for a reason that
+    has nothing to do with the fd wiring under test here, before
+    `_open_package_base_fd` is ever reached. Calling the helper directly is
+    what isolates the one property this test is pinning.
+    """
+    real_mid = tmp_path / "real_mid"
+    (real_mid / "out").mkdir(parents=True)
+    mid_link = tmp_path / "mid"
+    mid_link.symlink_to(real_mid)
+    # output_base's path runs THROUGH the symlinked ancestor "mid" -- not
+    # at "mid" itself, and not below "out".
+    output_base = tmp_path / "mid" / "out"
+
+    victim = tmp_path / "victim"
+    (victim / "out").mkdir(parents=True)
+
+    fd = generate._open_package_base_fd(output_base, "demo", "demo")
+    os.close(fd)
+    assert (real_mid / "out" / "demo").is_dir(), "test setup: first open"
+
+    # Swap the ANCESTOR "mid" for a symlink to a victim tree. `output_base`
+    # is the same Path/string as before; only what "mid" resolves to on
+    # disk has changed.
+    mid_link.unlink()
+    mid_link.symlink_to(victim)
+
+    fd = generate._open_package_base_fd(output_base, "demo", "demo")
+    os.close(fd)
+
+    # NOT refused -- this is the residual. The second call opened a
+    # descriptor inside the victim tree, through the swapped ancestor,
+    # which is exactly the outcome the walk below `output_base` exists to
+    # prevent for anything AT OR BELOW it. This swap is ABOVE
+    # `output_base`, which the walk cannot see.
+    assert (victim / "out" / "demo").is_dir(), (
+        "the residual test setup is wrong if this does not hold -- the "
+        "point being pinned is that this second call is NOT refused"
+    )
+
+
+@pytest.mark.skipif(
+    not generate._DIR_FD_CAPABLE,
+    reason="no O_DIRECTORY/O_NOFOLLOW dir_fd support on this platform",
+)
+def test_the_package_directorys_own_name_is_followed_and_that_is_the_second_residual(
+    tmp_path,
+):
+    """The package directory's OWN final component is opened WITHOUT
+    `O_NOFOLLOW`, so a symlink there is followed. Pinned because STENCIL.md
+    states it as a limit, and a limit no test holds is a sentence that goes
+    stale the first time someone tightens the code around it.
+
+    THIS IS NOT AN OVERSIGHT, and the same line of code is two things at
+    once. `contained_path` has always PERMITTED the package directory itself
+    to be a symlink, so long as it resolves back under the output base --
+    `test_a_package_dir_symlinked_inside_the_output_tree_still_generates`
+    depends on exactly that, and adding `O_NOFOLLOW` to this one open would
+    reverse a deliberate decision from stn-vhr rather than close a gap.
+
+    What it costs is stated here rather than implied away: for that ONE
+    component, containment rests on `contained_path`'s earlier resolve and
+    not on the open, so a swap between the two is not caught. Every
+    component BELOW the package directory is descriptor-walked and is not
+    exposed this way, which is what stn-avv actually closed. The other
+    residual -- a swapped ancestor of the output base -- is pinned just
+    above; these are the only two left on the write side, and the delete
+    side is stn-cfby.
+    """
+    output_base = tmp_path / "out"
+    output_base.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+
+    # The package directory IS a symlink at the moment the fd is opened.
+    (output_base / "demo").symlink_to(outside)
+
+    base_fd = generate._open_package_base_fd(output_base, "demo", "demo")
+    try:
+        generate.write_text_nofollow(Path("probe.txt"), "followed\n", dir_fd=base_fd)
+    finally:
+        os.close(base_fd)
+
+    # NOT refused -- the residual. The bytes landed through the link.
+    assert (outside / "probe.txt").read_text() == "followed\n", (
+        "the residual test setup is wrong if this does not hold -- the "
+        "package directory's own name is meant to be followed here"
+    )
+    assert not (output_base / "demo").is_dir() or (output_base / "demo").is_symlink()
+
+
+# --- stn-bux: a make file of higher precedence beside the generated one ----
+#
+# GNU Make prefers GNUmakefile, then makefile, then Makefile (in that exact
+# order) when no makefile is named on the command line. A GNUmakefile
+# planted beside a generated Makefile REPLACES it entirely for every `make`
+# invocation that follows, silently -- measured, on the architecture
+# review's reproduction: `make format-md` printed `SHADOW-WINS uid=501`
+# with the generated Makefile untouched and unread on disk. Nothing inside
+# the generated Makefile's own contents can defend against this, because
+# `make` never opens it, so the mitigation is a refusal at `gen` time.
+
+
+def _is_case_insensitive_fs(directory: Path) -> bool:
+    """Detect rather than assume (stn-6mcb.4's amendment): write a name and
+    ask the filesystem about its upper-cased spelling. True on this
+    checkout's macOS APFS volume and expected on Windows; False on ext4 and
+    most Linux CI, which is exactly why this is a runtime probe and not a
+    `sys.platform` guard -- `sys.platform` cannot see a case-sensitive
+    volume mounted on a Mac, or the reverse."""
+    probe = directory / "stn-bux-case-probe.txt"
+    probe.write_text("x")
+    return probe.with_name(probe.name.upper()).exists()
+
+
+def test_gen_refuses_a_gnumakefile_of_higher_precedence(tmp_path):
+    """The reproduction itself. `GNUmakefile` is the highest name in make's
+    own precedence and coexists with `Makefile` as a distinct directory
+    entry on every filesystem, case-sensitive or not (measured: `listdir`
+    shows both), so this test needs no skip anywhere."""
+    config_dir, package_dir, _target = _planted_package(tmp_path)
+    (package_dir / "GNUmakefile").write_text("SHADOW\n")
+
+    result = run_cli("gen", "demo", cwd=config_dir)
+
+    assert result.returncode != 0, (
+        f"rc={result.returncode}, stdout={result.stdout[:400]!r}"
+    )
+    assert "Traceback" not in result.stderr, result.stderr
+    assert "GNUmakefile" in result.stderr, result.stderr
+
+
+def test_the_refusal_happens_before_anything_is_written_on_a_fresh_output_directory(
+    tmp_path,
+):
+    """The stn-h5q guarantee extended to this refusal: a fresh package
+    directory -- gen has never succeeded here -- must come out of a refused
+    run holding exactly what was planted, nothing more. Without this, `gen`
+    could refuse the Makefile it is not allowed to write while still
+    rendering the other templates and the manifest around it -- a
+    half-generated package that looks generated."""
+    config_dir, package_dir, _target = _planted_package(
+        tmp_path,
+        templates=[
+            {"src": "Makefile.j2"},
+            {"src": "docker-compose.yml.j2"},
+        ],
+    )
+    (package_dir / "GNUmakefile").write_text("SHADOW\n")
+    before = sorted(p.name for p in package_dir.iterdir())
+
+    result = run_cli("gen", "demo", cwd=config_dir)
+
+    assert result.returncode != 0, (
+        f"rc={result.returncode}, stdout={result.stdout[:400]!r}"
+    )
+    after = sorted(p.name for p in package_dir.iterdir())
+    assert after == before, (
+        f"a refused run changed the package directory: before={before}, "
+        f"after={after}"
+    )
+
+
+def test_a_config_declaring_dest_gnumakefile_is_not_refused_by_its_own_output(
+    tmp_path,
+):
+    """GENERALISED, not hardcoded to `Makefile`: a consumer that declares
+    `dest: GNUmakefile` writes the HIGHEST-precedence name there is, so
+    nothing can ever shadow it and regenerating over its own prior output
+    must not be refused by that very output."""
+    write_config(
+        tmp_path,
+        {
+            "output_dir": "out",
+            "templates": [{"src": "Makefile.j2", "dest": "GNUmakefile"}],
+            "packages": {"demo": {"name": "Demo", "package_type": "none"}},
+        },
+    )
+
+    first = run_cli("gen", "demo", cwd=tmp_path)
+    assert first.returncode == 0, first.stderr
+    assert (tmp_path / "out" / "demo" / "GNUmakefile").exists()
+
+    second = run_cli("gen", "demo", cwd=tmp_path)
+    assert second.returncode == 0, (
+        "a package's own previously-generated GNUmakefile must not shadow "
+        f"itself on regeneration: {second.stderr!r}"
+    )
+
+
+def test_a_package_that_writes_no_makefile_is_not_refused_by_a_gnumakefile(
+    tmp_path,
+):
+    """A GNUmakefile beside a package that never writes any make-file name
+    at all is none of this check's business -- there is nothing here for
+    `make` to run instead of, so nothing is shadowed."""
+    config_dir, package_dir, _target = _planted_package(
+        tmp_path, templates=[{"src": "docker-compose.yml.j2"}]
+    )
+    (package_dir / "GNUmakefile").write_text("unrelated\n")
+
+    result = run_cli("gen", "demo", cwd=config_dir)
+
+    assert result.returncode == 0, result.stderr
+    assert (package_dir / "docker-compose.yml").exists()
+
+
+def test_gen_refuses_a_lowercase_makefile_of_higher_precedence(tmp_path):
+    """`makefile` (all-lowercase) sits between `GNUmakefile` and `Makefile`
+    in make's precedence, so it shadows a generated `Makefile` exactly the
+    way `GNUmakefile` does.
+
+    THIS TEST CANNOT BE CONSTRUCTED on a case-insensitive filesystem
+    (stn-6mcb.4's amendment): `makefile` and `Makefile` are ONE directory
+    entry there -- measured, writing `makefile` beside an existing
+    `Makefile` overwrites it in place and `os.listdir` still shows one
+    name. The fixture would silently collapse into the same-inode case
+    covered separately below, so this skips with the reason rather than
+    asserting on a setup that is not what it claims to be."""
+    config_dir, package_dir, _target = _planted_package(tmp_path)
+    if _is_case_insensitive_fs(package_dir):
+        pytest.skip(
+            "case-insensitive filesystem: 'makefile' and 'Makefile' are "
+            "one directory entry here, so this fixture cannot be built "
+            "(stn-6mcb.4 amendment)"
+        )
+    (package_dir / "makefile").write_text("SHADOW\n")
+
+    result = run_cli("gen", "demo", cwd=config_dir)
+
+    assert result.returncode != 0, (
+        f"rc={result.returncode}, stdout={result.stdout[:400]!r}"
+    )
+    assert "Traceback" not in result.stderr, result.stderr
+    assert "makefile" in result.stderr, result.stderr
+
+
+def test_a_same_inode_makefile_entry_does_not_false_refuse(tmp_path):
+    """The amendment's central point: on a case-insensitive filesystem the
+    directory entry for the file this call is about to write as `Makefile`
+    can be STORED as `makefile` -- one inode, one entry, either case reads
+    it back. That is a higher-precedence NAME in the listing that is in
+    fact stencil's own file, and refusing it would break regeneration for
+    every package on such a filesystem.
+
+    Skips on a case-sensitive filesystem, where renaming `Makefile` to
+    `makefile` leaves a GENUINE second name with nothing at `Makefile`
+    beneath it -- a real shadow, not the false positive this test is
+    about."""
+    config_dir, package_dir, _target = _planted_package(tmp_path)
+    if not _is_case_insensitive_fs(package_dir):
+        pytest.skip(
+            "requires a case-insensitive filesystem, where 'makefile' and "
+            "'Makefile' collapse to one directory entry (stn-6mcb.4 "
+            "amendment); on a case-sensitive one this setup is a genuine "
+            "shadow rather than the false positive under test"
+        )
+
+    first = run_cli("gen", "demo", cwd=config_dir)
+    assert first.returncode == 0, first.stderr
+
+    # Case-only rename: still one inode, now stored lower-case -- measured
+    # with os.path.samefile() returning True for this exact pair.
+    os.rename(package_dir / "Makefile", package_dir / "makefile")
+    entries = os.listdir(package_dir)
+    assert "makefile" in entries and "Makefile" not in entries, (
+        f"test setup: {entries}"
+    )
+
+    second = run_cli("gen", "demo", cwd=config_dir)
+    assert second.returncode == 0, (
+        "regenerating over its own file, spelled in a different case, "
+        f"must not be refused: {second.stderr!r}"
+    )
+
+
+def test_gen_dry_run_refuses_a_gnumakefile_of_higher_precedence(tmp_path):
+    """`--dry-run` runs the same pre-pass and nothing else (stn-h5q), so a
+    preview must report the same refusal a real run would rather than
+    printing a `Would write: out/demo/Makefile` line for a write `gen`
+    could never actually make."""
+    config_dir, package_dir, _target = _planted_package(tmp_path)
+    (package_dir / "GNUmakefile").write_text("SHADOW\n")
+
+    result = run_cli("gen", "demo", "--dry-run", cwd=config_dir)
+
+    assert result.returncode != 0, (
+        f"rc={result.returncode}, stdout={result.stdout[:400]!r}"
+    )
+    assert "GNUmakefile" in result.stderr, result.stderr
+    assert not (package_dir / "Makefile").exists()
+
+
+def test_an_ordinary_package_with_only_the_generated_makefile_still_generates(
+    tmp_path,
+):
+    """The regression guard: an ORDINARY package that writes only `Makefile`
+    and nothing of higher precedence must keep generating, on this
+    checkout's case-insensitive filesystem included -- the same platform
+    the same-inode guard above exists for."""
+    config_dir, package_dir, _target = _planted_package(tmp_path)
+
+    result = run_cli("gen", "demo", cwd=config_dir)
+
+    assert result.returncode == 0, result.stderr
+    assert (package_dir / "Makefile").exists()
+
+
+def test_a_gnumakefile_symlinked_to_the_makefile_is_not_refused_on_a_fresh_checkout(
+    tmp_path,
+):
+    """`GNUmakefile -> Makefile` is a self-alias, not a shadow, and must be
+    accepted whether or not `Makefile` is on disk when `gen` runs.
+
+    Measured: `os.path.samefile` raises FileNotFoundError when the target
+    does not exist yet, so before the `readlink` fallback this alias was
+    ACCEPTED on a regenerate and REFUSED on a fresh checkout or the run
+    after `stencil clean` -- a refusal that depended on whether the
+    directory happened to have been cleaned. Measured on GNU Make 3.81:
+    such an alias runs the real Makefile's recipes, so refusing it protects
+    nothing.
+    """
+    config = {
+        "output_dir": "out",
+        "templates": [{"src": "Makefile.j2"}],
+        "packages": {"demo": {"name": "Demo", "package_type": "none"}},
+    }
+    write_config(tmp_path, config)
+
+    package = tmp_path / "out" / "demo"
+    package.mkdir(parents=True)
+    # The alias exists; its target does NOT yet -- the fresh-checkout shape.
+    (package / "GNUmakefile").symlink_to("Makefile")
+    assert not (package / "Makefile").exists(), "setup: target must be absent"
+
+    result = run_cli("gen", "demo", cwd=tmp_path)
+
+    assert result.returncode == 0, (
+        f"a self-alias must not be refused just because its target is not "
+        f"on disk yet: {result.stderr!r}"
+    )
+    assert (package / "Makefile").exists()

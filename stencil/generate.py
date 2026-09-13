@@ -1228,17 +1228,26 @@ def validate_config(
     file-existence check before anything is written; see package_contexts's
     own docstring for what running behind it costs the checks below.
     """
+    contexts = package_contexts(config, config_dir)
+    available: set[str] = set()
+    for context in contexts.values():
+        available |= set(context)
+
+    # stn-dl3r: built AFTER package_contexts, not before. `tdef.get("when")`
+    # assumes every `templates:` entry is a mapping -- a shape
+    # package_contexts now checks and raises on (via
+    # _checked_template_defs) -- and this loop used to run ABOVE that call,
+    # so a malformed entry reached `tdef.get` here as a bare `str` and
+    # tracebacked with AttributeError before `gen`'s only pre-flight ever
+    # got a chance to name the real problem. By the time this runs,
+    # `package_contexts` has already raised on that shape, so every `tdef`
+    # here is guaranteed to be a mapping.
     when_keys: set[str] = set()
     for tdef in config.get("templates", []):
         when = tdef.get("when")
         if when is None:
             continue
         when_keys |= {when} if isinstance(when, str) else set(when)
-
-    contexts = package_contexts(config, config_dir)
-    available: set[str] = set()
-    for context in contexts.values():
-        available |= set(context)
 
     unknown = sorted(when_keys - available)
     if unknown:
@@ -1373,6 +1382,8 @@ def copy_brand_image(
     config_dir: Path,
     output_dir: Path,
     dry_run: bool = False,
+    *,
+    dir_fd: int | None = None,
 ) -> None:
     """Copy a config-level brand image into the package it brands.
 
@@ -1383,6 +1394,14 @@ def copy_brand_image(
     document referring to a file they were never given. A copy per package is
     the cost of each folder standing on its own, and the copies are ignored by
     git for the same reason every other generated file is.
+
+    `dir_fd`, OPTIONAL AND KEYWORD-ONLY (stn-avv, stn-6mcb.5): a descriptor on
+    `output_dir` itself, opened by `generate_package` with
+    `_open_package_base_fd`. The copy always lands at a TOP-LEVEL name in the
+    package directory -- `Path(relative).name`, never a nested path -- so
+    writing through it needs no walk, only the base descriptor and that name.
+    `None` -- today's behaviour, unchanged -- opens the full `destination`
+    path instead.
     """
     problem = brand_problem(package, config, config_dir)
     if problem:
@@ -1418,7 +1437,14 @@ def copy_brand_image(
         # stn-h5q. The SOURCE has taken this care since stn-ttg; the
         # DESTINATION, which is the half that writes, was a bare
         # open(..., "wb") and followed a symlink straight out of the tree.
-        open_for_write_nofollow(destination) as dst,
+        # stn-avv: when `dir_fd` is given, the NAME passed alongside it must
+        # be relative to that descriptor -- `destination`'s directory
+        # portion would otherwise be resolved by path all over again,
+        # throwing away the whole point of holding `dir_fd` open.
+        open_for_write_nofollow(
+            Path(destination.name) if dir_fd is not None else destination,
+            dir_fd=dir_fd,
+        ) as dst,
     ):
         shutil.copyfileobj(src, dst)
     print(f"Copied: {destination}")
@@ -1527,6 +1553,113 @@ def _raise_config_problems(
     raise ValueError(f"the config has {count}:\n{bullets}\n\n{text}")
 
 
+def _checked_template_defs(
+    declared: object, who: str
+) -> tuple[list[dict], list[str]]:
+    """Shape-check a config's top-level ``templates:`` value. ONE spelling
+    for a rule two callers need (stn-dl3r).
+
+    `package_contexts` runs this as part of gen/install's fail-closed
+    pre-flight (and of `clean`'s own `config_readable` probe), raising
+    before anything is written; `_config_template_defs` runs it again for
+    `clean`'s config-derived removal list, which a caller of
+    `clean_generated(config_readable=True)` can reach without ever having
+    called `package_contexts` (see that function's docstring). An earlier
+    version of this file kept the rule in `_config_template_defs` alone and
+    called that "belt and braces" for `package_contexts` -- it was not:
+    `package_contexts` never checked this shape at all, so a malformed
+    `templates:` reached `gen` and `install` as a bare
+    AttributeError/KeyError while `clean` alone named it. Two independent
+    implementations of the same shape check is the drift this file has
+    already paid for three times (see `package_entries`'s docstring), so
+    this is the one place the rule is written; each caller keeps its own
+    failure mode -- `package_contexts` appends to a `problems` list it
+    raises on once every package has been checked, `_config_template_defs`
+    appends to one its own caller was handed.
+
+    An ABSENT `templates:` key is not a problem. Every caller already reads
+    `config.get("templates", [])`, so a config with no key at all sees `[]`
+    here -- the same value an explicit `templates: []` produces -- and
+    refusing an absent key would refuse every config that has no templates
+    yet. `templates: []` is legal on its own merits too: it is the ordinary
+    shape of a `package_type: none` package with no pages, and stn-jez's own
+    reproduction config depends on it staying legal. A `templates:` key
+    present with no value (YAML null) is NOT the same statement as an
+    absent key, and is still refused below -- `None` is not a list either.
+
+    Returns ``(kept, problems)``. `kept` is every entry that is a mapping
+    with a non-empty string `src` -- the only shape a caller can go on to
+    read `tdef["src"]` / call `tdef.get(...)` on without checking again.
+    `problems` names, in words shared by every caller, each entry that was
+    dropped and why, or (for a non-list `templates:`) that none of them
+    could be identified at all -- worded so `gen`, `install` and `clean`
+    report the identical shape mistake identically, which is the whole
+    point of stn-dl3r.
+    """
+    if not isinstance(declared, list):
+        return [], [
+            f"Package(s) {who}: 'templates' must be a list of template "
+            f"definitions, not {type(declared).__name__} -- the file(s) it "
+            "renders cannot be identified"
+        ]
+
+    kept: list[dict] = []
+    dropped = 0
+    bad_when = 0
+    for tdef in declared:
+        if not isinstance(tdef, dict):
+            dropped += 1
+            continue
+        src = tdef.get("src")
+        if not isinstance(src, str) or not src:
+            dropped += 1
+            continue
+        # `when` TOO, because this function's whole promise is "the only
+        # shape a caller can go on to read without checking again" -- and
+        # `validate_config` and `when_holds` both consume `tdef["when"]`
+        # with no check of their own. Measured before this was added, with
+        # `when: 5` in the same mapping stn-dl3r fixed: `gen` and `install`
+        # both tracebacked with a bare `TypeError: 'int' object is not
+        # iterable`, and `clean` put that class name into a config message
+        # -- this ticket's own description of the bug it closed, reproduced
+        # verbatim for the sibling key. Worse, `when: {a: b}` made `install`
+        # exit 0 having written a managed .gitignore with `Makefile` missing
+        # from it, because `all(...)` over a dict walks its KEYS: a config
+        # `gen` calls broken and `install` quietly acts on.
+        when = tdef.get("when")
+        if when is not None:
+            names = [when] if isinstance(when, str) else when
+            if (
+                not isinstance(names, list)
+                or not names
+                or not all(isinstance(name, str) and name for name in names)
+            ):
+                # COUNTED SEPARATELY, because "is not a mapping with a
+                # `src:`" is a false diagnosis for an entry whose `src` is
+                # perfectly good and whose `when` is not. Sending an author
+                # to look at the wrong key is the failure stn-dl3r is about.
+                bad_when += 1
+                continue
+        kept.append(tdef)
+
+    problems: list[str] = []
+    if dropped:
+        problems.append(
+            f"Package(s) {who}: {dropped} entr{'y' if dropped == 1 else 'ies'} "
+            f"under 'templates' {'is' if dropped == 1 else 'are'} not a mapping "
+            "with a `src:` -- the file(s) it renders cannot be identified"
+        )
+    if bad_when:
+        problems.append(
+            f"Package(s) {who}: {bad_when} entr"
+            f"{'y' if bad_when == 1 else 'ies'} under 'templates' "
+            f"{'has' if bad_when == 1 else 'have'} a `when:` that is not a "
+            "name or a list of names -- the condition cannot be evaluated, "
+            "so the file(s) it guards cannot be identified"
+        )
+    return kept, problems
+
+
 def package_contexts(
     config: dict, config_dir: Path | None = None, trailer: str | None = None
 ) -> dict[str, dict]:
@@ -1608,29 +1741,41 @@ def package_contexts(
     # one side. A nested dest is still fine: `.vscode/settings.json` is in the
     # config's own documentation, and check_config_path allows a subdirectory
     # while rejecting `..`, an absolute path and the rest.
-    templates = config.get("templates")
-    if isinstance(templates, list):
-        for tdef in templates:
-            if not isinstance(tdef, dict):
-                continue
-            declared = tdef.get("dest")
-            if declared is None:
-                continue
-            # check_config_path str()s what it is given, so `dest: 2024`
-            # would pass it and then reach `output_dir / 2024` in
-            # render_templates as a TypeError, after earlier templates had
-            # already been written. A dest is a filename, so it is a string.
-            if not isinstance(declared, str):
-                problems.append(
-                    f"Package config: dest {declared!r} is "
-                    f"{type(declared).__name__}, not a string. A template's "
-                    "dest is the filename it renders to."
-                )
-                continue
-            try:
-                check_config_path("config", "dest", declared)
-            except ValueError as error:
-                problems.append(str(error))
+    #
+    # stn-dl3r. The SHAPE of `templates:` itself -- a non-list value, a
+    # non-mapping entry, an entry with no (string) `src` -- used to be
+    # unchecked here at all: this loop skipped a non-dict member silently and
+    # did nothing when `templates` was not a list. `validate_config`'s
+    # `when:` loop and `when_holds` (reached via `get_generated_files` ->
+    # `package_entries` on `install`) both assume that shape, so a config
+    # this broken tracebacked on `gen` and `install` while only `clean`
+    # named it, via `_config_template_defs`. `_checked_template_defs` is the
+    # one place that shape check is written now; both this function and
+    # `_config_template_defs` call it.
+    who = ", ".join(sorted(packages)) if packages else "(no packages configured)"
+    kept_templates, template_problems = _checked_template_defs(
+        config.get("templates", []), who
+    )
+    problems.extend(template_problems)
+    for tdef in kept_templates:
+        declared = tdef.get("dest")
+        if declared is None:
+            continue
+        # check_config_path str()s what it is given, so `dest: 2024`
+        # would pass it and then reach `output_dir / 2024` in
+        # render_templates as a TypeError, after earlier templates had
+        # already been written. A dest is a filename, so it is a string.
+        if not isinstance(declared, str):
+            problems.append(
+                f"Package config: dest {declared!r} is "
+                f"{type(declared).__name__}, not a string. A template's "
+                "dest is the filename it renders to."
+            )
+            continue
+        try:
+            check_config_path("config", "dest", declared)
+        except ValueError as error:
+            problems.append(str(error))
 
     # The top-level output_dir (stn-40a, stn-pe3), config-level like `dest`
     # just above -- but this call is the SHAPE half only (check_output_dir).
@@ -1866,6 +2011,8 @@ def write_manifest(
     pkg_dir: str,
     entries: set[str] | list[str],
     dry_run: bool = False,
+    *,
+    dir_fd: int | None = None,
 ) -> None:
     """Write ``<output_dir>/MANIFEST_NAME``, recording exactly what this
     generate_package call produced for one package.
@@ -1875,6 +2022,12 @@ def write_manifest(
     avoid. Never written under ``--dry-run``: a preview's manifest would tell
     a later, manifest-driven `clean` about files that were never actually
     produced.
+
+    `dir_fd`, OPTIONAL AND KEYWORD-ONLY (stn-avv, stn-6mcb.5): a descriptor
+    on `output_dir` itself. The manifest is always a TOP-LEVEL name in the
+    package directory, so writing through it needs no walk -- just the base
+    descriptor and `MANIFEST_NAME`. `None` -- today's behaviour, unchanged
+    -- writes through the full `manifest_path` instead.
     """
     manifest_path = output_dir / MANIFEST_NAME
     if dry_run:
@@ -1888,9 +2041,11 @@ def write_manifest(
         "dir": pkg_dir,
         "entries": sorted(entries),
     }
-    write_text_nofollow(
-        manifest_path, json.dumps(document, sort_keys=True, indent=2) + "\n"
-    )
+    text = json.dumps(document, sort_keys=True, indent=2) + "\n"
+    if dir_fd is not None:
+        write_text_nofollow(Path(MANIFEST_NAME), text, dir_fd=dir_fd)
+    else:
+        write_text_nofollow(manifest_path, text)
     print(f"Generated: {manifest_path}")
 
 
@@ -1962,12 +2117,23 @@ def read_manifest(path: Path) -> dict:
     config-derived fallback.
 
     FORWARD COMPATIBILITY (review finding D7): within a KNOWN
-    ``manifest_version``, unknown keys in the document are IGNORED, not
+    ``manifest_version``, UNKNOWN EXTRA keys in the document are IGNORED, not
     refused. Strict key validation would make a v1 manifest written by a
     later stencil unreadable by this one the moment that later version adds
     a diagnostic field -- exactly backwards from what a version field is
-    for. Only ``manifest_version`` itself and the required shape of
-    ``entries`` are enforced; everything else is read permissively.
+    for. That guarantee is about keys nothing below requires; it says
+    nothing about the ones that follow.
+
+    REQUIRED FIELDS (stn-jez): ``manifest_version``, the shape of
+    ``entries``, and -- checked last, below both of those -- the presence of
+    ``package``, ``dir`` and ``stencil_version`` as strings. `write_manifest`
+    has emitted all five fields since manifest v1 was introduced (verified:
+    ``git show 1e25490``), so no manifest stencil ever wrote is refused by
+    this. What it does refuse is a manifest missing one of them entirely --
+    which used to reach ``_clean_one_directory``'s ownership guard and read
+    as "no opinion", not as "untrusted" -- and requiring a field the writer
+    has always emitted does not weaken the forward-compatibility guarantee
+    above, which was never about these five.
 
     HARDENING (review finding A7), all measured on this interpreter:
 
@@ -2015,7 +2181,16 @@ def read_manifest(path: Path) -> dict:
 
     try:
         document = json.loads(
-            path.read_text(), object_pairs_hook=_reject_duplicate_manifest_keys
+            # UTF-8 explicitly, the same decision `write_text_nofollow`'s
+            # docstring settles for the write side and for the same reason:
+            # with no encoding this reads in the locale's preferred encoding,
+            # so what a manifest MEANS would depend on the shell that ran
+            # `clean`. Harmless for manifests stencil writes -- `json.dumps`
+            # defaults to ensure_ascii -- and not harmless for a hand-edited
+            # one, which under a non-UTF-8 locale decodes to mojibake and
+            # then trips the widen refusal with an entry name nobody can read.
+            path.read_text(encoding="utf-8"),
+            object_pairs_hook=_reject_duplicate_manifest_keys,
         )
     except (OSError, ValueError, RecursionError) as error:
         raise ManifestError(
@@ -2033,10 +2208,17 @@ def read_manifest(path: Path) -> dict:
     def _context() -> str:
         """A best-effort ``(package "x", dir "y")`` suffix for a message.
 
-        Both fields are diagnostic only (see write_manifest's docstring),
-        so a missing or malformed one is not itself a rejection -- it just
-        drops out of the suffix. Every value is `_safe`-guarded: it came
-        from the same unvalidated document as everything else here.
+        A missing or malformed field just drops out of the suffix here --
+        this helper only decides what the parenthetical SAYS, never whether
+        the manifest is accepted. That used to make a missing ``package`` or
+        ``dir`` "not itself a rejection" in the fuller sense too, but it no
+        longer is: the required-field check below raises `ManifestError` for
+        exactly that. This helper runs ABOVE that check (it is used by the
+        ``manifest_version`` and ``entries`` messages too, which fire before
+        a missing `package`/`dir` would even be checked), so it still has to
+        tolerate both fields being absent -- it just no longer gets the last
+        word on whether that absence is fine. Every value is `_safe`-guarded:
+        it came from the same unvalidated document as everything else here.
         """
         parts = []
         for key in ("package", "dir"):
@@ -2068,6 +2250,33 @@ def read_manifest(path: Path) -> dict:
             "read it. Delete the manifest to fall back to deriving from "
             "the config."
         )
+
+    # stn-jez. Checked LAST -- below manifest_version and below entries --
+    # because two existing parametrised regression tests in
+    # tests/test_manifest.py assert on the message they name
+    # (id=entries-not-list-of-strings expects "entries",
+    # id=unknown-manifest-version expects "manifest_version") from a fixture
+    # that also happens to omit `stencil_version`; checking this first would
+    # turn both red for the wrong reason. See the REQUIRED FIELDS paragraph
+    # above for why enforcing these does not weaken forward compatibility.
+    #
+    # `write_manifest` has emitted `package`, `dir` and `stencil_version` on
+    # every manifest since v1 was introduced (verified: `git show 1e25490`),
+    # so no manifest stencil ever wrote is refused here. What used to be
+    # refused by nothing at all was a manifest missing one of them entirely:
+    # `_clean_one_directory`'s ownership guard reads `manifest.get("package")`
+    # and only refuses when that IS a string and unrecognized -- a missing
+    # key made the guard's own `isinstance` check False, so it read as "no
+    # opinion" instead of "untrusted".
+    for key in ("package", "dir", "stencil_version"):
+        value = document.get(key)
+        if not isinstance(value, str):
+            raise ManifestError(
+                f'no valid "{key}"{_context()} (found {_safe(repr(value))}) '
+                "-- every manifest stencil writes has one. Delete the "
+                "manifest to fall back to deriving from the config. "
+                f"Manifest: {safe_name}"
+            )
 
     return document
 
@@ -2196,6 +2405,274 @@ def contained_entry_parent(
     return parent_resolved
 
 
+# stn-avv (stn-6mcb.7). Whether the descriptor-walk mechanism below --
+# `walk_dir_fd`, and the `dir_fd=` keyword on the two nofollow writers --
+# can run at all. MEASURED on this macOS (APFS, Python 3.13) and on Linux:
+# all four conditions hold, so `os.open(component, ..., dir_fd=parent)` and
+# `os.mkdir(component, dir_fd=parent)` both work; all four are absent on
+# Windows, which has no dir_fd support whatsoever and keeps
+# `checked_write_target`'s lstat pre-pass as its only defence -- stated here
+# and in STENCIL.md rather than implied away.
+#
+# READ AT CALL TIME, EVERYWHERE THIS IS USED -- never capture it in a
+# function's DEFAULT ARGUMENT. A default argument is evaluated exactly once,
+# when the enclosing `def` statement runs at import time, so
+# `def f(x, capable=_DIR_FD_CAPABLE):` would freeze whatever this measured
+# on THIS platform forever; no test could then force the Windows-shaped
+# fallback path on a machine where the flag is naturally True. Referencing
+# the bare name `_DIR_FD_CAPABLE` inside a function BODY instead re-reads
+# this module global on every call, which is what lets
+# `monkeypatch.setattr(generate, "_DIR_FD_CAPABLE", False)` actually change
+# behaviour in a test -- and is the only way the "the fallback still
+# behaves as today" pin can run at all.
+_DIR_FD_CAPABLE = (
+    hasattr(os, "O_DIRECTORY")
+    and hasattr(os, "O_NOFOLLOW")
+    and os.open in os.supports_dir_fd
+    and os.mkdir in os.supports_dir_fd
+)
+
+
+def walk_dir_fd(base_fd: int, relative: str) -> tuple[int, str]:
+    """Walk `relative`'s INTERMEDIATE components below `base_fd` by
+    descriptor rather than by path, returning `(parent_fd, final_name)` for
+    the caller to write through with `os.open(final_name, ..., dir_fd=
+    parent_fd)`. The object a caller checks by opening it here and the
+    object it later writes are then the same inode by construction --
+    stn-avv's fix for the gap `checked_write_target`'s docstring names: a
+    symlink swapped in at an INTERMEDIATE directory between a path-based
+    pre-pass and a path-based write.
+
+    Requires `_DIR_FD_CAPABLE` (read fresh here -- see the comment above
+    it). A caller must not reach this function on a platform where that is
+    False; it refuses loudly with `NotImplementedError` rather than passing
+    an unsupported `dir_fd=` keyword to `os.open` and letting a raw
+    `TypeError` stand in for a real diagnosis.
+
+    OWNERSHIP, AND IT IS UNIFORM ON PURPOSE: the returned `parent_fd` is
+    ALWAYS the caller's to close, in every case, with no test for which case
+    this was. Intermediates this walk acquires and does not return are closed
+    here on both the success and the failure path (try/finally); `base_fd`
+    itself belongs to the caller and is never closed here.
+
+    That uniformity costs one `os.dup` and is the whole reason for it. A
+    single-component `relative` -- `Makefile`, and every other top-level file
+    a package contains, i.e. the COMMON case -- has no intermediates at all,
+    so the natural thing to hand back is `base_fd`. Then `parent_fd` is
+    sometimes the caller's own long-lived package-directory descriptor and
+    sometimes a fresh one, and a caller that closes what it was given (the
+    obvious reading of "handed back for the caller to use and then close")
+    closes the package directory out from under itself after the first
+    top-level write, so every write after it fails on a stale descriptor.
+    Returning a `dup` makes "close what you were given" correct always,
+    rather than correct only for nested destinations.
+
+    THE TRAP, measured (stn-6mcb.7 spike note 3) and the reason the loop
+    below is not the "try mkdir, except FileExistsError: pass" pattern it
+    looks like it should be. `os.mkdir(name, dir_fd=parent)` over an
+    EXISTING SYMLINK raises `FileExistsError` -- the exact same exception a
+    benign "the directory is already there" raises. A caught-and-ignored
+    `FileExistsError` therefore proves NOTHING about what `name` actually
+    is: swallowing it would treat an attacker's symlink as though it were
+    the real directory it asked for. What saves this is that the walk
+    ALWAYS re-opens the component afterwards with
+    `O_RDONLY|O_DIRECTORY|O_NOFOLLOW`, and THAT open -- never the mkdir --
+    is measured to refuse the symlink case. This is invisible on the happy
+    path, which is exactly why it is written down here rather than left for
+    whoever "simplifies" the mkdir/except pattern later to rediscover the
+    hard way.
+
+    DO NOT BRANCH ON ERRNO. Measured: the identical symlink-to-directory
+    open above is refused with ENOTDIR on macOS and ELOOP on Linux -- two
+    different errno values for the same attack, from two kernels that both
+    correctly refuse it. Treating one errno as "the" refusal would silently
+    stop refusing on whichever platform did not get tested against. ANY
+    `OSError` from the component open is the refusal, and the message
+    carries `strerror` rather than a hardcoded diagnosis of what the errno
+    means. (A regular file at an intermediate component is refused the same
+    way, for the same reason `checked_write_target` already gives it:
+    `O_DIRECTORY` on a non-directory is ENOTDIR too.)
+    """
+    if not _DIR_FD_CAPABLE:
+        raise NotImplementedError(
+            "walk_dir_fd requires O_DIRECTORY/O_NOFOLLOW dir_fd support, "
+            "which this platform does not have -- the caller must use the "
+            "path-based fallback instead"
+        )
+
+    parts = Path(relative).parts
+    if not parts:
+        raise ValueError(f"{relative!r} has no components to walk")
+
+    if len(parts) == 1:
+        # No intermediates to walk. Duplicated rather than returned as-is so
+        # the caller owns what it is handed in every case -- see OWNERSHIP
+        # above for the bug that costs.
+        return os.dup(base_fd), parts[-1]
+
+    current_fd = base_fd
+    # An fd THIS walk opened and has not yet closed -- None means there is
+    # currently nothing pending closure. Distinct from `base_fd`, which is
+    # never ours to close.
+    pending_fd = None
+    succeeded = False
+    try:
+        for part in parts[:-1]:
+            try:
+                os.mkdir(part, dir_fd=current_fd)
+            except FileExistsError:
+                # Proves nothing by itself -- see the docstring. The open
+                # immediately below is what actually decides whether `part`
+                # is a directory this walk may descend into.
+                pass
+
+            try:
+                next_fd = os.open(
+                    part,
+                    os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                    dir_fd=current_fd,
+                )
+            except OSError as error:
+                raise ValueError(
+                    f"could not open {part!r} as a directory while writing "
+                    f"{relative!r} ({error.strerror}) -- refusing to write "
+                    "through it"
+                ) from error
+
+            if pending_fd is not None:
+                os.close(pending_fd)
+            pending_fd = next_fd
+            current_fd = next_fd
+
+        succeeded = True
+        return current_fd, parts[-1]
+    finally:
+        if not succeeded and pending_fd is not None:
+            os.close(pending_fd)
+
+
+# stn-bux: GNU Make's own name precedence, applied before `gen` writes.
+#
+# GNU Make prefers GNUmakefile, then makefile, then Makefile (in that exact
+# order) when nothing is named on the command line. A GNUmakefile planted
+# beside a generated Makefile therefore REPLACES it entirely for every
+# `make` that follows -- measured, the architecture review's reproduction:
+# `make format-md` printed `SHADOW-WINS uid=501` with the generated
+# Makefile untouched and unread on disk. Nothing inside the generated
+# Makefile's own contents can defend against this, since `make` never opens
+# it, so the mitigation has to be a refusal at `gen` time -- the operator's
+# chosen outcome, not a hardening of the Makefile itself.
+_MAKE_PRECEDENCE = ("GNUmakefile", "makefile", "Makefile")
+
+
+def refuse_shadowed_makefile(
+    package_id: str, pkg_path: Path, targets: list[tuple[str, str]]
+) -> None:
+    """Refuse when `pkg_path` already holds a make-file name STRICTLY
+    HIGHER in `_MAKE_PRECEDENCE` than the one `targets` is about to write,
+    and that this call is not itself writing.
+
+    GENERALISED rather than hardcoded to `Makefile`: `targets` is
+    `write_targets`'s return value, so it says exactly what THIS call is
+    about to write. A consumer declaring `dest: GNUmakefile` writes the
+    highest name in the precedence, so there is nothing above it to be
+    shadowed by, and this refuses nothing for that package's own output.
+    Only the TOP-LEVEL component of each destination is considered -- a
+    nested `dest: sub/Makefile` is not a name `make` reads from the
+    package directory itself, the same restriction `write_targets`'
+    docstring already states for `where`.
+
+    THE LISTING, NEVER A PROBE -- measured, this is not a style choice.
+    `(pkg_path / 'makefile').exists()` answers True whenever `Makefile`
+    exists, on this checkout's case-insensitive macOS APFS volume (and on
+    Windows): a probe-based check would refuse EVERY package there.
+    `os.listdir` returns the STORED directory-entry name, which is the one
+    thing that can tell "Makefile is here" from "makefile is here" apart.
+    It is also, independently, the exact rule `make` itself applies rather
+    than a workaround for `exists()`'s blind spot: measured on this same
+    case-insensitive checkout, GNU Make 3.81 ran `Makefile` even though
+    `test -f GNUmakefile` answered YES with only `gnumakefile` (all
+    lowercase) on disk. Make compares directory-entry names EXACTLY, so
+    reading the listing is doing what make does, not compensating for it.
+
+    THE SAME-INODE GUARD is what keeps that listing check from refusing
+    ordinary regeneration on that same filesystem. `makefile` and
+    `Makefile` are ONE directory entry there -- measured: writing
+    `Makefile` and then `makefile` leaves `os.listdir` reporting a single
+    name holding `makefile`'s content, one inode, `os.path.samefile()` True
+    for the pair. So a directory whose stored entry happens to be
+    `makefile` while this call is about to write `Makefile` presents what
+    LOOKS LIKE a higher-precedence name in the listing and is in fact
+    stencil's own file under its other spelling. `os.path.samefile` against
+    the name this call writes is what tells a genuine GNUmakefile (a
+    different inode, measured `samefile() == False`) from that false
+    positive apart.
+    """
+    own_names = {
+        Path(relative).parts[0]
+        for _where, relative in targets
+        if Path(relative).parts and Path(relative).parts[0] in _MAKE_PRECEDENCE
+    }
+    if not own_names:
+        # Nothing this call writes has a name make's precedence cares
+        # about at all -- a GNUmakefile sitting beside such a package
+        # shadows nothing of this call's making.
+        return
+    own_name = min(own_names, key=_MAKE_PRECEDENCE.index)
+    higher = _MAKE_PRECEDENCE[: _MAKE_PRECEDENCE.index(own_name)]
+    if not higher:
+        # own_name is already GNUmakefile, the highest precedence there
+        # is -- nothing can shadow it.
+        return
+    try:
+        entries = os.listdir(pkg_path)
+    except FileNotFoundError:
+        # A fresh package directory that does not exist yet: nothing is
+        # planted there for gen to be shadowed by, same reasoning
+        # checked_write_target's own lstat pre-pass uses.
+        entries = []
+    for entry in entries:
+        if entry not in higher:
+            continue
+        try:
+            if os.path.samefile(pkg_path / entry, pkg_path / own_name):
+                # The same-inode case above: this IS the file this call
+                # is about to write, stored under a different-precedence
+                # spelling. Not a shadow.
+                continue
+        except OSError:
+            # `samefile` raises FileNotFoundError when the name this call
+            # writes is not on disk YET -- a fresh checkout, or the run
+            # after `stencil clean`. Falling straight through to the
+            # refusal there turned a benign self-alias into a refusal that
+            # depended on whether the directory had been cleaned: measured,
+            # `GNUmakefile -> Makefile` was accepted on a regenerate and
+            # refused on a fresh one. A link whose target is exactly the
+            # name being written is the same file by construction once that
+            # file exists, so read the link rather than stat through it.
+            try:
+                if os.readlink(pkg_path / entry) == own_name:
+                    continue
+            except OSError:
+                pass
+        # THE MESSAGE: names the file, says what `make` would run
+        # instead, and says what stops happening -- "delete or rename it"
+        # alone was ruled insufficient by the architecture review, because
+        # a GNUmakefile that `include`s the generated Makefile to add
+        # local targets is a real pattern this refusal does not
+        # distinguish from an attacker's plant; the reader needs to know
+        # the cost of leaving it in place, not only a way to clear it.
+        # THE PATH GOES LAST, `_safe`'s discipline: it is the part most
+        # likely to be pushed off the end by _MAX_PROBLEM_CHARS, and it is
+        # the part the reader can most easily reconstruct themselves.
+        raise ValueError(
+            f"Package {package_id}: {entry!r} outranks the {own_name!r} "
+            "this writes in make's name precedence, so `make` here would "
+            "run it instead. Nothing in this package is refreshed until it "
+            f"is removed or renamed: {pkg_path / entry}"
+        )
+
+
 def checked_write_target(
     package_id: str, where: str, root: Path, pkg_path: Path, relative: str
 ) -> Path:
@@ -2263,11 +2740,21 @@ def checked_write_target(
     has (a CI runner, a shared teaching machine, an `out/` that arrived with
     a merged pull request).
 
-    It is closable, with a descriptor walk -- `os.open(component,
+    CLOSED SINCE stn-avv, on any platform with `dir_fd` support. That is
+    what `walk_dir_fd` does, 200-odd lines above this: `os.open(component,
     O_RDONLY|O_DIRECTORY|O_NOFOLLOW)` per component and `dir_fd=` on the
     write, so the object checked and the object written are the same inode
-    by construction. That is a larger change than this one and is filed with
-    its reproduction rather than described here as impossible.
+    by construction. `open_for_write_nofollow` additionally `fstat`s the
+    descriptor it just opened and re-applies the hardlink and
+    not-a-regular-file refusals to THAT inode, so all three of the refusals
+    above now hold at write time and not only as a snapshot.
+
+    WHAT REMAINS, and it is the reason this paragraph is rewritten rather
+    than deleted: where `_DIR_FD_CAPABLE` is False -- Windows, which has no
+    `O_DIRECTORY`, no `O_NOFOLLOW` and no `dir_fd` -- the write sites fall
+    back to the path-based behaviour and this window is open there exactly
+    as described above. The pre-pass below is then the only check, which is
+    what it was designed to be.
     """
     check_config_path(package_id, where, relative)
     target = pkg_path / relative
@@ -2386,7 +2873,7 @@ def checked_write_target(
     return target
 
 
-def open_for_write_nofollow(path: Path):
+def open_for_write_nofollow(path: Path, *, dir_fd: int | None = None):
     """`open(path, "wb")`, refusing a symlink at the final component.
 
     The check-to-write window is small and it is real: `checked_write_target`
@@ -2398,6 +2885,36 @@ def open_for_write_nofollow(path: Path):
 
     Windows has no O_NOFOLLOW; `getattr` there leaves the flags unchanged,
     which is the same accommodation the brand read makes.
+
+    `dir_fd`, OPTIONAL AND KEYWORD-ONLY (stn-avv, stn-6mcb.7): when given,
+    `path` is resolved relative to it via `os.open`'s own `dir_fd=`
+    parameter, exactly the way `walk_dir_fd` hands back a `(parent_fd,
+    final_name)` pair for a caller to write through. `None` -- the default
+    -- is today's behaviour, unchanged: `path` is resolved by the OS the
+    ordinary way, absolute or relative to the process's cwd. Nothing else
+    about this function's contract changes for either case.
+
+    THE WRITE-TIME FSTAT GATE (stn-avv, stn-6mcb.7; architecture review).
+    `checked_write_target` refuses three things at its pre-pass -- a
+    symlink, a hardlink, and "not the kind of file gen writes" -- but a
+    pre-pass is a snapshot. O_NOFOLLOW above closes the symlink refusal at
+    write time, because the kernel itself refuses to open a link with that
+    flag; the other two refusals were snapshot-only until now. This closes
+    them the same way: check the descriptor `os.open` actually returned,
+    not a path stat taken earlier.
+
+    MEASURED sequence (spike, this macOS): no `O_TRUNC` at open time --
+    `os.ftruncate` below does that job, but only AFTER the fstat gate
+    approves what got opened. `os.fstat` the descriptor; refuse a
+    non-regular file (the kind check) and refuse `st_nlink > 1` (the
+    hardlink check) -- both against the fd's OWN inode, which is the object
+    actually about to be written rather than whatever a second path lookup
+    might find. A FIFO planted at the destination is refused before any of
+    this: `O_NONBLOCK` makes the `os.open` call itself fail ENXIO, measured,
+    because there is no reader -- so `fstat` is never reached and the walk
+    never blocks waiting for one. The descriptor is closed on every refusal
+    path here; one that leaked the fd it just opened would be the exact
+    failure mode this gate exists to close.
     """
     nofollow = getattr(os, "O_NOFOLLOW", 0)
     # O_NONBLOCK, for the one node type O_NOFOLLOW says nothing about.
@@ -2408,19 +2925,59 @@ def open_for_write_nofollow(path: Path):
     # same open fails ENXIO. On a regular file POSIX says the flag has no
     # effect, so this costs the ordinary path nothing.
     nonblock = getattr(os, "O_NONBLOCK", 0)
-    flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC | nofollow | nonblock
-    descriptor = os.open(path, flags, 0o666)
+    # NO O_TRUNC. Truncating at open time would happily clear a hardlink's
+    # shared inode, or a symlink's target on a platform with no O_NOFOLLOW,
+    # before this function ever gets a chance to refuse it. `os.ftruncate`
+    # below does the same job, moved to AFTER the fstat gate.
+    flags = os.O_WRONLY | os.O_CREAT | nofollow | nonblock
     try:
+        descriptor = os.open(path, flags, 0o666, dir_fd=dir_fd)
+    except OSError as error:
+        # THE THIRD REFUSAL GETS A SENTENCE, like the two below it. This one
+        # closes the final-component symlink race and used to surface as a
+        # raw `OSError: [Errno 62] Too many levels of symbolic links:
+        # 'Makefile'` -- no statement that the destination is a link, no
+        # recovery, and under `dir_fd` a bare relative name that does not
+        # say which directory.
+        #
+        # strerror, never an errno diagnosis: `walk_dir_fd`'s DO NOT BRANCH
+        # ON ERRNO reasoning applies identically (ELOOP on Linux, ENOTDIR on
+        # macOS for the same plant), and a hardcoded errno sends a user
+        # searching the message to platform-specific answers.
+        raise ValueError(
+            f"could not open {str(path)!r} for writing ({error.strerror}) "
+            "-- refusing to write it. A symlink standing where a generated "
+            "file belongs is the usual cause, and `stencil clean` removes "
+            "one."
+        ) from error
+    try:
+        info = os.fstat(descriptor)
+        if not stat.S_ISREG(info.st_mode):
+            raise ValueError(
+                "refusing to write: the descriptor just opened is not a "
+                f"regular file (mode {oct(stat.S_IFMT(info.st_mode))}) -- "
+                f"{path}"
+            )
+        if info.st_nlink > 1:
+            raise ValueError(
+                "refusing to write: the descriptor just opened is a "
+                f"hardlink (st_nlink={info.st_nlink}), so another name for "
+                f"this file exists outside the package, which no path "
+                f"check can see -- {path}"
+            )
+        os.ftruncate(descriptor, 0)
         return os.fdopen(descriptor, "wb")
     except Exception:
-        # fdopen can raise between the open and the wrapper taking
+        # fdopen can also raise between the open and the wrapper taking
         # ownership, and the descriptor would leak for the life of the
-        # process. Every other failure path here closes itself.
+        # process. Every failure path here closes itself.
         os.close(descriptor)
         raise
 
 
-def write_text_nofollow(path: Path, text: str, executable: bool = False) -> None:
+def write_text_nofollow(
+    path: Path, text: str, executable: bool = False, *, dir_fd: int | None = None
+) -> None:
     """`Path.write_text` without following a symlink at the final component.
 
     UTF-8, DECIDED RATHER THAN INHERITED. `Path.write_text` with no encoding
@@ -2438,8 +2995,12 @@ def write_text_nofollow(path: Path, text: str, executable: bool = False) -> None
     `executable` marks the file `+x` through the descriptor just written,
     rather than by re-opening the path: see the call site in
     `render_templates`.
+
+    `dir_fd`, OPTIONAL AND KEYWORD-ONLY (stn-avv, stn-6mcb.7): passed
+    straight through to `open_for_write_nofollow`. `None` is today's
+    behaviour; nothing else about this function's contract changes.
     """
-    with open_for_write_nofollow(path) as handle:
+    with open_for_write_nofollow(path, dir_fd=dir_fd) as handle:
         handle.write(text.encode("utf-8"))
         if executable:
             descriptor = handle.fileno()
@@ -2450,6 +3011,105 @@ def write_text_nofollow(path: Path, text: str, executable: bool = False) -> None
                 | stat.S_IXGRP
                 | stat.S_IXOTH,
             )
+
+
+def _open_package_base_fd(output_base: Path, package_dir: str, package_id: str) -> int:
+    """Open a descriptor on the package directory itself -- creating it, and
+    every intermediate component below `output_base`, purely by descriptor
+    (stn-avv, architecture-review finding 1).
+
+    THE ONE PATH-BASED OPEN LEFT, STATED RATHER THAN IMPLIED AWAY. A single
+    `os.open(output_base, O_RDONLY|O_DIRECTORY|O_NOFOLLOW)` anchors the walk;
+    everything BELOW it is then descended by descriptor with `walk_dir_fd`,
+    so a symlink swapped in at any component of `package_dir` is refused the
+    same way an intermediate component below the package directory already
+    is (`render_templates`). What this does NOT close: `output_base` itself
+    -- the user's declared output root -- and every one of ITS OWN ancestors
+    are still resolved by the kernel's ordinary path lookup at the moment of
+    this one call. There is no descriptor to start a walk from further up,
+    because `output_base` IS the start. A component ABOVE it swapped for a
+    symlink between `checked_output_base`'s one-time resolve (at the start
+    of a whole `gen --all` run) and this call is not caught -- the stated
+    residual (STENCIL.md), not an oversight: closing it would mean walking
+    from the filesystem root on every single package, which nothing in this
+    repository's threat model asks for. The declared output root is the
+    user's own boundary, the same way `checked_output_base` already trusts
+    `config_dir`.
+
+    `package_dir` MAY BE MULTI-COMPONENT -- `check_package_dir` allows a
+    `dir: a/b` -- so this walks it exactly like any other nested
+    destination. A single `os.open` on the whole joined path would protect
+    only its LAST component and leave every one above it open to the same
+    swap `walk_dir_fd` exists to refuse.
+
+    THE FINAL OPEN DELIBERATELY DROPS `O_NOFOLLOW`, unlike every other open
+    in this walk -- see the comment at that call for why: the package
+    directory's own name is the one component in this file `contained_path`
+    has always permitted to be a symlink, so long as it resolves back under
+    `output_base`. `os.mkdir` over an existing symlink still raises
+    `FileExistsError`, indistinguishable from "the directory is already
+    there", exactly like `walk_dir_fd`'s own intermediate-component trap --
+    caught and ignored below for the same reason: the open that follows is
+    what actually decides whether `final_name` leads somewhere usable.
+
+    Raises `ValueError` naming `package_id`, in the same family as
+    `checked_write_target`'s messages, on any refusal from the walk or the
+    final open. The returned fd is the caller's to close.
+    """
+    # `output_base` need not exist yet -- `checked_output_base` resolves it
+    # LEXICALLY, so a first `gen` on a fresh project reaches here with
+    # nothing on disk at all. `output_dir.mkdir(parents=True)` used to be
+    # what created it (and every one of ITS ancestors) as a side effect;
+    # this is the same path-based creation, moved here so the descriptor
+    # open immediately below has something to open. It is part of the
+    # residual this function's docstring already names -- `output_base`
+    # and its ancestors are resolved by path regardless -- not a new one.
+    output_base.mkdir(parents=True, exist_ok=True)
+    output_base_fd = os.open(
+        output_base, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+    )
+    try:
+        parent_fd, final_name = walk_dir_fd(output_base_fd, package_dir)
+    finally:
+        os.close(output_base_fd)
+
+    try:
+        try:
+            os.mkdir(final_name, dir_fd=parent_fd)
+        except FileExistsError:
+            # Proves nothing by itself -- see the docstring, and
+            # walk_dir_fd's own identical trap for an INTERMEDIATE
+            # component. Here at the FINAL component it is not even a
+            # trap: see the NO O_NOFOLLOW note below for why this one
+            # case is deliberately allowed to be a symlink.
+            pass
+        try:
+            # NO O_NOFOLLOW HERE, UNLIKE EVERY OTHER OPEN IN THIS WALK, AND
+            # DELIBERATELY. `contained_path` (stn-vhr) already resolved
+            # `output_dir` and confirmed it stays under `output_base`
+            # BEFORE this function was ever called -- and that check has
+            # always permitted the package directory itself to be a
+            # symlink, e.g. a stable alias for a package that moved
+            # (`test_a_package_dir_symlinked_inside_the_output_tree_still_generates`).
+            # `walk_dir_fd`'s O_NOFOLLOW discipline is for a component that
+            # is NOT supposed to be a link at all; the package directory's
+            # own name is the one component in this whole file that is. An
+            # intermediate component of a MULTI-part `package_dir` (`dir:
+            # a/b`) gets no such exemption -- `walk_dir_fd`, above, already
+            # refused a symlink there before reaching this line.
+            return os.open(
+                final_name,
+                os.O_RDONLY | os.O_DIRECTORY,
+                dir_fd=parent_fd,
+            )
+        except OSError as error:
+            raise ValueError(
+                f"Package {package_id}: package directory {package_dir!r} "
+                f"could not be opened at {final_name!r} ({error.strerror}) "
+                "-- refusing to write into it"
+            ) from error
+    finally:
+        os.close(parent_fd)
 
 
 def generate_package(
@@ -2496,59 +3156,128 @@ def generate_package(
     # same reason; nothing else about the order changes.
     config_templates = list(config.get("templates", []))
     template_defs = injected_templates(context) + config_templates
-    for where, relative in write_targets(context, template_defs):
+    targets = write_targets(context, template_defs)
+    for where, relative in targets:
         checked_write_target(
             package_id, where, output_base, pkg_resolved, relative
         )
 
-    if not output_dir.exists():
-        if dry_run:
-            print(f"Would create directory: {output_dir}")
-        else:
-            output_dir.mkdir(parents=True)
-            print(f"Created directory: {output_dir}")
+    # stn-bux: beside the loop above, for the same reason -- so a refusal
+    # here leaves a fresh package directory untouched too. Runs under
+    # `--dry-run` exactly like the loop above does: this whole pre-pass sits
+    # above every branch that reads `dry_run`, so a preview reports the
+    # same refusal a real run would rather than promising a write `gen`
+    # could never actually make.
+    refuse_shadowed_makefile(package_id, pkg_resolved, targets)
 
-    # Before the first render, and never a stale manifest left behind: a
-    # regeneration that fails partway must leave NO manifest, so a
-    # manifest-driven `clean` falls back to deriving from the config --
-    # today's behaviour exactly -- instead of trusting a list that names the
-    # old files while whatever the failed run half-wrote sits unnamed on
-    # disk.
-    manifest_path = output_dir / MANIFEST_NAME
-    if not dry_run and manifest_path.exists():
-        manifest_path.unlink()
+    existed_before = output_dir.exists()
+    if not existed_before and dry_run:
+        print(f"Would create directory: {output_dir}")
 
-    if not template_defs:
-        print(f"Error: No templates defined in config", file=sys.stderr)
-        return None
+    # stn-avv (architecture review finding 1). The package-directory
+    # descriptor is acquired UNCONDITIONALLY here, for every non-dry-run
+    # call -- NOT only when `output_dir` does not exist yet. Regeneration
+    # over an already-generated package is the ordinary case, not the
+    # exceptional one, and it must be exactly as descriptor-protected as a
+    # first run: every write below this point goes through `base_fd` on a
+    # capable platform, whether or not this is the package's first
+    # generation. Held for the rest of the function and closed in the
+    # `finally` below, which covers every early return from here on --
+    # including the "no templates defined" refusal a few lines down -- so a
+    # malformed config cannot leak the descriptor `gen --all` would
+    # otherwise open once per package with no matching close.
+    #
+    # `_DIR_FD_CAPABLE` is the module global, read fresh here rather than
+    # captured anywhere -- the same discipline `walk_dir_fd` documents --
+    # so a test can force the fallback with
+    # `monkeypatch.setattr(generate, "_DIR_FD_CAPABLE", False)` even on a
+    # platform where it is naturally True.
+    base_fd = None
+    if not dry_run and _DIR_FD_CAPABLE:
+        base_fd = _open_package_base_fd(
+            output_base, context["package_dir"], package_id
+        )
+    try:
+        if not dry_run:
+            if base_fd is None:
+                # Windows, or any platform with no dir_fd support: today's
+                # snapshot behaviour, completely unchanged, and now the
+                # ONLY place this runs -- the capable branch above never
+                # reaches it, because `_open_package_base_fd` already
+                # created every component of `output_dir` by descriptor.
+                if not existed_before:
+                    output_dir.mkdir(parents=True)
+            if not existed_before:
+                print(f"Created directory: {output_dir}")
 
-    render_templates(env, template_defs, context, output_dir, dry_run)
+        # Before the first render, and never a stale manifest left behind:
+        # a regeneration that fails partway must leave NO manifest, so a
+        # manifest-driven `clean` falls back to deriving from the config --
+        # today's behaviour exactly -- instead of trusting a list that
+        # names the old files while whatever the failed run half-wrote
+        # sits unnamed on disk.
+        manifest_path = output_dir / MANIFEST_NAME
+        if not dry_run:
+            if base_fd is not None:
+                # stn-avv (operator ruling). Routed through the SAME
+                # descriptor as every write below it, rather than the
+                # path-based `manifest_path.unlink()` this replaces --
+                # which was the one delete sitting in the middle of a
+                # function this task otherwise converts entirely to
+                # descriptors. If `output_dir` were swapped for a symlink
+                # to a victim directory after `base_fd` was opened, that
+                # path-based unlink would delete the VICTIM's manifest: a
+                # delete outside the tree, performed by the very run
+                # meant to make `gen` descriptor-safe. `os.unlink` is in
+                # `os.supports_dir_fd` on Linux and macOS, so this is
+                # available everywhere `base_fd` is. `clean`'s own
+                # resolve-then-unlink-by-path window stays OUT OF SCOPE
+                # (filed as stn-cfby) -- this closes only the write side.
+                try:
+                    os.unlink(MANIFEST_NAME, dir_fd=base_fd)
+                except FileNotFoundError:
+                    pass
+            elif manifest_path.exists():
+                manifest_path.unlink()
 
-    # After the templates, so a package that fails to render does not leave a
-    # logo behind in a directory with nothing to use it.
-    if context.get("has_pages"):
-        copy_brand_image(
-            config,
-            config["packages"][package_id],
-            config_dir or output_base.parent,
-            output_dir,
-            dry_run,
+        if not template_defs:
+            print("Error: No templates defined in config", file=sys.stderr)
+            return None
+
+        render_templates(
+            env, template_defs, context, output_dir, dry_run, dir_fd=base_fd
         )
 
-    # Last of all, from the same derivation get_generated_files uses (see
-    # package_entries) -- so the manifest cannot name a file this call did
-    # not itself just produce.
-    write_manifest(
-        output_dir,
-        package_id,
-        context["package_dir"],
-        package_entries(
-            package_id, config["packages"][package_id], context, config_templates
-        ),
-        dry_run,
-    )
+        # After the templates, so a package that fails to render does not
+        # leave a logo behind in a directory with nothing to use it.
+        if context.get("has_pages"):
+            copy_brand_image(
+                config,
+                config["packages"][package_id],
+                config_dir or output_base.parent,
+                output_dir,
+                dry_run,
+                dir_fd=base_fd,
+            )
 
-    return output_dir
+        # Last of all, from the same derivation get_generated_files uses
+        # (see package_entries) -- so the manifest cannot name a file this
+        # call did not itself just produce.
+        write_manifest(
+            output_dir,
+            package_id,
+            context["package_dir"],
+            package_entries(
+                package_id, config["packages"][package_id], context, config_templates
+            ),
+            dry_run,
+            dir_fd=base_fd,
+        )
+
+        return output_dir
+    finally:
+        if base_fd is not None:
+            os.close(base_fd)
 
 
 def render_templates(
@@ -2557,8 +3286,26 @@ def render_templates(
     context: dict,
     output_dir: Path,
     dry_run: bool = False,
+    *,
+    dir_fd: int | None = None,
 ):
-    """Render all templates to the output directory."""
+    """Render all templates to the output directory.
+
+    `dir_fd`, OPTIONAL AND KEYWORD-ONLY (stn-avv, stn-6mcb.5): a descriptor
+    on `output_dir` itself, opened by `generate_package` with
+    `_open_package_base_fd` and held for the whole package. When given,
+    EVERY destination -- a top-level name or a nested one like
+    `.vscode/settings.json` alike -- is walked by descriptor with
+    `walk_dir_fd` and written with `dir_fd=`, rather than joined onto
+    `output_dir` and handed to `Path.mkdir`/`write_text_nofollow` as a bare
+    path. That is the fix for the gap `checked_write_target`'s docstring
+    names: a symlink swapped in at an intermediate directory between that
+    pre-pass and this write is refused here instead of followed, because
+    the object the walk opens and the object this writes through are the
+    same inode by construction. `None` -- the default, and what a platform
+    with no `dir_fd` support, or any `--dry-run` call, always passes --
+    is today's behaviour, completely unchanged.
+    """
     for template_name, output_name in template_destinations(
         template_defs, context
     ):
@@ -2573,6 +3320,24 @@ def render_templates(
                 print("-" * 40)
                 print(content)
                 print()
+            elif dir_fd is not None:
+                # stn-avv. `walk_dir_fd` creates any missing intermediate
+                # directory itself (dir_fd=), so there is nothing left for
+                # this branch to `mkdir` -- and every intermediate fd the
+                # walk opened along the way is closed by the time it
+                # returns; only the final `parent_fd` is ours to close,
+                # which the `finally` below does.
+                parent_fd, final_name = walk_dir_fd(dir_fd, output_name)
+                try:
+                    write_text_nofollow(
+                        Path(final_name),
+                        content,
+                        executable=output_path.suffix == ".sh",
+                        dir_fd=parent_fd,
+                    )
+                finally:
+                    os.close(parent_fd)
+                print(f"Generated: {output_path}")
             else:
                 # Create parent directories if needed (for nested paths like .vscode/settings.json)
                 output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -2594,7 +3359,17 @@ def render_templates(
                 print(f"Generated: {output_path}")
 
         except Exception as e:
-            print(f"Error rendering {template_name}: {e}", file=sys.stderr)
+            # `_safe`, for the reason `_main`'s clean branch documents at
+            # length: this is a SECOND printer for a problem `_generate`
+            # also reports, and an unescaped copy landing one line above an
+            # escaped one is the "two halves of one report disagreeing"
+            # shape. `template_name` is the config's `src`, which reaches
+            # here unescaped, and a stn-avv walk refusal now travels this
+            # path too.
+            print(
+                f"Error rendering {_safe(template_name)}: {_safe(str(e))}",
+                file=sys.stderr,
+            )
             raise
 
 
@@ -3227,37 +4002,29 @@ def _config_template_defs(
     """The config's `templates:` list, shape-guarded, for the config-derived
     removal list.
 
-    `package_contexts` inspects `templates` only when it is a list and skips
-    any member that is not a mapping, so `templates: ["Makefile.j2"]` --
-    strings rather than mappings -- passes validation outright and then
-    reaches `tdef.get(...)` here as a `str`. Measured on this branch: the
-    first package's files were deleted from its manifest and the SECOND
-    group raised AttributeError, so the command tracebacked after a partial
-    delete. (On the predecessor the whole list was computed before the first
-    unlink, so the same config failed harmlessly.)
+    Delegates the shape rule itself to `_checked_template_defs` -- see its
+    docstring for what it checks and why it is the one place that check is
+    written. This function's own job is just to read `templates` off
+    `config` and append onto the `problems` list its caller
+    (`_config_derived_entries`) was handed, which is the failure mode
+    `clean`'s config-derived fallback needs: a named problem, not a raise,
+    since this runs interleaved with the deleting.
 
-    A dropped member is a NAMED problem rather than a silent filter: the
-    files those templates render to cannot be identified, so `clean` is
-    knowingly leaving them behind and has to say so.
+    `package_contexts` runs the identical check earlier, as part of
+    gen/install's fail-closed pre-flight and of `clean`'s own
+    `config_readable` probe (`_main`'s `clean` branch) -- so by the time
+    `clean_generated` reaches here with `config_readable=True` on the CLI
+    path, that pre-flight has already passed and `templates` is already
+    known to be well-shaped. This still earns its place: `clean_generated`
+    defaults `config_readable` to True for a caller that never ran
+    `package_contexts` at all (see its docstring), and this is what that
+    caller gets instead of a bare AttributeError/KeyError part way through
+    a delete -- see stn-dl3r for what a config this broken used to do here.
     """
-    declared = config.get("templates", [])
-    if not isinstance(declared, list):
-        problems.append(
-            f"Package(s) {who}: 'templates' must be a list of template "
-            f"definitions, not {type(declared).__name__} -- the files it "
-            "renders cannot be named, so none of them was removed"
-        )
-        return []
-    kept = [tdef for tdef in declared if isinstance(tdef, dict)]
-    dropped = len(declared) - len(kept)
-    if dropped:
-        problems.append(
-            f"Package(s) {who}: {dropped} entr"
-            f"{'y' if dropped == 1 else 'ies'} under 'templates' "
-            f"{'is' if dropped == 1 else 'are'} not a mapping with a `src:` "
-            "-- the file(s) they render to could not be named, so they were "
-            "not removed"
-        )
+    kept, template_problems = _checked_template_defs(
+        config.get("templates", []), who
+    )
+    problems.extend(template_problems)
     return kept
 
 
@@ -3342,7 +4109,19 @@ def _clean_one_directory(
             return
 
         manifest_pkg = manifest.get("package")
-        if isinstance(manifest_pkg, str) and manifest_pkg not in full_member_set:
+        # INVERTED (stn-jez) from `isinstance(...) and ... not in
+        # full_member_set` to `not isinstance(...) or ... not in
+        # full_member_set`. The old spelling read a manifest with NO
+        # `package` key as "no opinion" -- `isinstance(None, str)` is
+        # False, so the whole `and` was False and the manifest was trusted
+        # -- rather than as untrusted. `read_manifest` now refuses a
+        # missing/non-string `package` on its own (see its REQUIRED FIELDS
+        # paragraph), so this can never fire for a manifest that reached
+        # here -- kept anyway, belt and braces, the same pattern
+        # `checked_write_target`'s closing `contained_entry_parent` call
+        # documents: cheap, and the day the check above it gains a gap in
+        # the wrong place this is what still holds the line standing alone.
+        if not isinstance(manifest_pkg, str) or manifest_pkg not in full_member_set:
             problems.append(
                 f"manifest {manifest_path} names package {manifest_pkg!r}, "
                 "which is not among the package(s) configured with this "
@@ -3352,6 +4131,172 @@ def _clean_one_directory(
             return
 
         entries = set(manifest["entries"])
+
+        # stn-jez (operator ruling): A MANIFEST MAY NARROW WHAT THE CONFIG
+        # AUTHORISES, NEVER WIDEN IT. The required-field check above stops a
+        # MALFORMED manifest, not a FORGED one -- every field it checks is
+        # free to an attacker: `stencil_version` is what `stencil version`
+        # prints, `package` is a package id read straight off the config
+        # being attacked, and `dir` defaults to the package id. A manifest
+        # with every field correct and naming the right package can still
+        # list an entry the config never derives for it, so field presence
+        # was never the actual boundary.
+        #
+        # NOT GATED ON `config_readable`, and that is a correction rather
+        # than a style choice. `config_readable` is a WHOLE-CONFIG boolean:
+        # `_main`'s clean branch clears it when `package_contexts` raises for
+        # ANY package, which includes a problem in a package this command
+        # never touches. Measured, before this was fixed: a single quoted
+        # `show_download: "no"` on an unrelated package `other` turned the
+        # rule below off for `demo`, and a planted manifest deleted
+        # `demo/important.txt` at exit 0 -- the original stn-jez attack,
+        # restored, with `clean`'s reassuring degraded warning printed
+        # directly above the deletion. A security rule that any unrelated
+        # typo switches off is not a rule.
+        #
+        # So the question asked here is the narrow one that actually
+        # matters: can the authorised set FOR THIS DIRECTORY be derived,
+        # whatever the rest of the config is doing? `_config_derived_entries`
+        # already reports per-package and returns what it could derive, so
+        # asking it directly is both stricter and more honest than asking a
+        # global flag. It also means a config that fails `package_contexts`
+        # for an unrelated reason still gets the full check here, rather than
+        # dropping every directory to the degraded trade at once.
+        #
+        # The degraded trade itself is unchanged and still real -- see below
+        # -- but it is now scoped to a directory whose OWN packages cannot be
+        # derived, which is what the paragraph under it always claimed.
+
+        # Checked against the manifest's OWN entries, computed here BEFORE
+        # the `unnamed` union below adds a sibling package's config-derived
+        # entries on top -- unioning first and checking after would let a
+        # sibling's legitimate entries mask a forged one sitting in THIS
+        # manifest.
+        authorised_problems: list[str] = []
+        authorised = _config_derived_entries(
+            sorted(full_member_set), config, authorised_problems
+        )
+        if authorised_problems:
+            # THE DOCUMENTED DEGRADED TRADE, and with the whole-config gate
+            # gone this branch is finally what that paragraph always claimed:
+            # the authorised set for THIS DIRECTORY could not be derived, so
+            # there is nothing to narrow this manifest against and the
+            # manifest is the only thing that can name what is here.
+            #
+            # Trusting it is correct precisely BECAUSE the question is now
+            # narrow. stn-p9a exists so that the one command someone reaches
+            # for BECAUSE their config broke is not the command that cannot
+            # answer: a package whose own config entry is malformed must
+            # still be cleanable from the manifest `gen` wrote for it, and
+            # `test_broken_config_with_manifests_on_both_packages_cleans_
+            # warns_and_exits_zero` is that promise written down.
+            #
+            # An earlier commit on this branch made this refuse instead, and
+            # that was right AT THE TIME for a reason that has since expired:
+            # the branch was then gated on `config_readable`, so reaching it
+            # meant the config had ALREADY passed `package_contexts` and a
+            # local derivation failure was a rare, unexplained fault worth
+            # failing closed on. Removing that gate changed what the branch
+            # MEANS, and refusing here now would deny the stn-p9a capability
+            # to exactly the packages it was built for -- measured: it turned
+            # six existing tests red, every one of them a statement about
+            # cleaning a package whose config is broken.
+            #
+            # What makes trusting it safe enough to write down is that it is
+            # no longer reachable by breaking SOMETHING ELSE. A fault in an
+            # unrelated package leaves this directory's derivation intact and
+            # the widen check below applies in full -- which is the whole
+            # point of the correction above, and was the hole before it.
+            #
+            # SAY SO, on stderr, rather than skipping the check in silence.
+            # This is the one path where an unauthenticated file is taken on
+            # trust, and until this warning existed the only sign of it was
+            # the absence of a refusal -- indistinguishable, from outside,
+            # from a manifest that had passed the check. NOT appended to
+            # `problems`: that list decides the exit status, and this run is
+            # a SUCCESS (stn-p9a -- the command you reach for because your
+            # config broke still cleans from the manifest). A warning is the
+            # right register for "this worked, and here is what it could not
+            # verify while working".
+            print(
+                f"Warning: package(s) {', '.join(sorted(full_member_set))}: "
+                "what the config authorises for this directory could not be "
+                "derived, so the manifest at "
+                f"{manifest_path} was used without checking it against the "
+                "config. It is being taken on trust:",
+                file=sys.stderr,
+            )
+            for problem in authorised_problems:
+                print(f"  - {_safe(problem)}", file=sys.stderr)
+        else:
+            # Compared as LITERAL STRINGS, unexpanded: both sides come
+            # from `package_entries`, so a glob pattern like
+            # `Guide*.html` appears the same way on both, and expanding
+            # either would compare apples to a set that was never meant
+            # to hold them.
+            # NO EXEMPTION FOR `MANIFEST_NAME`, and an earlier version of
+            # this line had one on the grounds that `package_entries` never
+            # lists the manifest so it "is not the caller's entry to
+            # authorise". That argument is backwards: because no honest
+            # manifest ever contains it, the exemption could only ever let a
+            # DISHONEST one through -- and it did. Measured: a manifest
+            # listing itself had `_remove_entries` unlink the manifest in the
+            # MIDDLE of the entry loop, and with one entry also refused
+            # (chflags uchg) the run ended with the refused file on disk and
+            # the manifest gone -- destroying the resume guarantee
+            # `test_manifest_survives_a_partial_clean` exists to hold, which
+            # is that a clean failing partway still leaves a manifest naming
+            # what is left. A self-listing manifest is a widened manifest;
+            # it gets the named refusal like any other.
+            widened = sorted(entry for entry in entries if entry not in authorised)
+            expected_dir = config["packages"][manifest_pkg].get(
+                "dir", manifest_pkg
+            )
+            manifest_dir = manifest.get("dir")
+            dir_mismatch = manifest_dir != expected_dir
+
+            if widened or dir_mismatch:
+                complaints = []
+                if widened:
+                    complaints.append(
+                        "names "
+                        + ", ".join(repr(entry) for entry in widened)
+                        + ", which the config does not derive for it"
+                    )
+                if dir_mismatch:
+                    complaints.append(
+                        f'declares "dir" {manifest_dir!r}, not '
+                        f"{expected_dir!r} as configured"
+                    )
+                # THE CONSEQUENCE, WORDED ON PURPOSE (stn-jez): an
+                # author who removes a template from the config and
+                # then runs `clean` hits this exact message -- the
+                # manifest legitimately names a file the current config
+                # no longer derives. That is fail-closed and intended,
+                # not a false positive, so the message says what to do
+                # about it rather than only that something is wrong:
+                # restore the config entry if the file is still wanted,
+                # or delete the file (and, if nothing else in the
+                # package needs cleaning, the manifest) by hand.
+                # KEPT SHORT, and the length is the point rather than a
+                # style preference. `_safe` truncates at
+                # _MAX_PROBLEM_CHARS and `_main`'s clean printer re-prefixes
+                # on top; the first draft of this message measured 491
+                # characters, so the tail was cut -- and the tail was the
+                # manifest path, which is the one thing the advice
+                # ("delete the manifest by hand") requires. The entry names
+                # carry the diagnosis, the advice carries the recovery, and
+                # the path goes last and now fits.
+                problems.append(
+                    f"package {manifest_pkg!r} "
+                    + "; and it ".join(complaints)
+                    + " -- a manifest may narrow what the config "
+                    "authorises, never widen it, so nothing was removed. "
+                    "Restore the config entry, or delete the file(s) and "
+                    f"the manifest by hand: {manifest_path}"
+                )
+                return
+
         entry_problems: list[str] = []
 
         # THE MANIFEST NAMES ONE PACKAGE; A DIRECTORY MAY HOLD SEVERAL.
@@ -3900,15 +4845,29 @@ def _main():
         return
 
     env = build_environment(config, config_dir)
-    template_defs = config.get("templates", [])
-    if not template_defs:
-        print("Error: No templates defined in config", file=sys.stderr)
-        sys.exit(1)
 
     try:
         validate_config(config, env, config_dir)
     except ValueError as e:
         print(f"Error: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    # stn-dl3r: moved BELOW validate_config (which runs package_contexts),
+    # not above it. `{}`, `None` and `""` are all falsy just like `[]`, so
+    # this check used to fire FIRST for a malformed, non-list `templates:`
+    # -- printing "No templates defined in config" before package_contexts
+    # ever got a chance to name the actual shape mistake. `install` has no
+    # matching emptiness check and went straight to package_contexts, so the
+    # two commands disagreed about the identical config. Below
+    # validate_config, a shape mistake is reported identically on both;
+    # only a config with a WELL-SHAPED but genuinely empty `templates:`
+    # (`[]`, or the key absent) still reaches this line. `gen` refusing
+    # `templates: []` while `install` accepts it is a separate,
+    # pre-existing asymmetry -- about emptiness, not shape -- and is out of
+    # scope here.
+    template_defs = config.get("templates", [])
+    if not template_defs:
+        print("Error: No templates defined in config", file=sys.stderr)
         sys.exit(1)
 
     # stn-zfc. Two ways a package could fail while `gen` still exited 0, and
