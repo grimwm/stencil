@@ -9,6 +9,28 @@ and the closed epics in `.beads/issues.jsonl` are the readable index.
 How the version gets bumped is written down in
 [AGENTS.md](AGENTS.md#cutting-a-release), not here.
 
+## 0.40.0
+
+- **A read-only `stencil show` subcommand inspects package configuration** (#128). With no
+  arguments it prints every package's config as YAML; `-p`/`--project` narrows that to one
+  package; `-k`/`--key` prints one `id: value` line per package for a dotted path — `dir`,
+  `package_name`, `template_env.has_vscode`, `services.0` — so a config-level wrapper can read a
+  directory list without parsing YAML itself. `-k dir` resolves the **effective** directory: a
+  package with no `dir` builds into a directory named for the package, and gen, clean and list
+  already read it that way. Strings print verbatim, booleans lowercase as they were written, and
+  anything composite as one line of flow-style YAML; a missing key and a null both print an empty
+  value on a line that still names the package, so a typo'd key is visibly all-empty rather than
+  silently short. Like `list`, `show` inspects without validating, so it still answers on a config
+  `gen` refuses. **One guard**: C0/C1 controls and DEL in a value or a package ID are escaped
+  (`\n`, `\x1b`), so a `-k` line stays one line and a config cannot write terminal escapes into
+  whatever `show` is piped to. A minor bump rather than a patch: nothing a generated package
+  contains changes, but the installed CLI does.
+
+- **Tags v0.32.0 through v0.39.0 now exist**, each on the first commit on `main` whose
+  `stencil/__init__.py` carries that version. Tagging had stopped at v0.31.0 while the version
+  file kept advancing, so `git diff v0.x..HEAD -- stencil/templates/` — the question
+  [AGENTS.md](AGENTS.md#cutting-a-release) says a tag is for — had no answer for eight releases.
+
 ## 0.39.0
 
 - **Two generated files with the same destination are refused instead of clobbering each other**
