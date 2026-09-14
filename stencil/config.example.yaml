@@ -6,6 +6,9 @@
 #
 # Usage:
 #   stencil list              # list packages
+#   stencil show              # show every package's configuration details
+#   stencil show -k dir       # one `id: dir` line per package
+#   stencil show -p hs6       # only hs6; -k selects a dotted path within it
 #   stencil gen hs6           # generate hs6
 #   stencil gen hs6 --dry-run # preview without writing
 #   stencil gen --all         # every package in the config

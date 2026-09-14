@@ -7,6 +7,7 @@ Usage:
     stencil [--config <path>] clean [--all] [pkg]
     stencil [--config <path>] install
     stencil [--config <path>] list
+    stencil [--config <path>] show [-p <pkg>] [-k <dotted-path>]
     stencil help [COMMAND]                        # Same as -h / --help; optional COMMAND for subcommand help
     stencil version                               # Print the installed version
 """
@@ -3688,6 +3689,124 @@ def list_packages(config: dict):
         print(f"  {package_id:8} - {name:20} ({dir_name})")
 
 
+# The sentinel lookup_package_key returns when a dotted path names nothing.
+# None is a value a config can actually hold (`key:` with nothing after it),
+# so it cannot double as "absent": both print as an empty value, but only a
+# genuinely absent path is a candidate for a future "did you mean" hint.
+_KEY_MISSING = object()
+
+
+def lookup_package_key(package_id: str, package, path: str):
+    """The value of a dotted `path` within one package's config.
+
+    Dicts are traversed by key, lists by integer index (`services.0`), and
+    anything else -- a missing key, an out-of-range index, a non-index into
+    a list, a step past a scalar -- returns _KEY_MISSING.
+
+    `dir` resolves to the EFFECTIVE directory, not just the declared one: a
+    package with no `dir` builds into a directory named for the package, and
+    gen, clean and list all read it that way, so `show -k dir` does too.
+    """
+    if path == "dir" and isinstance(package, dict):
+        return package.get("dir") or package_id
+    current = package
+    for part in path.split("."):
+        if isinstance(current, dict):
+            if part not in current:
+                return _KEY_MISSING
+            current = current[part]
+        elif isinstance(current, list):
+            try:
+                index = int(part)
+            except ValueError:
+                return _KEY_MISSING
+            try:
+                current = current[index]
+            except IndexError:
+                return _KEY_MISSING
+        else:
+            return _KEY_MISSING
+    return current
+
+
+def _escape_terminal_controls(text: str) -> str:
+    """Escape C0/C1 controls and DEL so `show -k` output stays one safe line."""
+    out = []
+    for char in text:
+        code = ord(char)
+        if char == "\n":
+            out.append("\\n")
+        elif char == "\r":
+            out.append("\\r")
+        elif char == "\t":
+            out.append("\\t")
+        elif code < 0x20 or code == 0x7F or 0x80 <= code <= 0x9F:
+            out.append(f"\\x{code:02x}" if code <= 0xFF else f"\\u{code:04x}")
+        else:
+            out.append(char)
+    return "".join(out)
+
+
+def format_key_value(value) -> str:
+    """How one looked-up value prints on a `show -k` line.
+
+    Strings print verbatim so a Makefile can consume them; booleans print
+    lowercase the way they were written in the YAML; anything composite
+    prints as one line of flow-style YAML. Missing and null both print as
+    an empty value -- the line still names the package, so a typo'd key is
+    visibly all-empty rather than silently short.
+    """
+    if value is _KEY_MISSING or value is None:
+        return ""
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, str):
+        return _escape_terminal_controls(value)
+    text = yaml.safe_dump(
+        value,
+        default_flow_style=True,
+        sort_keys=False,
+        width=2**31 - 1,
+    ).strip()
+    # A scalar root node dumps with an explicit document end (`3\n...`),
+    # which is YAML's business rather than the value's.
+    if text.endswith("\n..."):
+        text = text[: -len("\n...")]
+    return text
+
+
+def show_packages(config: dict, project: str | None = None, key: str | None = None):
+    """Print configuration details for packages: everything, or one key.
+
+    With no key, the output is the packages mapping as YAML -- every detail
+    for every package (or for `--project` only). With a key, one `id: value`
+    line per package, so `show -k dir` is a directory list a loop can read.
+    Exits non-zero naming the package when `--project` names one that is
+    not configured; a key no package holds prints empty, at exit 0.
+    """
+    packages = config.get("packages", {})
+    if not isinstance(packages, dict):
+        sys.exit(
+            "Error: 'packages' must be a mapping of package IDs, "
+            f"not {type(packages).__name__}"
+        )
+    if project is not None and project not in packages:
+        print(f"Error: Unknown package {project}", file=sys.stderr)
+        list_packages(config)
+        sys.exit(1)
+    selected = (
+        {project: packages[project]} if project is not None else packages
+    )
+    if key:
+        for package_id, package in selected.items():
+            value = lookup_package_key(package_id, package, key)
+            safe_id = _escape_terminal_controls(str(package_id))
+            print(f"{safe_id}: {format_key_value(value)}")
+        return
+    shown = selected[project] if project is not None else selected
+    sys.stdout.write(yaml.safe_dump(shown, default_flow_style=False, sort_keys=False))
+
+
 def package_entries(
     package_id: str, package: dict, context: dict, config_templates: list
 ) -> set[str]:
@@ -5289,6 +5408,22 @@ def _main():
     list_p = sub.add_parser("list", help="List available packages")
     _add_global_opts(list_p)
 
+    show_p = sub.add_parser("show", help="Show configuration details for packages")
+    show_p.add_argument(
+        "--project",
+        "-p",
+        metavar="PKG",
+        help="Only show this package (e.g. hs10); omit for every package",
+    )
+    show_p.add_argument(
+        "--key",
+        "-k",
+        metavar="PATH",
+        help="Dotted path within each package (e.g. dir, package_name, "
+        "template_env.has_vscode); omit to show every detail",
+    )
+    _add_global_opts(show_p)
+
     sub.add_parser("version", help="Print the installed stencil version")
 
     help_p = sub.add_parser("help", help="Show help (optionally for a subcommand)")
@@ -5341,6 +5476,10 @@ def _main():
 
     if args.command == "list":
         list_packages(config)
+        return
+
+    if args.command == "show":
+        show_packages(config, project=args.project, key=args.key)
         return
 
     # output_dir is resolved relative to THE CONFIG FILE, not to the working

@@ -459,7 +459,9 @@ Three things follow, all deliberate:
 - **A mistake anywhere fails every command, including package-scoped ones.** `stencil gen hs1`
   refuses while `hs9` is broken. `stencil` already worked this way for `template_env` and `when:`
   mistakes, which have always been checked across the whole config; this extends the same rule to
-  the rest of it rather than having two kinds of config error with two behaviours.
+  the rest of it rather than having two kinds of config error with two behaviours. The read-only
+  commands are the exception: `list` and `show` print what is there without validating it, which
+  is what makes `show` useful for inspecting a config `gen` refuses.
 - **`clean` reads each package's own manifest before it reads the config, so it is no longer
   simply "the awkward one."** It works on a config that no longer parses, for every package that
   has a manifest — see [The Manifest](#the-manifest). The rule: exit **0** when every package in
