@@ -3762,7 +3762,12 @@ def format_key_value(value) -> str:
         return "true" if value else "false"
     if isinstance(value, str):
         return _escape_terminal_controls(value)
-    text = yaml.safe_dump(value, default_flow_style=True, sort_keys=False).strip()
+    text = yaml.safe_dump(
+        value,
+        default_flow_style=True,
+        sort_keys=False,
+        width=2**31 - 1,
+    ).strip()
     # A scalar root node dumps with an explicit document end (`3\n...`),
     # which is YAML's business rather than the value's.
     if text.endswith("\n..."):
