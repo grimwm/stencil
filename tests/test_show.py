@@ -207,3 +207,24 @@ def test_format_key_value_renders_scalars_plainly():
     assert generate.format_key_value(3) == "3"
     assert generate.format_key_value(generate._KEY_MISSING) == ""
     assert generate.format_key_value(None) == ""
+
+
+def test_format_key_value_escapes_terminal_controls_without_truncation():
+    value = "a\x1bb\x07c\x00d\ne\rf\tf" + "x" * 200
+    text = generate.format_key_value(value)
+
+    for raw in ("\x1b", "\x07", "\x00", "\n", "\r", "\t"):
+        assert raw not in text
+    assert "x" * 200 in text
+    assert text.startswith("a\\x1bb\\x07c\\x00d\\ne\\rf\\tf")
+    assert generate.format_key_value("alpha") == "alpha"
+
+
+def test_show_key_escapes_controls_in_package_ids_and_values(capsys):
+    config = {"packages": {"pkg\x1b]0;pwned\x07": {"dir": "v\x1bal"}}}
+
+    generate.show_packages(config, key="dir")
+
+    (line,) = capsys.readouterr().out.splitlines()
+    assert "\x1b" not in line and "\x07" not in line
+    assert line == "pkg\\x1b]0;pwned\\x07: v\\x1bal"

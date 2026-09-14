@@ -3729,6 +3729,24 @@ def lookup_package_key(package_id: str, package, path: str):
     return current
 
 
+def _escape_terminal_controls(text: str) -> str:
+    """Escape C0/C1 controls and DEL so `show -k` output stays one safe line."""
+    out = []
+    for char in text:
+        code = ord(char)
+        if char == "\n":
+            out.append("\\n")
+        elif char == "\r":
+            out.append("\\r")
+        elif char == "\t":
+            out.append("\\t")
+        elif code < 0x20 or code == 0x7F or 0x80 <= code <= 0x9F:
+            out.append(f"\\x{code:02x}" if code <= 0xFF else f"\\u{code:04x}")
+        else:
+            out.append(char)
+    return "".join(out)
+
+
 def format_key_value(value) -> str:
     """How one looked-up value prints on a `show -k` line.
 
@@ -3743,7 +3761,7 @@ def format_key_value(value) -> str:
     if isinstance(value, bool):
         return "true" if value else "false"
     if isinstance(value, str):
-        return value
+        return _escape_terminal_controls(value)
     text = yaml.safe_dump(value, default_flow_style=True, sort_keys=False).strip()
     # A scalar root node dumps with an explicit document end (`3\n...`),
     # which is YAML's business rather than the value's.
@@ -3777,7 +3795,8 @@ def show_packages(config: dict, project: str | None = None, key: str | None = No
     if key:
         for package_id, package in selected.items():
             value = lookup_package_key(package_id, package, key)
-            print(f"{package_id}: {format_key_value(value)}")
+            safe_id = _escape_terminal_controls(str(package_id))
+            print(f"{safe_id}: {format_key_value(value)}")
         return
     shown = selected[project] if project is not None else selected
     sys.stdout.write(yaml.safe_dump(shown, default_flow_style=False, sort_keys=False))
