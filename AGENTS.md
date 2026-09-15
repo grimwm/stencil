@@ -395,16 +395,78 @@ If the environment has no `bd` — a cloud sandbox usually does not — do not c
 stale `.beads/issues.jsonl`. Say so in the pull request and leave the export to a
 session that can reach the tracker.
 
-### Export beads before the last commit, not after it
+### The tracker export is written at commit time, into the checkout being committed
 
 `.beads/issues.jsonl` is a passive export of a Dolt database that git does not
-track, and it is the only view of the tracker a reviewer gets. A `bd close` that
-runs after the final commit never reaches the PR — which happens every time issues
-are closed in the same shell invocation as a merge. Separately, `pre-commit`
-stashes unstaged changes while hooks run and beads' own hook rewrites the export
-inside that window, so a staged snapshot can be taken before beads finishes.
+track, and it is the only view of the tracker a reviewer gets. It used to be
+written by `bd` itself, throttled, after every write (`export.auto`), and that
+was wrong in a way that took measuring to see (`stn-nkvl`): **bd anchors
+`.beads/` where the database lives, which is the main checkout, so a `bd` write
+from a worktree rewrote the main checkout's export and never the worktree's.**
+The worktree file's mtime did not move; the main checkout's did. This file
+asks for worktrees and keeps `main` pull-request-only, so the two rules
+together produced a main checkout permanently dirty with an export nothing
+could commit there, while every worktree commit carried a stale one until
+someone remembered `bd export -o` by hand. `foundry` has the same
+arrangement and the same symptom; it was never a stencil difference.
 
-Both leave a clean working tree, so nothing says git and the database disagree.
+So the export is now written by the commit, not by the write. The custom half
+of `.beads/hooks/pre-commit` runs `bd export` into the **committing** tree's
+`.beads/issues.jsonl` — `git rev-parse --show-toplevel`, not the hook file's
+own location, which is the main checkout's whichever worktree is committing —
+and stages it, so every commit carries the tracker as of that commit and the
+pre-push guard below has nothing left to catch on a new commit. `export.auto`
+is `false` in `.beads/config.yaml` for the same reason: between commits the
+main checkout's export is touched by a pull and by nothing else. bd's own
+managed block exports only when a `.beads` path is already staged, so the two
+do not race.
+
+`.beads/interactions.jsonl` — bd's append-only audit log, which `bd audit`
+documents as meant to be versioned — is appended in the main checkout too.
+The hook unions the main checkout's lines into the committing tree's copy,
+order kept and exact duplicates dropped, and stages that; `.gitattributes`
+gives the file `merge=union` so two branches that both appended merge instead
+of conflicting at the shared tail. The issues export gets no merge driver:
+its lines are records, not events, and a conflict there is resolved by
+re-exporting from the database, which is the truth the file is a view of.
+
+The hook's three outcomes are deliberate. No `bd` on `PATH`: the commit
+proceeds with the export as it is, which is the sandbox case the section above
+already asks the pull request to mention. `bd` present but "no beads database
+found": the same, said on stderr. `bd` present and the export failing for any
+other reason: **the commit is refused**, naming the error — committing then
+would look exactly like a fresh export, which is what the push guard exists to
+refuse, and refusing at commit time keeps the cause on screen.
+One consequence of `core.hooksPath` being an absolute path into the main
+checkout: a worktree commits through the **main checkout's** hook files, so an
+edit to a hook made on a branch is not live anywhere until `main` has it. To
+exercise an edited hook before that, name the branch's copy and the venv
+explicitly, since the hook resolves its venv relative to its own file and a
+worktree has none:
+
+```bash
+PRE_COMMIT_PYTHON=<main checkout>/.venv/bin/python3 \
+  git -c core.hooksPath="$PWD/.beads/hooks" commit ...
+```
+
+`tests/test_beads_commit_hook.py` drives the real hook through real
+`git commit` calls in a temporary main checkout plus worktree, with `bd` and
+the pre-commit framework stubbed, and includes the control that with the hook
+unwired the same commit carries the stale file.
+
+What this does not change: a `bd close` that runs after a branch's last commit
+still never reaches that PR. Close on the branch, then make the last commit —
+the hook carries it — rather than closing in the same breath as the merge.
+Writes with no branch to ride on (`bd remember` on `main`, a close done after
+the merge anyway) wait for the next branch's first commit; the main checkout's
+export shows modified until then, and that is pending, not drift.
+
+### Export beads before the last commit, not after it
+
+`pre-commit` stashes unstaged changes while hooks run, and a staged snapshot
+could be taken before an export written inside that window finishes — which
+is why the guard below runs at push, not at commit, and compares the commit
+rather than the working tree.
 
 A pre-push hook now refuses the push when they do, naming the issues that differ.
 It is installed by `pre-commit install` along with the commit-stage hooks. When it

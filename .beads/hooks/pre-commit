@@ -54,6 +54,56 @@ if command -v bd >/dev/null 2>&1; then
 fi
 # --- END BEADS INTEGRATION v1.2.2 ---
 
+# --- Export the tracker into the checkout being committed (stn-nkvl) ---
+#
+# bd anchors `.beads/` where the Dolt database lives, and that is the main
+# checkout: a `bd` write from a worktree rewrites the MAIN checkout's
+# .beads/issues.jsonl and never the worktree's (measured -- the worktree file's
+# mtime did not move; the main checkout's did). AGENTS.md asks for worktrees and
+# keeps main pull-request-only, so every worktree commit carried a stale export
+# while the main checkout sat permanently dirty with one nothing could commit
+# there. Export here instead, into the tree this commit is taken from, and stage
+# it: every commit then carries the tracker as of that commit, and the pre-push
+# drift guard has nothing left to catch on a new commit. `export.auto` is off in
+# .beads/config.yaml for the same reason -- the export is written by this hook
+# or by a pull, never by a `bd` write.
+#
+# `$0` is the main checkout's hook file whichever worktree is committing, so the
+# committing tree is asked of git rather than derived from HERE.
+if command -v bd >/dev/null 2>&1; then
+  _tree="$(git rev-parse --show-toplevel)"
+  _main="$(cd "$_tree" && cd "$(git rev-parse --git-common-dir)/.." && pwd)"
+  if git -C "$_tree" ls-files --error-unmatch .beads/issues.jsonl >/dev/null 2>&1; then
+    if _export_err="$(bd export -o "$_tree/.beads/issues.jsonl" 2>&1 >/dev/null)"; then
+      git -C "$_tree" add .beads/issues.jsonl
+    elif grep -qi 'no beads database found' <<<"$_export_err"; then
+      # A clone with bd installed and no database (a sandbox, usually). The
+      # same case the BEADS block above skips on exit 3, so nothing to hold the
+      # export against; AGENTS.md asks the pull request to say so.
+      echo >&2 "beads: no database on this machine -- committing .beads/issues.jsonl as it is"
+    else
+      # bd is here and the database will not export. Committing now would look
+      # exactly like a fresh export, which is what the pre-push guard exists to
+      # refuse; refuse it here, where the cause is still on screen.
+      echo >&2 "beads: bd export failed; refusing to commit a stale .beads/issues.jsonl:"
+      echo >&2 "$_export_err"
+      exit 1
+    fi
+  fi
+  # interactions.jsonl is append-only, and bd appends it in the main checkout
+  # too. Union the main checkout's lines into this tree's copy -- order kept,
+  # exact duplicates dropped -- so a worktree commit carries what bd wrote since
+  # the branch was cut without losing lines the branch already has.
+  if git -C "$_tree" ls-files --error-unmatch .beads/interactions.jsonl >/dev/null 2>&1; then
+    if [ "$_main" != "$_tree" ] && [ -f "$_main/.beads/interactions.jsonl" ]; then
+      awk '!seen[$0]++' "$_tree/.beads/interactions.jsonl" "$_main/.beads/interactions.jsonl" \
+        > "$_tree/.beads/interactions.jsonl.tmp" \
+        && mv -f "$_tree/.beads/interactions.jsonl.tmp" "$_tree/.beads/interactions.jsonl"
+    fi
+    git -C "$_tree" add .beads/interactions.jsonl
+  fi
+fi
+
 if [ -x "$INSTALL_PYTHON" ]; then
     exec "$INSTALL_PYTHON" -mpre_commit "${ARGS[@]}"
 elif command -v pre-commit > /dev/null; then
