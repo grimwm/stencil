@@ -537,6 +537,18 @@
       border: 1px solid var(--border);
       border-radius: 6px;
       padding: 1rem;
+      /* A long line wraps rather than scrolls (stn-t3r9). Bootstrap's reboot
+         gives pre `overflow: auto`, which on screen is a horizontal scrollbar
+         nobody notices -- and in print is nothing at all: Chromium's print
+         path has no scrollbars, so everything past the box's right edge is
+         clipped out of the PDF. A student who types a long answer on one line
+         of a ```text fence submitted a PDF with most of it missing. Wrapping
+         on screen too, not only under @media print, so the page previews what
+         the PDF will hold. `overflow-wrap: anywhere` is for the line with no
+         break opportunity at all -- a pasted URL -- which `pre-wrap` alone
+         still cannot wrap. tests/test_pre_wrap.py proves both on the PDF. */
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
     }
 
     code {

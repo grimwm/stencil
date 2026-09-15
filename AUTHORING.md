@@ -588,6 +588,11 @@ non-space character. Only a free-standing `@word` is at risk; write `\@word` if 
 Fenced code blocks are highlighted in the browser. Bash, JavaScript, Python, and SQL are bundled;
 other languages still render as code, just without highlighting.
 
+A long line in a code block wraps, on screen and in the PDF, rather than scrolling — a printed
+page cannot scroll, so a line that only scrolled would be cut off at the box's edge. That holds
+for a line with no spaces in it too, such as a pasted URL. A ```` ```text ```` fence is therefore
+safe to use as an answer box: however long the answer typed into it, the PDF carries all of it.
+
 ### Diagrams
 
 Mermaid blocks are rendered client-side and automatically wrapped in a `<figure>`. Always give a
