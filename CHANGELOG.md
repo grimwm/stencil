@@ -9,6 +9,21 @@ and the closed epics in `.beads/issues.jsonl` are the readable index.
 How the version gets bumped is written down in
 [AGENTS.md](AGENTS.md#cutting-a-release), not here.
 
+## 0.41.0
+
+- **A long line in a code block wraps in the PDF instead of being cut off** (stn-t3r9). Nothing
+  set `white-space` on `pre`, so the browser default applied, and Bootstrap's reboot gives `pre`
+  `overflow: auto` — a horizontal scrollbar on screen that nobody notices, and in print nothing at
+  all, because Chromium's print path has no scrollbars and simply clips what runs past the box.
+  The everyday casualty was a handout's ```` ```text ```` answer fence: a student who typed a long
+  answer on one line submitted a PDF with most of it missing, and the HTML gave no sign. `pre`
+  now carries `white-space: pre-wrap` and `overflow-wrap: anywhere` in `_page-style.css.j2`, on
+  screen as well as in print so the page previews what the PDF will hold; the second property is
+  for a line with no break opportunity, such as a pasted URL, which `pre-wrap` alone still cannot
+  wrap. Decks include the same stylesheet, so they get it too. `tests/test_pre_wrap.py` proves
+  both cases on the PDF text, for a document and for a deck. A minor bump because every generated
+  package's page stylesheet changes; regenerate to pick it up.
+
 ## 0.40.0
 
 - **A read-only `stencil show` subcommand inspects package configuration** (#128). With no
