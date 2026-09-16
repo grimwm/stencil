@@ -32,47 +32,6 @@ $endif$
 $if(has-byline)$
   <div class="doc-byline">
 $if(author)$
-    {# Each name is its own element so a list wraps between names rather
-       than mid-name, and the separator travels with the name it follows.
-       author: takes a single value or a YAML list; a list is what a team
-       project needs, and six names have to survive the header.
-
-       Every gap here is a character, not a flex gap. A gap paints the space
-       and leaves nothing behind, so copy-paste and BeautifulSoup both read
-       "AuthorAda Lovelace". That was 0.11.0, and it fixed the HTML.
-
-       It did not fix the PDF, and this is the measured reason (stn-40n): a
-       whitespace-only text node sitting between two inline boxes never
-       reaches the PDF text layer. Chromium paints the advance and emits no
-       glyph, so `Author</span> <span>` extracted as "AuthorAda Lovelace"
-       from a page whose DOM had the space. Substituting &#160; there changes
-       nothing -- a lone nbsp between two boxes is dropped exactly the same
-       way. What survives is a space inside a text run that also carries a
-       printing character, which is why .doc-fact-sep's `&#160;&middot;&#160;`
-       already came through and why `Points&#160;50 pts` did.
-
-       So the gap lives INSIDE the label span and INSIDE the separator span,
-       never in a text node between them. Measure it in the PDF, not the DOM:
-       tests/test_pdf.py holds this, and the DOM-level test in test_dates.py
-       passed throughout the whole time this was broken.
-
-       <wbr> gives back what the nbsp pair takes away. Glued on both sides the
-       separator makes the author list one unbreakable run, and six names then
-       overflow the header instead of wrapping between names. <wbr> is a break
-       opportunity rather than a character, so it costs the text layer nothing.
-       Measured in the browser image: six names still break between names, on
-       screen and in print media, and no name splits across lines.
-
-       The space before the separator belongs to the NAME, not to the
-       separator, and that is deliberate. The separator is aria-hidden, which
-       removes its whole subtree from the accessibility tree -- so a space
-       parked inside it reaches the PDF but not a screen reader, which is this
-       same bug wearing a different coat. Chromium's accessibility tree for
-       the 0.12.0 markup read 'Author', 'Ada Lovelace', 'Grace Hopper' as
-       adjacent runs with no whitespace anywhere between them; with the space
-       inside the name it reads 'Ada Lovelace ', 'Grace Hopper '. The
-       trailing space on the last name costs a few pixels at the end of a
-       left-aligned line and nothing else. #}
     <div class="doc-meta"><span class="doc-label">Author&#160;</span>$for(author)$<span class="doc-author">$author$&#160;</span>$sep$<span class="doc-author-sep" aria-hidden="true">&middot;&#160;</span><wbr>$endfor$</div>
 $endif$
 $if(has-facts)$

@@ -49,18 +49,7 @@ BROWSER_IMAGE_TAG = "localhost/stencil_browser:test"
 # ...unless something asks for a different one. Two suites running at once --
 # two worktrees, which is what AGENTS.md tells every agent to work in -- both
 # built and overwrote this single tag, so one run could rebuild the image out
-# from under another that was still using it (stn-zim).
-#
-# A per-run tag would be a bad trade if it meant rebuilding the image each
-# time. Measured: 0.5s against the existing tag, 0.6s against a brand-new one
-# -- the layer cache keys on the Dockerfile and the context rather than on the
-# name, so the tag costs nothing.
-#
-# Read through a function rather than as a default argument, which is the
-# whole point: `def f(tag=BROWSER_IMAGE_TAG)` binds at IMPORT, so setting the
-# module attribute afterwards looks like it works and does nothing. The same
-# late-binding mistake was made and caught in tests/conftest.py's low-space
-# threshold, which is why it is spelled out here.
+# from under another that was still using it.
 BROWSER_IMAGE_TAG_ENV = "STENCIL_BROWSER_IMAGE_TAG"
 
 
@@ -74,128 +63,13 @@ def browser_image_tag() -> str:
     """
     return os.environ.get(BROWSER_IMAGE_TAG_ENV) or BROWSER_IMAGE_TAG
 
-# Every Node in a generated package: the browser image's base, the format-md
-# service, and the ensure_image line that pre-pulls it. One constant, because
-# three copies of a floating name is three chances for `make format-md` to pull
-# one image and run another -- a defect that reads as a slow first build.
-#
-# Pinned for the reason PANDOC_IMAGE is, and one more. `lts` moves across Node
-# major releases, and pa11y declares `engines: ^22.13.0 || >=24`, so an LTS
-# rollover can make the image simply refuse to build. `alpine` moves across
-# Alpine releases, and the Alpine branch is what decides which Chromium
-# `apk add chromium` installs and which font packages exist -- and the fonts
-# are already documented, three lines into Dockerfile.browser.j2, as the thing
-# that moves every page break.
-#
+
 # To bump: edit this line, run `python3 scripts/resolve_image_digests.py` to
 # record the new digest, rebuild the browser image, and run the container
 # tier. Read what moved in the PDF geometry and the PDF/UA results.
-#
-# PINNED BY DIGEST NOW, NOT JUST BY TAG -- stn-8vi, reversing the argument that
-# used to sit here. That argument was: a registry tag is mutable and a digest
-# is not, so a digest is strictly stronger, but pinning only one of the three
-# images by digest would buy defence in depth for a third of the surface while
-# leaving the convention inconsistent for whoever bumps the next one. That is
-# an argument for doing all three together, not for doing none -- and stn-8vi
-# is that: NODE_IMAGE, PANDOC_IMAGE and VERAPDF_IMAGE (all read lazily below,
-# through module __getattr__) now carry `<tag>@sha256:<digest>`.
-#
-# THE DIGEST IS KEYED BY THE TAG, in stencil/assets/image-digests.json, rather
-# than written inline as one `tag@digest` string beside each constant. A
-# registry resolves `name:tag@digest` BY THE DIGEST and ignores the tag
-# entirely, so an inline pair is one edit that can go stale without failing:
-# bump the tag, forget to re-resolve, and the build silently keeps pulling the
-# OLD image under a name that now says something else. Keyed by the tag, that
-# state cannot be expressed -- pinned_image() has nothing to look up for a tag
-# with no entry, so a forgotten re-resolve fails loudly and offline the way
-# `npm ci` refuses a lockfile the manifest does not satisfy, rather than
-# quietly shipping a stale digest that happens to parse.
-#
-# NOT at import, though -- at the first READ of one of the three constants.
-# The distinction is the whole reason __getattr__ is down there rather than
-# three eager assignments up here: failing at import is what would deadlock
-# the resolver script that exists to fix the failure. `stencil version` and
-# `stencil list` keep working; `stencil gen` is what stops.
-#
-# THE COST BEING ACCEPTED, so nobody later "fixes" this by going back to a
-# tag. A digest pin gives a CONSUMER three new ways to fail that a tag pin did
-# not:
-#
-#   1. Registry garbage collection. A tag pin degrades to different bytes
-#      under the same name; a digest pin degrades to "manifest unknown". Once
-#      upstream repushes the tag, the old manifest is untagged, and untagged
-#      manifests do get reclaimed -- so the pin has an expiry date a tag did
-#      not.
-#   2. `docker save` -> transfer -> `docker load` -> `docker tag` loses
-#      RepoDigests, so both `docker image inspect <ref>@sha256:...` and the
-#      compose pull fail against a reference that worked fine as a tag. A
-#      pull-through cache preserves digests; a save/load air-gap does not.
-#   3. No override. generate.py's reject_derived deliberately refuses
-#      `template_env: {pandoc_image: ...}`, so a consumer behind a mirror has
-#      no supported knob, and hand-editing the generated Makefile is undone by
-#      the next `stencil gen`. AGENTS.md already records this exact regret
-#      about Chromium -- "neither the Makefile nor the compose file gives a
-#      consumer a build argument to work around it with" -- and this pins the
-#      same regret onto three more images rather than pretending it does not
-#      apply here too.
-#
-# Deliberately NO escape hatch for any of the three: rendering through
-# overridable variables would need Makefile-doc.j2, Makefile-pkg.j2 and
-# docker-compose-html.yml.j2, and would let an environment variable downgrade
-# the very pin this exists to create. What is written down instead is the
-# RECOVERY PATH: a pull failing with "manifest unknown" means the digest was
-# garbage-collected upstream -- re-resolve with
-# `python3 scripts/resolve_image_digests.py` and regenerate.
-#
-# stn-5hv, which this comment used to point at, closed the equivalent gap one
-# layer in -- the npm tree installed INTO this image is fixed by a committed
-# lockfile and verified by hash. That made the image itself the remaining
-# floating input; this closes that one too.
 NODE_TAG = "docker.io/library/node:24.20.0-alpine3.24"
 
-# What the browser image installs. Exact, not `^`: stn-s5b was filed because
-# html-to-pdf.js pins `tagged: true` on page.pdf() to stop a version bump
-# silently removing an accessibility property, and `tagged` is exactly the kind
-# of option a MINOR release adds or drops. A caret satisfies "the same major"
-# and not the argument the pin was made for.
-#
-# Measured on a --no-cache rebuild, 2026-09-07: node v24.20.0, Alpine 3.24.1,
-# chromium 152.0.7977.82-r0, and these three. pa11y 10.0.0 had been released
-# ten days earlier and had floated in unnoticed; it was run against both
-# generated theme configs before being pinned to, rather than pinned to on the
-# strength of npm having served it that morning.
-#
-# puppeteer and pa11y are coupled: pa11y DEPENDS on puppeteer, npm dedupes the
-# two onto one copy only while the pinned puppeteer satisfies pa11y's declared
-# range, and a tree with two copies means `make check-access` drives a
-# different browser than `make pdf`. tests/test_pins.py asserts there is one.
-#
-# THESE THREE NAMES ARE NOT WHAT FIXES THE TREE ANY MORE. An exact version
-# here fixes these three and the exact puppeteer-core puppeteer declares, and
-# nothing below that: every transitive dependency used to resolve within a
-# range at build time, so a rebuild months apart installed different code and
-# nothing verified integrity (stn-5hv). What fixes it now is
-# stencil/assets/browser-package-lock.json, committed, with a sha512 for all
-# 47 packages in the resolved tree, installed by `npm ci`.
-#
-# So this map has become the REQUEST and the lockfile is the ANSWER. They are
-# checked against each other two ways: tests/test_pins.py fails when the
-# lock's root dependencies stop equalling this dict, and `npm ci` itself
-# refuses a manifest the lock does not satisfy --
-#
-#     npm error `npm ci` can only install packages when your package.json and
-#     package-lock.json [...] are in sync.
-#     npm error Invalid: lock file's pdf-lib@1.17.1 does not satisfy
-#     pdf-lib@1.17.0
-#
-# -- so editing a version here without re-vendoring breaks the build loudly
-# rather than quietly installing something else. Re-vendor with
-# `python3 scripts/vendor_npm_locks.py` and commit both files together.
-#
-# WHEN BUMPING: pa11y 10.0.0 was ten days old when it was pinned to, which is
-# inside the window where a compromised release is usually still being found.
-# Read the advisories for all three before moving a pin, not only the release
-# notes.
+# What the browser image installs. Exact versions, not `^`.
 BROWSER_NPM_PINS = {
     "pa11y": "10.0.0",
     "pdf-lib": "1.17.1",
@@ -211,32 +85,6 @@ FORMAT_NPM_PINS = {
 
 # ---------------------------------------------------------------------------
 # The lockfiles the two installs above actually resolve through.
-#
-# Written once by scripts/vendor_npm_locks.py, committed under stencil/assets/,
-# and shipped into a generated package with no network access at generation
-# time -- the same shape as the page assets in stencil/assets.py, and for the
-# same reason. `stencil gen` does not touch the network; a maintainer running a
-# vendoring script does.
-#
-# `npm ci` NEEDS A MANIFEST AS WELL AS A LOCK, and refuses when the two
-# disagree. The manifest is derived from the pin maps above rather than
-# shipped, so a generated package gains two files rather than four and there is
-# still exactly one place a version is written down. It is rendered inline --
-# a `printf` in Dockerfile.browser, a `printf` in the format-md entrypoint --
-# from npm_manifest() below.
-#
-# THE COST BEING ACCEPTED, so nobody later "fixes" it by relaxing to a floating
-# install. A lockfile records URLs and hashes, not bytes. A version unpublished
-# from the registry, or a registry that cannot be reached, now fails the build
-# permanently, where installing by name would have succeeded with different
-# code. That is the trade this ticket exists to make -- a build that fails is
-# better than a handout rendered by something nobody chose -- and the way out
-# of it is to re-vendor, not to install by name again.
-#
-# What the lockfile does NOT do is judge what it pins. A re-vendor that pulls
-# in a newer transitive tree while the pins are unchanged passes every test
-# here and every build; reading that diff is a person's job, and
-# stencil/assets/README.md says what to look for.
 BROWSER_LOCKFILE = "browser-package-lock.json"
 FORMAT_LOCKFILE = "format-package-lock.json"
 
@@ -246,100 +94,21 @@ BROWSER_MANIFEST_NAME = "stencil-browser-tools"
 FORMAT_MANIFEST_NAME = "stencil-format-md"
 
 # Where each install lands inside its container.
-#
-# NOT A GLOBAL PREFIX, and that is the cost stn-5hv named up front: `npm ci`
-# has no `--global`, so `npm install --global --prefix /opt/tools` -- which put
-# packages under /opt/tools/lib/node_modules and binaries under /opt/tools/bin
-# -- becomes an ordinary local install rooted at /opt/tools. The layout moves
-# with it: modules to node_modules, binaries to the node_modules/.bin symlinks
-# npm writes itself. Dockerfile.browser's NODE_PATH and PATH are built from
-# these constants for that reason; a rewiring that misses one leaves
-# `require("puppeteer")` or `pa11y` unresolvable at run time, which
-# tests/test_compose_check_access.py is what finds.
 BROWSER_TOOLS_DIR = "/opt/tools"
 BROWSER_NODE_MODULES = f"{BROWSER_TOOLS_DIR}/node_modules"
 FORMAT_TOOLS_DIR = "/tmp/fmt"
-
-# WHERE THE PDF DRIVER RUNS FROM, AND WHY IT IS NOT THE MOUNT (stn-jeq, stn-7ki).
-#
-# html-to-pdf.js is still RENDERED into the package directory -- a consuming
-# project overrides it from its own templates_dir, and Dockerfile.browser COPYs
-# it from there, so that override still reaches the image. What changed is where
-# it is RUN from, because two separate loaders take their answer from the script's
-# own location and from the process's working directory:
-#
-# - Node decides CommonJS-vs-ESM from the nearest package.json TO THE FILE. With
-#   the script at /workspace, that is the consumer's, and a course package
-#   legitimately has one: `{"type": "module"}` turned the whole script into a
-#   parse error before any guard inside it could speak (stn-7ki).
-# - puppeteer's getConfiguration() searches UPWARD FROM process.cwd() for
-#   .puppeteerrc.cjs and twelve siblings, and `require`s the JavaScript ones. It
-#   calls lilconfig(...).search() with no argument -- measured against the pinned
-#   puppeteer, where `search(searchFrom = process.cwd())` and `stopDir` is the
-#   home directory -- so there is no environment variable and no launch option
-#   that turns it off. cwd is the only lever (stn-jeq).
-#
-# Baking the script here answers the first. The second is answered by the script
-# chdir()ing to BROWSER_TOOLS_DIR, and by CHECK_ACCESS_SCRIPT's leading `cd`:
-# from there the upward walk is /opt/tools -> /opt -> / and stops, and every
-# directory on it belongs to the image rather than to the mount.
-#
-# The filename is repeated in Dockerfile.browser.j2 and docker-compose-html.yml.j2
-# rather than reaching them through a new template context key, because adding one
-# means editing generate.py. tests/test_pins.py asserts that what those two render
-# equals BROWSER_SCRIPT_PATH, so the three cannot drift apart quietly.
 BROWSER_SCRIPT = "html-to-pdf.js"
 BROWSER_SCRIPT_PATH = f"{BROWSER_TOOLS_DIR}/{BROWSER_SCRIPT}"
 
-# PDF/UA-1 conformance checking. Pinned, because veraPDF's rule set is the
-# thing being asserted against: an unpinned tag lets a build go red or green
-# on someone else's release rather than on a change here.
-#
-# PINNED BY DIGEST TOO (stn-8vi), and this one is the odd image out.
-# `docker.io/verapdf/cli:v1.30.2` is NOT a manifest list -- measured, not
-# assumed: the registry answers with a single
-# `application/vnd.docker.distribution.manifest.v2+json`, `linux/amd64` only.
-# There is no index to resolve per architecture, so the only digest that
-# exists for this tag is the one pinned; image-digests.json records the
-# single-arch media type explicitly rather than treating "not an index" as an
-# error, and tests/test_pins.py checks for it by name so a future multi-arch
-# veraPDF release is a deliberate edit here rather than a silent pass. (An
-# earlier version of the source ticket assumed this image carried a manifest
-# list like the other two; it does not, and this comment is the correction.)
-#
-# On arm64 this already runs emulated today -- pinning the digest makes that
-# fact visible rather than causing it. The freeze is the point, not a defect
-# to fix: with a tag, a future multi-arch repush of v1.30.2 would silently
-# start running verapdf NATIVE on arm64, changing what is being measured
-# without a line in any diff. With the digest, it stays emulated until
-# someone deliberately re-resolves and reads what changed.
+# PDF/UA-1 conformance checking.
 VERAPDF_TAG = "docker.io/verapdf/cli:v1.30.2"
 
-# verapdf is the image's ENTRYPOINT and is not on PATH. Measured: `sh -c
-# verapdf ...` inside this image exits 127.
+# verapdf is the image's ENTRYPOINT and is not on PATH.
 VERAPDF_BIN = "/opt/verapdf/verapdf"
 
 # The script the generated check-pdf service runs, kept here so a test runs the
 # SAME text rather than a re-typed approximation of it. tests/test_pdf_ua_gate.py
 # asserts the rendered compose file carries it verbatim.
-#
-# THE ZERO-FILE GUARD IS WHY THIS IS A SCRIPT AND NOT A BARE COMMAND. Measured
-# against verapdf/cli:v1.30.2: invoked with no file arguments, veraPDF exits 0
-# and prints nothing. So `check-pdf` run before `pdf`, or in a directory whose
-# PDFs were cleaned, or behind a glob that matched nothing, would report a
-# clean bill of health having opened no file -- the same shape as the
-# getContentsString() no-op that 0.21.0 nearly shipped. Nothing to check is a
-# build error here, not a pass.
-#
-# THE FILES ARE NAMED, NOT GLOBBED. A package directory is also just a
-# directory, and people put things in it: cs425/classroom carries an 11 MB
-# third-party book, and `for f in *.pdf` failed the build on it. The report was
-# not wrong -- that PDF is not conformant -- but it was not actionable, and an
-# unactionable red is how a gate gets switched off.
-#
-# Naming them also makes the guard say more. `make pdf` writes a known list, so
-# the check can tell "you gave me nothing" from "you gave me six and one of
-# them is missing", and name the one that is missing.
 VERAPDF_SCRIPT = f"""\
 expected=0
 found=0
@@ -370,64 +139,20 @@ exit $failed
 # rather than an approximation of it. tests/test_check_access.py runs it inside
 # the browser image, over both layouts.
 #
-# THAT IS NOT A THEORETICAL BENEFIT. Inlined in the compose file, this loop was
-# `for f in /out/*.html` paired with `file:///workspace/$f`, which for a package
-# with an output_dir asks Chromium for file:///workspace//out/foo.html and gets
-#
-#     Error: net::ERR_FILE_NOT_FOUND at file:///workspace//out/document.html
-#
-# so `make check-access` could not pass at all for such a package. It shipped in
-# 0.30.0 and no test noticed, because every test here read the compose file's
-# TEXT and none ran it. The directory now arrives as $1 and is absolute, and the
-# URL is built from it -- one path, not two that have to agree.
-#
-# Every $ is doubled on the way into the compose file, exactly as for veraPDF;
-# the doubling happens in the template so this text stays runnable through sh.
-#
-# THE FIRST LINE IS THE WHOLE stn-jeq FIX FOR THIS SERVICE, and it is one `cd`
-# only because everything below it was already written in absolute paths.
-#
-# IT REFUSES RATHER THAN CARRYING ON, and that matters more here than the `cd`
-# itself. This script runs under `sh -c` with no `set -e`, so a bare `cd` that
-# fails prints one line to stderr and CONTINUES from /workspace -- which reopens
-# stn-jeq in full and still exits 0 with "Checked 2 HTML file(s) at WCAG 2.1 AA,
-# light and dark." Every test stays green while the hole is open. That is the
-# same shape of silent-guard failure the doubled-`$` comment in
-# docker-compose-html.yml.j2 already argues about for the zero-file check: a
-# guard that stops guarding without saying so.
-#
-# pa11y requires the puppeteer WRAPPER (lib/pa11y.js) and calls launch() inside
-# it, so this half cannot be closed by resolving a different module -- the
-# configuration puppeteer executes is found by searching upward from
-# process.cwd(), which was /workspace, the consumer's own package directory.
-# Measured on the pinned pa11y and puppeteer: a one-line .puppeteerrc.cjs there
-# ran as uid 0 on every `make check-access`, and the check then printed its usual
-# "No issues found!".
-#
-# pa11y ALSO resolves FOUR things of its own from process.cwd(): loadConfig's
-# `./pa11y.json` default (bin/pa11y.js), loadReporter's
-# path.join(process.cwd(), name), loadRunnerFile's (lib/pa11y.js), and
-# sanitizeUrl's `file://${path.resolve(process.cwd(), url)}` (lib/option.js),
-# whose own reachability test calls fs.existsSync on a cwd-relative path. None
-# is reachable as this service is invoked -- the --config below is absolute, the
-# reporter and runner are built-ins, and the URL passed in already carries a
-# file:// scheme. The count is spelled out because it is what a future reader
-# will diff against when someone changes what this script hands pa11y. Moving
-# the working directory closes all four by construction instead of leaving them
-# one flag change away.
-#
 # Nothing after this line is cwd-relative: $directory arrives absolute in both
 # layouts and the file:// URL is built from it, which is the property the rest of
 # this comment block already argues for. Do not add a relative path below without
 # revisiting this.
-CHECK_ACCESS_SCRIPT = f"""\
+CHECK_ACCESS_SCRIPT = (
+    f"""\
 cd {BROWSER_TOOLS_DIR} || {{
   echo "check-access: {BROWSER_TOOLS_DIR} is not there, so this cannot move out" >&2
   echo "of the mount before pa11y launches Chromium. Dockerfile.browser did not" >&2
   echo "install the tools where this expects them." >&2
   exit 1
 }}
-""" """\
+"""
+    """\
 directory=${1:?check-access needs a directory to search}
 failed=0
 checked=0
@@ -462,6 +187,7 @@ fi
 echo "Checked $checked HTML file(s) at WCAG 2.1 AA, light and dark."
 exit $failed
 """
+)
 
 # The two constraints this module exists to protect. Both were reproduced by
 # hand once and would otherwise be reproducible only by hand again.
@@ -521,9 +247,7 @@ KINDS = ("doc", "slide")
 # quietly reopen everything the lockfile closes. Prerelease and build metadata
 # are both allowed -- they are legal semver npm resolves, and refusing them
 # would be refusing a pin somebody may need rather than refusing a range.
-_EXACT_VERSION = re.compile(
-    r"^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$"
-)
+_EXACT_VERSION = re.compile(r"^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$")
 
 # A lowercase npm package name, optionally scoped, and nothing that could
 # escape the shell single-quoting the manifest is written into. See
@@ -592,15 +316,6 @@ ASSETS_DIR = Path(__file__).parent / "assets"
 class VendoredAssetError(RuntimeError):
     """A file stencil ships is missing or damaged -- not a config mistake.
 
-    stn-hwo. read_lockfile used to raise FileNotFoundError for one of its two
-    failures and ValueError for the other, and ValueError is the channel
-    generate.package_contexts collects CONFIG problems on. So a damaged
-    install was reported to the reader as a broken .config.yaml, under a
-    heading that says so and a trailer telling them to fix it and delete a
-    directory by hand -- for a fault fixed by
-    `python3 scripts/vendor_npm_locks.py`, in a file a consumer of stencil may
-    not be able to edit at all.
-
     Deliberately NOT a subclass of ValueError. Making it one would keep the
     old assertions passing and leave the bug exactly where it was: the point
     is that this must not travel on the config channel.
@@ -631,35 +346,12 @@ def read_lockfile(filename: str) -> str:
 
 
 def lockfile_digest(filename: str) -> str:
-    """The sha256 of the lockfile a generated package receives.
-
-    stn-qge. `npm ci` fetches whatever host each `resolved` names and checks
-    `integrity` against a value in the same file, so whoever can edit the
-    lockfile decides which bytes get installed. Both installs read their
-    lockfile out of the consumer's package directory -- format-md `cp`s it out
-    of the mount -- which made a consumer-editable file the thing that chose
-    what prettier is. The scaffolding therefore carries this digest and checks
-    the copy before installing from it.
-
-    HASHED FROM ``read_lockfile(...) + "\n"``, NOT FROM THE BYTES ON DISK, and
-    that is the whole reason this is a function rather than a constant. The
-    file a package gets is what the template writes: read_lockfile strips the
-    trailing newline and the template puts one back. Hashing the asset
-    directly would agree with that today and diverge the moment either side of
-    that dance changes -- and a digest that disagrees with the file it guards
-    refuses every honest build, which is how a checksum kept by hand always
-    fails. Deriving both from one call cannot drift, and re-vendoring moves
-    them together with no extra step: scripts/vendor_npm_locks.py writes the
-    asset and this reads it.
-
-    It inherits read_lockfile's validation, VendoredAssetError included -- a
-    damaged install is not a config mistake, stn-hwo.
-    """
+    """The sha256 of the lockfile a generated package receives."""
     return hashlib.sha256((read_lockfile(filename) + "\n").encode("utf-8")).hexdigest()
 
 
 # ---------------------------------------------------------------------------
-# stn-8vi: the three pulled images, pinned by manifest digest.
+# the pulled images, pinned by manifest digest.
 #
 # IMAGE_TAGS is the plain, human-edited tags -- always readable, eagerly. The
 # digests that turn a tag into the reference a build actually pulls live in
@@ -864,19 +556,6 @@ def compose(
 ) -> subprocess.CompletedProcess:
     """Run a compose subcommand against the docker-compose.yml in ``workdir``.
 
-    This is the counterpart to ``render`` and ``check_access`` one level up. In
-    those, a test drives the same image, script and mounts the compose file
-    declares -- assembled here, in Python. This drives the compose file itself,
-    so the build stanza, the image tag, the mount list and the arguments a
-    service is handed are executed rather than read. Everything between the
-    script and the argv was, until stn-8j4, asserted only as text.
-
-    ``-f`` IS ABSOLUTE AND THE PROJECT DIRECTORY FOLLOWS IT. Compose resolves a
-    relative volume source and a `.` build context against the project
-    directory, which defaults to the directory holding the file -- exactly what
-    a package's own `- .:/workspace:z` and `- ../../build/demo:/out:z` need. A
-    relative -f from some other cwd would silently resolve both somewhere else.
-
     ``project`` IS REQUIRED, AND IS THE ISOLATION. Compose otherwise names the
     project after the directory basename, so two generated packages that happen
     to share one -- which every `demo` under a tmp_path does -- would share
@@ -884,10 +563,6 @@ def compose(
     ``down``; the generated services bind no host port, so nothing here can
     take a port a developer is using, and tests/test_compose_check_access.py
     asserts that stays true.
-
-    stdin is /dev/null because `compose run` attaches it by default, and a
-    service that read from a terminal would otherwise hang a test run rather
-    than fail it.
     """
     command = command or compose_command()
     if command is None:
@@ -1002,18 +677,6 @@ def run_in_browser(
 
     The script is written into the workdir rather than piped, so a failure
     leaves it on disk beside the page it was driving.
-
-    IT RUNS FROM THE MOUNT, DELIBERATELY, AND IS THE ONE THING HERE THAT STILL
-    DOES. Writing the script into the workdir and running `node <name>` from
-    /workspace is exactly the shape the pdf service had before stn-jeq -- so
-    this helper still sees a `.puppeteerrc.cjs` planted in the workdir, and a
-    consumer package.json still decides whether its script is an ES module.
-    That is not an oversight to finish tidying up: this is test
-    instrumentation rather than shipped scaffolding, and
-    tests/test_browser_isolation.py's CONTROL depends on it -- the control's
-    whole job is to prove a planted decoy WOULD execute, so that the tests
-    asserting it does not are measuring the fix rather than a malformed
-    fixture. Harden this and that control can no longer fail.
     """
     tag = tag or browser_image_tag()
     runtime = runtime or container_runtime()
@@ -1059,14 +722,6 @@ def html_to_pdf(
     Same image, same entrypoint, same mounts and the same working directory --
     the compose service is `node BROWSER_SCRIPT_PATH` with `working_dir:
     /workspace`.
-
-    THE WORKING DIRECTORY IS STILL /workspace AND THE SCRIPT IS NOT. That pair
-    is the point rather than an inconsistency: the Makefile passes `$(OUT)/x.html`,
-    which is relative for a package without an output_dir, so the process has to
-    START in the mount for a relative argument to mean anything. html-to-pdf.js
-    resolves its two arguments against that and then moves out of the mount
-    itself, before puppeteer can read a configuration from it. See
-    BROWSER_SCRIPT_PATH.
 
     ``out_dir`` mounts a second directory at /out, exactly as ``check_access``
     does and for the same reason -- a package with an ``output_dir`` puts its

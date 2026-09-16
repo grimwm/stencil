@@ -42,7 +42,7 @@
        :first-child exactly when no context line precedes it. This selector
        scores (0,2,1) against .deck-title's (0,2,0), so it captured the deck
        title and sized it as a section heading -- and only when `program:` was
-       unset, which is what made it look like a print bug (stn-tum). */
+       unset, which is what made it look like a print bug. */
     .slide:not(.slide--title) > h1:first-child,
     .slide:not(.slide--title) > h2:first-child,
     .slide:not(.slide--title) > h3:first-child {
@@ -83,21 +83,6 @@
       color: inherit;
     }
 
-    /* A link is the other inline construct that opts out of the colour it
-       would otherwise inherit, and mapping the link token is not enough here:
-       a themed light link IS --accent, which is the same colour as
-       --deck-accent-from -- 1.00:1 against the fill it would sit on. Any link
-       colour good on a pale prose surface is bad on a dark accent fill, the
-       same bind stn-7i8 found for inline code. Measured on the fill it
-       actually lands on: Bootstrap's #0d6efd is 2.19:1 and 1.40:1 across the
-       gradient, and 2.19:1 in print; the inherited --on-accent is 9.85:1 and
-       6.32:1.
-
-       The underline is not decoration. Inheriting the surrounding ink is
-       exactly what removes the colour difference that marked this as a link,
-       and WCAG 1.4.1 is a separate criterion from 1.4.3 -- fixing contrast by
-       deleting the only cue that a link is a link trades one failure for
-       another. stn-c0b. */
     .slide--title a {
       color: inherit;
       text-decoration: underline;
@@ -214,33 +199,7 @@
 
     /* --- Content helpers usable from markdown fenced divs --- */
 
-    /* ::: columns  ->  one row, however many children there are.
-
-       This was `grid-template-columns: 1fr 1fr`, which is two columns whatever
-       you put in it: three children left an empty cell and four stacked 2x2.
-       Both were real slides -- The Interview Funnel and the STAR method in the
-       cs425 job-search deck -- and both read as mistakes rather than choices.
-
-       grid-auto-flow: column with equal auto columns takes the count from the
-       content instead, so two stay two and four sit in a row. wide-left and
-       wide-right still work: they name two explicit tracks, which is exactly
-       what a biased two-column split is. */
-    /* The gap paints space with no character behind it -- the shape that broke
-       the header before 0.13.0. Measured in a real PDF for stn-avj: fine, and
-       for a different reason than the header's fix. The columns are block
-       boxes, so they become separate text objects and an extractor recovers
-       the boundary from the advance, which it does above a threshold of
-       roughly 0.15 em (pypdf) or 0.12 em (poppler).
-
-       The tightest same-baseline arrangement reachable measures 2.8 em in the
-       print PDF, about 18x that; one more character wraps the line and takes
-       the two columns off one baseline entirely.
-       tests/test_painted_gaps.py holds it.
-
-       Do NOT reach for `gap: 0` as a way to check this: the columns reflow, so
-       the glyph-to-glyph distance never approaches zero and the experiment
-       measures nothing. Walk the fill instead, one character at a time, which
-       is what the test does. */
+    /* ::: columns  ->  one row, however many children there are. */
     .columns {
       display: grid;
       grid-auto-flow: column;

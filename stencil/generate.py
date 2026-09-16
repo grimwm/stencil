@@ -25,7 +25,14 @@ from pathlib import Path
 from typing import NoReturn
 
 import yaml
-from jinja2 import Environment, FileSystemLoader, StrictUndefined, Undefined, meta, nodes
+from jinja2 import (
+    Environment,
+    FileSystemLoader,
+    StrictUndefined,
+    Undefined,
+    meta,
+    nodes,
+)
 from jinja2.exceptions import TemplateNotFound
 
 from . import __version__, assets, pipeline
@@ -122,24 +129,7 @@ def brand_of(
 
 
 def checked_brand_image(value: str | None, package_id: str) -> str | None:
-    """brand_image_path, with the path actually checked (stn-ttg).
-
-    Every other configured path goes through check_config_path; this one did
-    not, and it is the only one that gets OPENED. copy_brand_image resolves it
-    and hands it to shutil.copyfile, which follows a symlink -- so a `logo.png`
-    pointing at any readable file copied that file's CONTENT into a generated
-    folder AGENTS.md describes as routinely handed to someone as a project of
-    their own. Measured in the ticket: an absolute `relative` makes
-    `(config_dir / relative).resolve()` the absolute path, and `file://` is
-    stripped before any of this, so the scheme was not a defence either.
-
-    This checks the CONFIG STRING, and brand_problem separately contains the
-    RESOLVED path. Both are needed: the string is what `gen`, `clean` and the
-    managed .gitignore section all name the copy from (stn-8wt), so it has to
-    be a plain relative filename; and a plain relative filename can still be
-    a symlink whose target is anywhere readable, which only the resolved path
-    can see.
-    """
+    """brand_image_path, with the path actually checked."""
     relative = brand_image_path(value)
     if relative is None:
         return None
@@ -254,9 +244,9 @@ def check_config_path(
 
     `allow_parent` keeps every clause except the `..` refusal, for the one
     key whose escape is a documented feature rather than a mistake: a
-    package-level `output_dir` (stn-1a4). Keyword-only and defaulting to
+    package-level `output_dir`. Keyword-only and defaulting to
     False, so all six existing callers are byte-identical -- the escape has
-    to be asked for by name, at the one call site entitled to it.
+    to be asked for by name.
     """
     text = str(value)
     if _UNSAFE_IN_PATH.search(text):
@@ -299,19 +289,7 @@ def check_config_path(
 
 
 def check_output_dir(config: dict) -> str | None:
-    """The top-level ``output_dir``'s shape check (stn-40a) and path check
-    (stn-pe3) -- the third member of the set ``dir`` (stn-vhm) and ``dest``
-    (stn-c25) belong to, and the only one still exempt from every path
-    check.
-
-    ORDER MATTERS, and this is deliberately not the obvious
-    ``if not value: return None`` first: ``output_dir: 0``, ``false`` and
-    ``[]`` are FALSY NON-STRINGS, and checking falsiness before checking the
-    type would swallow all three into "output base is the config
-    directory" -- the exact silent mis-read stn-40a exists to close. So the
-    type check runs first and refuses them by naming the type; only THEN
-    does an empty string fall through to today's behaviour.
-    """
+    """The top-level ``output_dir``'s shape and path checks."""
     value = config.get("output_dir")
     if value is None:
         return None
@@ -408,8 +386,10 @@ def check_package_dir(package_id: str, value) -> str:
 # domain, and it is why the refusal is here rather than an escape (`\!` is
 # the documented gitignore escape and would work, but a `dir` beginning with
 # `!` is not a directory name anyone means).
-_GITIGNORE_LEADING = {"!": "negates the line, re-including files git would "
-                      "otherwise ignore", "#": "comments the line out"}
+_GITIGNORE_LEADING = {
+    "!": "negates the line, re-including files git would otherwise ignore",
+    "#": "comments the line out",
+}
 
 
 def check_gitignore_literal(package_id: str, where: str, value: str) -> str:
@@ -745,8 +725,7 @@ def get_template_context(package_id: str, config: dict) -> dict:
     # and hands to zip or pandoc. Same exposure as docs and slides, so the same
     # validation -- one helper, not three that drift apart.
     package_sources = [
-        check_config_path(package_id, "package_sources", src)
-        for src in package_sources
+        check_config_path(package_id, "package_sources", src) for src in package_sources
     ]
 
     if package_sources and package_type == "none":
@@ -919,9 +898,7 @@ def get_template_context(package_id: str, config: dict) -> dict:
                     brand_of(package, config, package_id)[0], package_id
                 )
             ).name
-            if checked_brand_image(
-                brand_of(package, config, package_id)[0], package_id
-            )
+            if checked_brand_image(brand_of(package, config, package_id)[0], package_id)
             else brand_of(package, config, package_id)[0]
         ),
         "config_brand_alt": brand_of(package, config, package_id)[1],
@@ -1192,9 +1169,7 @@ def template_reads(env: Environment, name: str, _seen=None) -> tuple[set[str], b
         return set(), False
     ast = env.parse(source, filename=name)
     found = {n.name for n in ast.find_all(nodes.Name) if n.ctx == "load"}
-    found |= {
-        n.value for n in ast.find_all(nodes.Const) if isinstance(n.value, str)
-    }
+    found |= {n.value for n in ast.find_all(nodes.Const) if isinstance(n.value, str)}
     complete = True
     for referenced in meta.find_referenced_templates(ast):
         if referenced is None:
@@ -1489,8 +1464,7 @@ def _safe(text: str) -> str:
     # and it says how much it dropped so the value stays identifiable.
     if len(escaped) > _MAX_PROBLEM_CHARS:
         return (
-            escaped[:_MAX_PROBLEM_CHARS]
-            + f"... [truncated, {len(escaped)} characters]"
+            escaped[:_MAX_PROBLEM_CHARS] + f"... [truncated, {len(escaped)} characters]"
         )
     return escaped
 
@@ -1524,9 +1498,7 @@ CLEAN_DEGRADED_TRAILER = (
 )
 
 
-def _raise_config_problems(
-    problems: list[str], trailer: str | None = None
-) -> NoReturn:
+def _raise_config_problems(problems: list[str], trailer: str | None = None) -> NoReturn:
     """Turn collected config problems into the one ValueError callers print.
 
     ``NoReturn``, not ``None``, and that is load-bearing rather than
@@ -1556,9 +1528,7 @@ def _raise_config_problems(
     raise ValueError(f"the config has {count}:\n{bullets}\n\n{text}")
 
 
-def _checked_template_defs(
-    declared: object, who: str
-) -> tuple[list[dict], list[str]]:
+def _checked_template_defs(declared: object, who: str) -> tuple[list[dict], list[str]]:
     """Shape-check a config's top-level ``templates:`` value. ONE spelling
     for a rule two callers need (stn-dl3r).
 
@@ -1932,9 +1902,7 @@ def package_contexts(
                 # package id would produce N distinct strings that the
                 # dedup below cannot collapse -- N bullets for one typo,
                 # none of them naming the place it actually is.
-                where = (
-                    f"Package {package_id}" if package.get("brand") else "config"
-                )
+                where = f"Package {package_id}" if package.get("brand") else "config"
                 problems.append(f"{where}: {problem}")
                 continue
 
@@ -2393,7 +2361,7 @@ def read_manifest(path: Path) -> dict:
     entries = document.get("entries")
     if not isinstance(entries, list) or not all(isinstance(e, str) for e in entries):
         raise ManifestError(
-            f"manifest {safe_name}{_context()} has no valid \"entries\" "
+            f'manifest {safe_name}{_context()} has no valid "entries" '
             "list of strings. Delete the manifest to fall back to deriving "
             "from the config."
         )
@@ -2647,9 +2615,7 @@ def _open_contained_link(
             "through it"
         ) from cause
 
-    resolved = Path(
-        os.path.normpath(contain_under.joinpath(*walked, target))
-    ).resolve()
+    resolved = Path(os.path.normpath(contain_under.joinpath(*walked, target))).resolve()
     if not resolved.is_relative_to(contain_under):
         raise ValueError(
             f"{part!r} is a symlink to {resolved}, outside {contain_under}, "
@@ -3121,8 +3087,7 @@ def checked_write_target(
             recovery = (
                 "`stencil clean` removes it"
                 if last or inside
-                else "`clean` cannot remove it either, so delete the link "
-                "yourself"
+                else "`clean` cannot remove it either, so delete the link yourself"
             )
             # THE PATH GOES LAST. `_safe` truncates at _MAX_PROBLEM_CHARS and
             # this message carries a RESOLVED ABSOLUTE path, whose length
@@ -3372,9 +3337,7 @@ def _open_package_base_fd(output_base: Path, package_dir: str, package_id: str) 
     # residual this function's docstring already names -- `output_base`
     # and its ancestors are resolved by path regardless -- not a new one.
     output_base.mkdir(parents=True, exist_ok=True)
-    output_base_fd = os.open(
-        output_base, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
-    )
+    output_base_fd = os.open(output_base, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
     try:
         parent_fd, final_name = walk_dir_fd(output_base_fd, package_dir)
     finally:
@@ -3465,9 +3428,7 @@ def generate_package(
     template_defs = injected_templates(context) + config_templates
     targets = write_targets(context, template_defs)
     for where, relative, _source in targets:
-        checked_write_target(
-            package_id, where, output_base, pkg_resolved, relative
-        )
+        checked_write_target(package_id, where, output_base, pkg_resolved, relative)
 
     # stn-bux: beside the loop above, for the same reason -- so a refusal
     # here leaves a fresh package directory untouched too. Runs under
@@ -3501,9 +3462,7 @@ def generate_package(
     # platform where it is naturally True.
     base_fd = None
     if not dry_run and _DIR_FD_CAPABLE:
-        base_fd = _open_package_base_fd(
-            output_base, context["package_dir"], package_id
-        )
+        base_fd = _open_package_base_fd(output_base, context["package_dir"], package_id)
     try:
         if not dry_run:
             if base_fd is None:
@@ -3613,9 +3572,7 @@ def render_templates(
     with no `dir_fd` support, or any `--dry-run` call, always passes --
     is today's behaviour, completely unchanged.
     """
-    for template_name, output_name in template_destinations(
-        template_defs, context
-    ):
+    for template_name, output_name in template_destinations(template_defs, context):
         try:
             template = env.get_template(template_name)
             content = template.render(**context)
@@ -3794,9 +3751,7 @@ def show_packages(config: dict, project: str | None = None, key: str | None = No
         print(f"Error: Unknown package {project}", file=sys.stderr)
         list_packages(config)
         sys.exit(1)
-    selected = (
-        {project: packages[project]} if project is not None else packages
-    )
+    selected = {project: packages[project]} if project is not None else packages
     if key:
         for package_id, package in selected.items():
             value = lookup_package_key(package_id, package, key)
@@ -4212,10 +4167,7 @@ def checked_output_base(config: dict, config_dir: Path) -> Path:
         resolved_candidate = candidate.resolve()
     except OSError as error:
         _raise_config_problems(
-            [
-                f"Package config: output_dir {value!r} could not be "
-                f"resolved: {error}"
-            ]
+            [f"Package config: output_dir {value!r} could not be resolved: {error}"]
         )
     if not resolved_candidate.is_relative_to(resolved_config_dir):
         _raise_config_problems(
@@ -4410,8 +4362,7 @@ def _remove_entries(
                 matches = _scandir_match(parent_resolved, name, pkg_path)
             except (ValueError, OSError) as error:
                 problems.append(
-                    f"Package {package_id}: {entry!r} could not be listed: "
-                    f"{error}"
+                    f"Package {package_id}: {entry!r} could not be listed: {error}"
                 )
                 continue
             for match_name in matches:
@@ -4666,10 +4617,7 @@ def _remove_empty_parent_dirs(
         if not d.exists() or not d.is_dir():
             continue
         try:
-            if (
-                len(d.relative_to(pkg_path).parts) >= 1
-                and d.is_relative_to(root)
-            ):
+            if len(d.relative_to(pkg_path).parts) >= 1 and d.is_relative_to(root):
                 candidate_dirs.append(d)
         except ValueError:
             # Not under pkg_path (e.g. a glob matched files elsewhere).
@@ -4725,9 +4673,7 @@ def _remove_path(path: Path, dry_run: bool, problems: list[str]) -> None:
     print(f"Removed {path}")
 
 
-def _config_template_defs(
-    config: dict, who: str, problems: list[str]
-) -> list[dict]:
+def _config_template_defs(config: dict, who: str, problems: list[str]) -> list[dict]:
     """The config's `templates:` list, shape-guarded, for the config-derived
     removal list.
 
@@ -4750,9 +4696,7 @@ def _config_template_defs(
     caller gets instead of a bare AttributeError/KeyError part way through
     a delete -- see stn-dl3r for what a config this broken used to do here.
     """
-    kept, template_problems = _checked_template_defs(
-        config.get("templates", []), who
-    )
+    kept, template_problems = _checked_template_defs(config.get("templates", []), who)
     problems.extend(template_problems)
     return kept
 
@@ -4978,9 +4922,7 @@ def _clean_one_directory(
             # what is left. A self-listing manifest is a widened manifest;
             # it gets the named refusal like any other.
             widened = sorted(entry for entry in entries if entry not in authorised)
-            expected_dir = config["packages"][manifest_pkg].get(
-                "dir", manifest_pkg
-            )
+            expected_dir = config["packages"][manifest_pkg].get("dir", manifest_pkg)
             manifest_dir = manifest.get("dir")
             dir_mismatch = manifest_dir != expected_dir
 
@@ -5300,9 +5242,7 @@ def install_gitignore(config: dict, config_dir: Path, dry_run: bool = False):
             # AFTER the write, so a non-UTF-8 .gitignore in the working
             # directory ended a successful `install` with a traceback and
             # rc=1. Measured with a latin-1 comment in the file.
-            if GITIGNORE_START in stale.read_text(
-                encoding="utf-8", errors="replace"
-            ):
+            if GITIGNORE_START in stale.read_text(encoding="utf-8", errors="replace"):
                 print(
                     f"Note: {stale} still holds a stencil section from an "
                     "older version, which stencil no longer maintains. "

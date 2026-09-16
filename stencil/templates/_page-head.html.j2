@@ -6,7 +6,7 @@
   {# `-text` rather than the raw variables: an element cannot live in <title>,
      so pandoc escapes it and the tab reads literally `The <code>foo</code>
      protocol`. frontmatter-filter.lua stringifies these alongside the other
-     derived keys (stn-myk). The fallbacks keep a consuming project's own
+     derived keys. The fallbacks keep a consuming project's own
      composition working if it renders this partial without that filter. #}
   <title>$if(program-text)$$program-text$: $elseif(program)$$program$: $endif$$if(title-text)$$title-text$$else$$title$$endif$</title>
 

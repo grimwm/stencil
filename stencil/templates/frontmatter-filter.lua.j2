@@ -320,12 +320,11 @@ function Meta(meta)
 
   -- Plain-text twins for the one place markup cannot go: <title>.
   --
-  -- stn-myk. Pandoc renders $title$ as inline markdown, which is what puts a
-  -- <code> on the title slide for a backticked `title:` -- correct, and what
-  -- stn-7i8 made legible. The head partial interpolates the SAME variable
-  -- into <title>, where an element has nowhere to go, so pandoc escapes it
-  -- and the browser tab, the bookmark and the PDF's document title all read
-  -- literally "The <code>foo</code> protocol".
+  -- Pandoc renders $title$ as inline markdown, which is what puts a
+  -- <code> on the title slide for a backticked `title:`. The head partial
+  -- interpolates the SAME variable into <title>, where an element has nowhere
+  -- to go, so pandoc escapes it and the browser tab, the bookmark and the
+  -- PDF's document title all read literally "The <code>foo</code> protocol".
   --
   -- stringify is the whole fix: it flattens Inlines to their text, so a
   -- backtick, an emphasis or a link in any of these renders as the words the

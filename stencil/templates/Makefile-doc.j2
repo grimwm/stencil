@@ -17,50 +17,9 @@ format-md: ## Format markdown files
 comma := ,
 
 # WITH, `with` AND BUILD_DATE ARE CHECKED AGAINST A CHARACTER CLASS BEFORE
-# ANYTHING INTERPOLATES THEM (stn-cb8). All three reach a recipe, and before
+# ANYTHING INTERPOLATES THEM. All three reach a recipe, and before
 # this there was nothing between the caller's value and /bin/sh. MEASURED
 # against a real generated package:
-#
-#   $ make doc DC=true 'BUILD_DATE=2026-01-01";touch /tmp/PWN;"'
-#   $ ls /tmp/PWN                    # *** the injected command RAN ***
-#
-#   $ make doc DC=true 'WITH=a;/tmp/mark.sh;b'
-#   WITH-MARKER-RAN                  # *** and so did this one ***
-#
-# CHECKED, NOT QUOTED, and that is the decision worth reading. Quoting cannot
-# do this job in either direction:
-#
-#   * make runs recipes through cmd on Windows, where a single quote is an
-#     ordinary character and not a quoting one, so the POSIX spelling of that
-#     fix would silently do nothing on the arm with no shell to speak of.
-#   * MAKE EXPANDS THESE VALUES ITSELF, before any shell sees them. MEASURED:
-#     `WITH='$(shell touch /tmp/PWN)'` in the ENVIRONMENT created the file
-#     under `make -n`, with no recipe run at all, because METADATA_FLAGS below
-#     is `:=` and expands WITH right here. No shell quoting reaches that,
-#     which is why the check reads `$(value ...)` -- the UNEXPANDED text.
-#
-# WHAT `$(value ...)` DOES AND DOES NOT CLOSE, stated rather than implied: it
-# defeats a `$(shell ...)` smuggled into a RECURSIVE assignment, which is
-# every ordinary route -- the environment, `make X=...`, `make -e`,
-# `MAKEFLAGS=X=value`. A SIMPLY-EXPANDED spelling is expanded by make before
-# it reads this file at all, so the side effect has already happened and the
-# check sees only the clean remainder. MEASURED:
-# `MAKEFLAGS='BUILD_DATE:=$(shell touch /tmp/PWN)2026-01-01'` fires the
-# $(shell) and passes the check. Nobody exports a `:=` spelling by accident,
-# so that stays open and named rather than papered over.
-#
-# THE ALLOWED SETS, written as lists of characters because make has no regex
-# and no way to iterate a string. _stencil_residue folds $(subst) over the
-# list and returns whatever the value has left over.
-#
-# THE DATE CLASS IS DERIVED, NOT INVENTED. build-date is assigned straight
-# into `meta.date` by frontmatter-filter.lua, which then runs it through the
-# same grammar `date:` and `due:` use -- so these are exactly the characters
-# appearing in tests/test_dates.py's ACCEPTED list (yyyy-mm-dd and
-# yyyy-mm-ddThh:mm), and a test iterates that list through this check so the
-# two layers cannot drift. It IS ONLY A CHARACTER CLASS, never a date check:
-# `2026-13-45T99:99` passes here and is refused later, by the filter, with a
-# message about months.
 _stencil_chars_date := 0 1 2 3 4 5 6 7 8 9 - T :
 _stencil_chars_with := a b c d e f g h i j k l m n o p q r s t u v w x y z A B C D E F G H I J K L M N O P Q R S T U V W X Y Z 0 1 2 3 4 5 6 7 8 9 - _ $(comma)
 
@@ -110,22 +69,6 @@ METADATA_FLAGS := $(foreach feat,$(subst $(comma), ,$(WITH)),--metadata include-
 # day, not the image's UTC one -- a handout generated at 7pm Central otherwise
 # prints tomorrow's date. frontmatter-filter.lua falls back to its own
 # os.date() when this is absent, so a hand-run pandoc still works.
-#
-# ONLY A `$` IS REFUSED HERE; THE CLASS CHECK WAITS FOR THE POINT OF USE, and
-# the asymmetry with WITH above is deliberate. `BUILD_DATE` is not stencil's
-# name -- it is the OCI `org.opencontainers.image.created` convention, and
-# a `BUILD_DATE` set from `date -u +%Y-%m-%dT%H:%M:%SZ` is ordinary CI
-# boilerplate. That
-# value carries a `Z`, which is out of class. Refusing it HERE would abort
-# `make help` and `make clean` for someone who exported it once for something
-# unrelated and never goes near a date stamp -- the same actor the
-# COMPOSE_FILES origin guard serves, and the same call stn-3y8 made when it
-# left a stray CONTAINER inert rather than fatal. So the class is enforced on
-# the targets that actually interpolate the value, and nowhere else.
-#
-# The `$` refusal cannot wait, because the freeze below expands this value:
-# without it `make help` alone would run a `$(shell ...)` smuggled in from the
-# environment. A `$` is never legitimate in a date.
 $(if $(findstring $$,$(value BUILD_DATE)),$(error BUILD_DATE must not contain a `$$` -- got: $(value BUILD_DATE)))
 BUILD_DATE ?= $(shell date +%F)
 
