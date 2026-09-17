@@ -9,6 +9,18 @@ and the closed epics in `.beads/issues.jsonl` are the readable index.
 How the version gets bumped is written down in
 [AGENTS.md](AGENTS.md#cutting-a-release), not here.
 
+## 0.42.0
+
+- **An `output_dir` nested inside the package directory broke every compose service** (stn-w4iy). The
+  derived package-relative path is then a bare name (`build`), which compose's short volume syntax reads as
+  a *named volume* rather than a bind mount — `make doc` failed with `service "format-md" refers to undefined volume build`. Found in cs425's `proposals` package (`dir: proposals`,
+  `output_dir: proposals/build`); the existing suite never saw it because its fixture derives
+  `../build/demo`, which already parses as a path. `get_template_context` now prefixes a bare relative
+  result with `./`, so the mount renders `./build:/out:z` and `OUT_HOST` reads `./build`; `..`-leading
+  paths are untouched. `tests/test_output_dir.py` pins the parsed bind-mount form, the `OUT_HOST`
+  agreement, and the no-prefix rule. A minor bump because generated compose files and Makefiles change;
+  regenerate to pick it up.
+
 ## 0.41.0
 
 - **A long line in a code block wraps in the PDF instead of being cut off** (stn-t3r9). Nothing
