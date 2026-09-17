@@ -862,6 +862,12 @@ def get_template_context(package_id: str, config: dict) -> dict:
                 f"Package {package_id}: output_dir {raw_output!r} cannot be "
                 f"expressed relative to the package directory {package_root}"
             ) from error
+        if not package_output_dir.startswith((".", "/")):
+            # A bare name (`build`) parses in compose's short volume syntax
+            # as a NAMED VOLUME, not a bind mount, so every service mounting
+            # it fails with "refers to undefined volume". The `./` prefix
+            # marks it as a host path (stn-w4iy).
+            package_output_dir = f"./{package_output_dir}"
     else:
         package_output_dir = ""
 

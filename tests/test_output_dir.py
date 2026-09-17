@@ -623,3 +623,66 @@ def test_make_pdf_reads_a_page_from_the_output_directory_mount(
     assert (out / "document.pdf").is_file(), (
         "the pdf service exited 0 but wrote no document.pdf to the /out mount"
     )
+
+
+@pytest.fixture
+def nested(demo_config, generate_package):
+    """A package whose products go INSIDE the package directory (stn-w4iy).
+
+    The cs425 proposals shape: dir proposals, output_dir proposals/build.
+    The derived package-relative path is then a bare name (`build`), which
+    compose's short volume syntax reads as a named volume rather than a
+    bind mount -- every service mounting it fails with "refers to
+    undefined volume". The `elsewhere` fixture above never sees this: its
+    derived path starts with `..`, which already parses as a path.
+    """
+    config = demo_config
+    config["packages"]["demo"]["dir"] = "demo"
+    config["packages"]["demo"]["output_dir"] = "out/demo/build"
+    return generate_package(config)
+
+
+def test_a_nested_output_dir_is_a_bind_mount_not_a_named_volume(nested):
+    """PARSED, not string-matched, like test_the_output_directory_is_mounted.
+
+    A bare `build:/out:z` is valid YAML and the substring is present either
+    way -- only the parsed mount source tells a named volume from a bind
+    mount. Compose treats a source starting with `.`, `/` or `~` as a host
+    path and anything else as a volume name, so every /out mount must carry
+    the `./` prefix get_template_context now adds.
+    """
+    doc = yaml.safe_load(compose(nested))
+    mounted = [
+        (name, volume)
+        for name, service in doc["services"].items()
+        for volume in service.get("volumes", [])
+        if volume.endswith(":/out:z")
+    ]
+    assert mounted, "no service mounts the output directory"
+    for name, volume in mounted:
+        source = volume.split(":")[0]
+        assert source.startswith((".", "/")), (
+            f"{name} mounts {volume!r}: a bare name is a compose named "
+            "volume, not a bind mount"
+        )
+
+
+def test_a_nested_output_dir_reaches_the_makefile(nested):
+    """OUT_HOST and the compose mount must agree on the same directory."""
+    line = next(l for l in makefile(nested).splitlines() if l.startswith("OUT_HOST"))
+    assert line == "OUT_HOST := ./build", line
+    doc = yaml.safe_load(compose(nested))
+    assert "./build:/out:z" in doc["services"]["format-md"]["volumes"]
+
+
+def test_a_dotdot_output_dir_is_not_prefixed(demo_config):
+    """The `./` prefix applies to bare names only: `../build/demo` already
+    parses as a host path, and rewriting it to `./../build/demo` would churn
+    the layout every existing package with an output_dir builds today."""
+    from stencil.generate import get_template_context
+
+    config = demo_config
+    del config["output_dir"]
+    config["packages"]["demo"]["dir"] = "demo"
+    config["packages"]["demo"]["output_dir"] = "build/demo"
+    assert get_template_context("demo", config)["package_output_dir"] == "../build/demo"
