@@ -9,6 +9,15 @@ and the closed epics in `.beads/issues.jsonl` are the readable index.
 How the version gets bumped is written down in
 [AGENTS.md](AGENTS.md#cutting-a-release), not here.
 
+## Unreleased
+
+- **Deck title slides accept a `cover` image.** Front matter `cover:` (image
+  path) and `cover-alt:` (required caption and accessible name) render a
+  `<figure class="deck-cover">` on the generated title slide. Documents ignore
+  both keys. Path rules match `brand`: `file://` is stripped, relative paths
+  are inlined, a remote URL stays a reference. A non-image value or a missing
+  `cover-alt` fails the build. (stn-7lt)
+
 ## 0.42.0
 
 - **An `output_dir` nested inside the package directory broke every compose service** (stn-w4iy). The

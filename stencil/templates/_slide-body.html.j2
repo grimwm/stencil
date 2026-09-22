@@ -42,6 +42,12 @@ $if(has-facts)$
   <p class="deck-meta">$if(date-label)$Issued <time datetime="$date-iso$">$date-label$</time>$endif$$if(due-label)$$if(sep-before-due)$ &middot; $endif$Due <time datetime="$due-iso$">$due-label$</time>$endif$$if(points-label)$$if(sep-before-points)$ &middot; $endif$Points $points-label$$endif$</p>
 $endif$
 $endif$
+$if(cover)$
+  <figure class="deck-cover">
+    $cover$
+    <figcaption>$cover-alt$</figcaption>
+  </figure>
+$endif$
 </section>
 $endif$
 $body$
