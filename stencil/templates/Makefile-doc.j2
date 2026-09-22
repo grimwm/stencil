@@ -69,8 +69,19 @@ METADATA_FLAGS := $(foreach feat,$(subst $(comma), ,$(WITH)),--metadata include-
 # day, not the image's UTC one -- a handout generated at 7pm Central otherwise
 # prints tomorrow's date. frontmatter-filter.lua falls back to its own
 # os.date() when this is absent, so a hand-run pandoc still works.
+#
+# Windows MUST NOT call `date +%F`. On a host where $(shell) resolves to cmd,
+# `date` is interactive ("Enter the new date") and this line is frozen with
+# `:=` below, so every target -- up, pkg, help -- hangs at parse time until
+# Enter. PowerShell is always present on real Windows_NT; a POSIX make asked
+# `OS=Windows_NT` (the suite's cross-arm idiom) gets an empty default when
+# powershell is absent, which is already a supported escape hatch.
 $(if $(findstring $$,$(value BUILD_DATE)),$(error BUILD_DATE must not contain a `$$` -- got: $(value BUILD_DATE)))
+ifeq ($(OS),Windows_NT)
+BUILD_DATE ?= $(shell powershell -NoProfile -NonInteractive -Command "Get-Date -Format yyyy-MM-dd")
+else
 BUILD_DATE ?= $(shell date +%F)
+endif
 
 # Frozen for the reason WITH is: it makes $(value BUILD_DATE) at the point of
 # use the date itself rather than this line's own `$(shell ...)` text, so the
