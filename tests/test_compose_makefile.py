@@ -1666,6 +1666,47 @@ def test_pkg_checks_what_it_interpolates_and_nothing_else(
 # --- the date class and the frontmatter grammar cannot drift ---------------
 
 
+def test_windows_build_date_default_does_not_invoke_cmd_date(pages_package):
+    """cmd's `date` prompts 'Enter the new date' and freezes every target.
+
+    BUILD_DATE is frozen at parse time (`:=`), so a Windows host that resolves
+    `$(shell date +%F)` to cmd's interactive `date` waits for Enter before any
+    recipe runs -- `make up`, `make pkg`, `make help` alike. The Windows arm
+    must ask PowerShell for the local calendar day; the POSIX arm keeps
+    `date +%F`. Measured: both defaults appear in the generated Makefile, and
+    the Windows one never spells `date +`.
+    """
+    text = (pages_package / "Makefile").read_text()
+    defaults = [
+        line for line in text.splitlines() if line.startswith("BUILD_DATE ?=")
+    ]
+    assert len(defaults) == 2, (
+        "expected one BUILD_DATE default per OS arm, got "
+        f"{len(defaults)}: {defaults}"
+    )
+    windows = next((line for line in defaults if "powershell" in line), None)
+    posix = next((line for line in defaults if "date +%F" in line), None)
+    assert windows is not None, (
+        "Windows BUILD_DATE default does not invoke powershell:\n"
+        + "\n".join(defaults)
+    )
+    assert posix is not None, (
+        "POSIX BUILD_DATE default lost `date +%F`:\n" + "\n".join(defaults)
+    )
+    assert "date +" not in windows, (
+        "Windows BUILD_DATE default still calls `date`, which hangs on cmd:\n"
+        f"{windows}"
+    )
+    assert "-NonInteractive" in windows, (
+        "Windows BUILD_DATE powershell invocation is missing -NonInteractive:\n"
+        f"{windows}"
+    )
+    assert "yyyy-MM-dd" in windows, (
+        "Windows BUILD_DATE default must request a local yyyy-MM-dd stamp:\n"
+        f"{windows}"
+    )
+
+
 def _accepted_date_shapes() -> list[str]:
     """tests/test_dates.py's ACCEPTED list, loaded BY PATH.
 

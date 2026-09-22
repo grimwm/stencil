@@ -9,6 +9,16 @@ and the closed epics in `.beads/issues.jsonl` are the readable index.
 How the version gets bumped is written down in
 [AGENTS.md](AGENTS.md#cutting-a-release), not here.
 
+## 0.44.0
+
+- **Windows hosts no longer hang at Makefile parse on every target** (stn-ltm).
+  `BUILD_DATE` was defaulted with `$(shell date +%F)` and then frozen with
+  `:=`, so the shell ran before any recipe. On Windows, cmd's `date` treats
+  `+%F` as junk and prompts "Enter the new date" -- Enter unblocks Make with
+  no stamp set, which looked like a freeze on `make up`, `make pkg`, and
+  anything else. The Windows arm now asks PowerShell for a local
+  `yyyy-MM-dd`; the POSIX arm keeps `date +%F`. Regenerate to pick it up.
+
 ## 0.43.0
 
 - **Deck title slides accept a `cover` image.** Front matter `cover:` (image
