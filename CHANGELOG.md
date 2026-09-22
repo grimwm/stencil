@@ -9,7 +9,7 @@ and the closed epics in `.beads/issues.jsonl` are the readable index.
 How the version gets bumped is written down in
 [AGENTS.md](AGENTS.md#cutting-a-release), not here.
 
-## Unreleased
+## 0.43.0
 
 - **Deck title slides accept a `cover` image.** Front matter `cover:` (image
   path) and `cover-alt:` (required caption and accessible name) render a
