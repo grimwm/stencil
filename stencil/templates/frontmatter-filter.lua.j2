@@ -107,7 +107,7 @@ local CONTEXT = { "program", "section", "term" }
 -- with nothing after it would open a byline row with nothing to put in it.
 local BLANKABLE = {
   "program", "section", "term", "author", "date", "lang", "dir",
-  "brand", "brand-alt", "points", "due",
+  "brand", "brand-alt", "cover", "cover-alt", "points", "due",
 }
 
 -- What `brand` is taken to be a picture of rather than a name.
@@ -440,6 +440,33 @@ function Meta(meta)
     end
   end
 
+  -- `cover` is a title-slide figure for decks. Unlike `brand`, it is always a
+  -- picture: a bare name has nothing useful to put on the cover, so a value
+  -- that is not an image path is refused the same way a missing alt is.
+  local cover = text_of(meta.cover)
+  if cover then
+    local target = image_target(cover)
+    if not target then
+      error(
+        "cover must be an image path (" .. cover .. " is not). "
+          .. "Use a relative path or file:// URI ending in an image extension."
+      )
+    end
+    local alt = text_of(meta["cover-alt"])
+    if not alt then
+      error(
+        "cover is set (" .. cover .. ") but cover-alt is not. "
+          .. "Add cover-alt: with the text shown as the figure caption and "
+          .. "read as the image's accessible name."
+      )
+    end
+    meta.cover = pandoc.Inlines({
+      pandoc.Image(pandoc.Inlines({ pandoc.Str(alt) }), target),
+    })
+    -- Keep cover-alt as plain text for the <figcaption>; the Image already
+    -- carries the same string as its alt.
+    meta["cover-alt"] = pandoc.Inlines({ pandoc.Str(alt) })
+  end
 
   local has_context = false
   for _, key in ipairs(CONTEXT) do

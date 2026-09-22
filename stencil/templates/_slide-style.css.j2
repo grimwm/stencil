@@ -192,6 +192,32 @@
       margin: 0;
     }
 
+    /* Optional cover figure from `cover:` / `cover-alt:` front matter. Sits
+       under the byline; capped so a tall photo cannot shove the title off the
+       slide the way an uncapped content figure can. */
+    .slide--title .deck-cover {
+      margin: 1.5rem 0 0;
+      max-width: min(100%, 36rem);
+    }
+
+    .slide--title .deck-cover img {
+      display: block;
+      width: 100%;
+      max-height: min(42vh, 22rem);
+      height: auto;
+      object-fit: contain;
+      border-radius: 6px;
+    }
+
+    .slide--title .deck-cover figcaption {
+      font-family: var(--font-sans);
+      font-size: 0.9rem;
+      line-height: 1.35;
+      color: var(--on-accent-muted);
+      margin-top: 0.5rem;
+      text-align: left;
+    }
+
     /* The title slide is the cover, not a numbered slide, so it shows no badge.
        It still increments the counter, which keeps the badge and the toolbar's
        "n / total" position in agreement rather than one apart. */

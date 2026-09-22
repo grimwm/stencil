@@ -154,6 +154,8 @@ the pipeline reads, and what each one does on each side:
 | `subtitle`      | Under the title                                 | Under the title on the title slide                          |
 | `brand`         | Top right, above `program`                      | Above the title on the title slide                          |
 | `brand-alt`     | Alt text; **required** when `brand` is an image | Same                                                        |
+| `cover`         | Ignored                                         | Figure on the title slide (image path)                      |
+| `cover-alt`     | Ignored                                         | Caption and alt; **required** when `cover` is set           |
 | `program`       | Top right, opposite the title                   | Above the title, and prefixes the browser tab               |
 | `section`       | Top right, after `program`                      | Above the title, after `program`                            |
 | `term`          | Top right, its own line                         | Above the title, after `section`                            |
@@ -260,6 +262,23 @@ stands on its own when it is handed to someone as their own project. Front matte
 deliberate rather than defaulting to `alt=""`: a logo is often the only thing naming the institution
 on the page, so an empty alt drops it entirely for anyone using a screen reader, and
 `make check-access` runs pa11y at WCAG 2.1 AA. A name needs no `brand-alt` — it is already text.
+
+#### `cover`
+
+A figure on the generated title slide of a **deck**. Documents ignore it. Unlike `brand`, the value
+is always a picture — a bare name has nothing useful to put on the cover:
+
+```markdown
+---
+title: "Project Specification Document"
+cover: "images/psd/cover.jpg"
+cover-alt: "Abstract architectural curves against a blue sky"
+---
+```
+
+The same path rules as `brand` apply (`file://` is stripped; relative paths are inlined; a remote
+`https://` stays a reference). `cover-alt` is **required**, and it is both the image's accessible
+name and the visible `<figcaption>` under the picture.
 
 #### `program`, `section`, `term`
 
