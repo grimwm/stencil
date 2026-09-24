@@ -163,6 +163,36 @@ def test_the_output_directory_is_created_before_it_is_mounted(elsewhere):
     assert "out-dir" in doc, doc
 
 
+def test_windows_out_dir_does_not_call_cmd_mkdir_p(elsewhere):
+    """cmd's `mkdir` treats `-p` as a directory name and fails on `.`.
+
+    Measured on Windows: `make doc` printed
+    `A subdirectory or file -p already exists` / `Error occurred while
+    processing: .` and stopped at out-dir. The Windows arm must create the
+    directory with PowerShell's New-Item -Force; the POSIX arm keeps mkdir -p.
+    """
+    text = makefile(elsewhere)
+    # Both arms live under one ifeq, with `out-dir:` repeated -- assert on the
+    # whole file's out-dir region rather than the first recipe line alone.
+    start = text.index(".PHONY: out-dir")
+    end = text.index("OUTPUT_SUFFIX", start)
+    region = text[start:end]
+    assert "ifeq ($(OS),Windows_NT)" in region, region
+    assert "New-Item -ItemType Directory -Force" in region, region
+    assert "-NonInteractive" in region, region
+    assert "mkdir -p $(OUT_HOST)" in region, "POSIX arm lost mkdir -p"
+    windows_arm, _, posix_arm = region.partition("\nelse\n")
+    assert "ifeq ($(OS),Windows_NT)" in windows_arm, windows_arm
+    # Recipe lines only: the comment above the ifeq names mkdir on purpose.
+    windows_recipes = [line for line in windows_arm.splitlines() if line.startswith("\t")]
+    assert windows_recipes, windows_arm
+    assert not any("mkdir" in line for line in windows_recipes), (
+        "Windows out-dir still calls mkdir, which fails under cmd:\n"
+        + "\n".join(windows_recipes)
+    )
+    assert "mkdir -p $(OUT_HOST)" in posix_arm, posix_arm
+
+
 def test_a_package_without_output_dir_is_unchanged(doc_package):
     """Every existing package sets no output_dir and must build exactly where
     it always did. This is the guard that makes the feature safe to add."""
