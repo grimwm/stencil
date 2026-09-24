@@ -140,8 +140,16 @@ OUT_HOST := .
 {% endif %}
 
 .PHONY: out-dir
+# cmd's `mkdir` has no `-p`: `mkdir -p .` tries to create directories named
+# `-p` and `.` and fails. PowerShell's New-Item -Force is a no-op when the
+# path already exists, including `.`.
+ifeq ($(OS),Windows_NT)
+out-dir:
+	@powershell -NoProfile -NonInteractive -Command "New-Item -ItemType Directory -Force -Path '$(OUT_HOST)' | Out-Null"
+else
 out-dir:
 	@mkdir -p $(OUT_HOST)
+endif
 
 # Build output suffix from WITH variable (e.g., -hidden or -hidden-draft)
 OUTPUT_SUFFIX := $(if $(WITH),$(addprefix -,$(subst $(comma),-,$(WITH))),)

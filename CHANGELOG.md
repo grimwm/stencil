@@ -9,6 +9,15 @@ and the closed epics in `.beads/issues.jsonl` are the readable index.
 How the version gets bumped is written down in
 [AGENTS.md](AGENTS.md#cutting-a-release), not here.
 
+## 0.45.0
+
+- **Windows hosts no longer fail `make doc` at `out-dir`** (stn-i0u). The
+  target always ran `mkdir -p $(OUT_HOST)`. Under cmd that treats `-p` as a
+  directory name, so packages with `OUT_HOST := .` (the default) died with
+  `A subdirectory or file -p already exists` before any document built. The
+  Windows arm now uses PowerShell `New-Item -Force`; the POSIX arm keeps
+  `mkdir -p`. Regenerate to pick it up.
+
 ## 0.44.0
 
 - **Windows hosts no longer hang at Makefile parse on every target** (stn-ltm).
