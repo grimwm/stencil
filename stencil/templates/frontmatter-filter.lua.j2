@@ -220,7 +220,8 @@ end
 --- The hidden block a page carries when `ai_prompt` is set, or nil when it
 --- is absent or blank. A clipped element, not an HTML comment: a comment
 --- cannot contain `--`, and that sequence is exactly what a prompt is here
---- to carry. Print drops the element. The file still contains the text, so
+--- to carry. Print hides the element; html-to-pdf.js writes the same words
+--- into the PDF text stream without painting them. The file still contains the text, so
 --- a paste of the HTML and a select-all both pick it up.
 local function prompt_html(value)
   local kind = pandoc.utils.type(value)

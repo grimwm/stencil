@@ -568,6 +568,18 @@ const puppeteer = require("puppeteer");
 """
 
 
+def test_the_pdf_text_stream_carries_the_prompt(to_pdf):
+    """Chromium omits text it does not paint, and the print rule hides this
+    element, so a PDF built from the page alone has no trace of the prompt.
+    The driver adds it back as unpainted text. An extractor has to find the
+    words; a person looking at the page does not."""
+    result, pdf = to_pdf("doc", "prompt-pdf.md", text=document(f'title: "T"\n{PROMPT}'))
+    assert result.returncode == 0, result.stderr
+    text = "\n".join(page.extract_text() or "" for page in PdfReader(pdf).pages)
+    assert "-- HS6: Creates, Inserts, and Selects." in text
+    assert "don't add that line." in text
+
+
 def test_each_tab_keeps_its_own_copy_of_the_prompt(pdf_workspace):
     """Copying one tab has to include the prompt. A hidden pane is left out of
     a selection, so the copy that lives outside the panes is not enough."""
