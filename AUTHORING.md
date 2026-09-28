@@ -442,7 +442,7 @@ key two meanings is how the package name ended up being a document's course.
 
 #### `ai_prompt`
 
-Text the HTML file carries and the page does not show. A select-all of the rendered page copies it, and so does a paste of the file. A screen reader does not speak it, and print — including `make pdf` — drops it.
+Text the HTML file carries and the page does not show. A select-all of the rendered page copies it, and so does a paste of the file. On a document with tabbed sections, the same text is copied into every tab, so a copy of one tab still carries it. A screen reader does not speak it, and print — including `make pdf` — drops it.
 
 ```markdown
 ---
@@ -722,7 +722,7 @@ back to a stack on a narrow screen:
 ...
 ```
 
-Each linked heading and everything under it moves into its own tab pane. When printing, every pane is
+Each linked heading and everything under it moves into its own tab pane, and an `ai_prompt` is copied into every pane. When printing, every pane is
 shown and the tab bar is hidden, so a printed copy is complete.
 
 ## Writing a slide deck

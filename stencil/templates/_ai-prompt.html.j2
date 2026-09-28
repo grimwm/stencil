@@ -1,7 +1,10 @@
 {# `ai_prompt` from the document's front matter, already turned into one raw
-   HTML block by frontmatter-filter.lua. Emitted here, outside `$body$`, so
-   the tab and slide scripts never move it into a hidden pane. Absent or
-   blank leaves the key unset and this emits nothing. #}
+   HTML block by frontmatter-filter.lua. Emitted here, outside `$body$`, so a
+   page with no tabs still carries it and a select-all is not depending on a
+   pane. The tab script copies this node into every pane; a pane is
+   display:none until it is shown, and a copy of that pane would otherwise
+   miss a node that lives outside it. Absent or blank leaves the key unset
+   and this emits nothing. #}
 $if(ai-prompt-html)$
 $ai-prompt-html$
 $endif$

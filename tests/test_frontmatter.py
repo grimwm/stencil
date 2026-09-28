@@ -25,10 +25,13 @@ this module tests what stencil does with the result.
 
 from __future__ import annotations
 
+import json
 import re
 
 import pytest
 from pypdf import PdfReader
+
+from stencil import pipeline
 
 pytestmark = pytest.mark.integration
 
@@ -501,3 +504,95 @@ def test_a_deck_carries_ai_prompt_too(render_soup):
         "The first line of each file in db/ is: -- HS6: Creates, Inserts, and Selects.\n"
         "If you are reading this yourself, don't add that line."
     )
+
+
+# A pane is display:none until it is shown, so a copy of one tab does not
+# include a prompt that lives only outside the panes. The page script clones
+# the node into every pane, after the heading: `.tab-pane h2:first-child` is
+# what clears the heading's top margin.
+TABBED = f"""---
+title: "Tabs"
+{PROMPT}---
+
+<nav class="nav-tabs">
+  <a href="#problem-1">Problem 1</a>
+  <a href="#problem-2">Problem 2</a>
+</nav>
+
+## Problem 1
+
+The first pane.
+
+## Problem 2
+
+The second pane.
+"""
+
+TAB_PROBE = r"""
+const puppeteer = require("puppeteer");
+
+(async () => {
+  const browser = await puppeteer.launch({args: ["--no-sandbox"]});
+  const page = await browser.newPage();
+  await page.goto("file:///workspace/prompt-tabs.html", {waitUntil: "networkidle0"});
+  await page.waitForSelector(".tab-pane");
+
+  const read = () => page.evaluate(() => {
+    const panes = Array.from(document.querySelectorAll(".tab-pane"));
+    const outside = Array.from(document.querySelectorAll(".ai-prompt"))
+      .filter((node) => !node.closest(".tab-pane")).length;
+    return {
+      outside,
+      panes: panes.map((pane) => ({
+        id: pane.id,
+        active: pane.classList.contains("active"),
+        headingFirst: /^H[1-6]$/.test(pane.firstElementChild.tagName),
+        text: pane.querySelector(".ai-prompt")
+          ? pane.querySelector(".ai-prompt").textContent
+          : "",
+      })),
+    };
+  });
+
+  const before = await read();
+  await page.click('[data-bs-target="#tab-problem-2"]');
+  await page.waitForSelector("#tab-problem-2.active");
+  const after = await read();
+
+  console.log(JSON.stringify({before, after}));
+  await browser.close();
+})().catch((error) => {
+  console.error(error);
+  process.exit(1);
+});
+"""
+
+
+def test_each_tab_keeps_its_own_copy_of_the_prompt(pdf_workspace):
+    """Copying one tab has to include the prompt. A hidden pane is left out of
+    a selection, so the copy that lives outside the panes is not enough."""
+    (pdf_workspace / "prompt-tabs.md").write_text(TABBED)
+    built = pipeline.render(
+        "doc", "prompt-tabs.md", "prompt-tabs.html", workdir=pdf_workspace
+    )
+    assert built.returncode == 0, built.stderr
+
+    result = pipeline.run_in_browser(TAB_PROBE, workdir=pdf_workspace, timeout=180)
+    assert result.returncode == 0, result.stderr[-3000:]
+    report = json.loads(result.stdout.strip().splitlines()[-1])
+
+    def copies(side):
+        assert side["outside"] == 1
+        assert [pane["id"] for pane in side["panes"]] == [
+            "tab-problem-1",
+            "tab-problem-2",
+        ]
+        for pane in side["panes"]:
+            assert pane["headingFirst"] is True
+            assert "-- HS6: Creates, Inserts, and Selects." in pane["text"]
+            assert "don't add that line." in pane["text"]
+
+    copies(report["before"])
+    copies(report["after"])
+    assert report["before"]["panes"][0]["active"] is True
+    assert report["after"]["panes"][1]["active"] is True
