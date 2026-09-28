@@ -234,6 +234,7 @@ const {
   PDFArray,
   PDFHexString,
   PDFRawStream,
+  StandardFonts,
   decodePDFRawStream,
 } = fromTools("pdf-lib");
 
@@ -1155,6 +1156,79 @@ function markArtifacts(source, taggedXObjects) {
   return out.join("\n");
 }
 
+// A PDF literal or hex string showing `line` in `font`, which is WinAnsi.
+// A character the font cannot encode becomes a question mark rather than
+// failing the build: the prompt is an instruction, and a missing glyph would
+// otherwise throw away every other word with it.
+function showText(font, line) {
+  // encodeText returns a PDFHexString. Its asString() is the hex, without
+  // brackets. Uint8Array.from on that object yields nothing and does not
+  // throw, which is how the first version wrote an empty <> Tj.
+  const hexOf = (value) => {
+    try {
+      return font.encodeText(value).asString();
+    } catch (error) {
+      return null;
+    }
+  };
+  const whole = hexOf(line);
+  if (whole !== null) return `<${whole}> Tj`;
+  const parts = [];
+  for (const ch of line) parts.push(hexOf(ch) || "3f");
+  return `<${parts.join("")}> Tj`;
+}
+
+// The words of `prompt` on every page, in the text stream and not on the
+// paper. Chromium drops text it does not paint, which is why the print
+// stylesheet's display:none never reaches a reader of the file. Rendering
+// mode 3 is the PDF operator for "do not paint this text"; the Tj is still
+// there, so an extractor finds it. /Artifact keeps it out of the structure
+// tree a screen reader walks.
+async function appendInvisiblePrompt(pdf, prompt) {
+  const text = (prompt || "").replace(/\s+$/g, "").replace(/^\s+/g, "");
+  if (!text) return 0;
+  const font = await pdf.embedFont(StandardFonts.Helvetica);
+  const context = pdf.context;
+  const fontName = PDFName.of("StnPrompt");
+  let written = 0;
+
+  for (const page of pdf.getPages()) {
+    let resources = page.node.get(PDFName.of("Resources"));
+    if (!resources) {
+      resources = context.obj({});
+      page.node.set(PDFName.of("Resources"), resources);
+    }
+    resources = context.lookup(resources);
+    let fonts = resources.get(PDFName.of("Font"));
+    if (!fonts) {
+      fonts = context.obj({});
+      resources.set(PDFName.of("Font"), fonts);
+    }
+    fonts = context.lookup(fonts);
+    fonts.set(fontName, font.ref);
+
+    const ops = ["/Artifact BMC", "BT", "/StnPrompt 12 Tf", "3 Tr", "36 28 Td"];
+    text.split("\n").forEach((line, i) => {
+      if (i > 0) ops.push("0 -14 Td");
+      ops.push(showText(font, line));
+    });
+    ops.push("ET", "EMC");
+    const stream = context.register(context.stream(ops.join("\n") + "\n"));
+
+    const contents = page.node.Contents();
+    const resolved = contents ? context.lookup(contents) : null;
+    if (resolved instanceof PDFArray) {
+      resolved.push(stream);
+    } else if (contents) {
+      page.node.set(PDFName.of("Contents"), context.obj([contents, stream]));
+    } else {
+      page.node.set(PDFName.of("Contents"), stream);
+    }
+    written += 1;
+  }
+  return written;
+}
+
 async function markPageArtifacts(pdf) {
   const context = pdf.context;
   let wrapped = 0;
@@ -1253,6 +1327,7 @@ async function addPdfUaStructure(path, page) {
   const links = describeLinkAnnotations(pdf, page.links || []);
   const unicodes = repairToUnicode(pdf);
   const cells = tagEmptyTableCells(pdf, page.tables || []);
+  await appendInvisiblePrompt(pdf, page.prompt);
   const artifacts = await markPageArtifacts(pdf);
 
   const xmp = context.stream(xmpFor(pdf.getTitle()), {
@@ -1358,6 +1433,22 @@ async function main() {
 
     const domLinks = await collectLinkText(page);
     const domTables = await collectTableCells(page);
+    // textContent drops the break a <br> is, and innerText of a clipped node
+    // is not reliable. Walk the nodes so the PDF gets the lines the author wrote.
+    const prompt = await page.evaluate(() => {
+      const node = document.querySelector(".ai-prompt");
+      if (!node) return "";
+      const parts = [];
+      const walk = (n) => {
+        for (const child of n.childNodes) {
+          if (child.nodeType === Node.TEXT_NODE) parts.push(child.textContent);
+          else if (child.nodeName === "BR") parts.push("\n");
+          else walk(child);
+        }
+      };
+      walk(node);
+      return parts.join("").trim();
+    });
 
     await page.pdf({
       path: outputPath,
@@ -1378,7 +1469,7 @@ async function main() {
       tagged: true,
     });
 
-    return { links: domLinks, tables: domTables };
+    return { links: domLinks, tables: domTables, prompt };
   } finally {
     await browser.close();
   }

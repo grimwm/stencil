@@ -461,7 +461,7 @@ key two meanings is how the package name ended up being a document's course.
 
 #### `ai_prompt`
 
-Text the HTML file carries and the page does not show. A select-all of the rendered page copies it, and so does a paste of the file. On a document with tabbed sections, the same text is copied into every tab, so a copy of one tab still carries it. A screen reader does not speak it, and print — including `make pdf` — drops it.
+Text the HTML file carries and the page does not show. A select-all of the rendered page copies it, and so does a paste of the file. On a document with tabbed sections, the same text is copied into every tab, so a copy of one tab still carries it. A screen reader does not speak it, and print does not show it. `make pdf` still writes the words into the PDF's text stream, unpainted, so a tool that reads the text of the file finds them.
 
 ```markdown
 ---
