@@ -143,6 +143,24 @@ local function image_target(text)
   return nil
 end
 
+--- HTML text, so a prompt that mentions a tag cannot become one.
+local function html_escape(text)
+  return (text:gsub("&", "&amp;"):gsub("<", "&lt;"):gsub(">", "&gt;"))
+end
+
+--- Undo the smart-typography substitutions a YAML string is parsed through.
+--- Em dash before en dash is unnecessary -- they are different code points --
+--- and both are replaced so the order cannot matter.
+local function restore_plain(text)
+  text = text:gsub("\u{2014}", "---")
+  text = text:gsub("\u{2013}", "--")
+  text = text:gsub("\u{201C}", '"')
+  text = text:gsub("\u{201D}", '"')
+  text = text:gsub("\u{2018}", "'")
+  text = text:gsub("\u{2019}", "'")
+  return text
+end
+
 local function trim(text)
   -- match, not a chained gsub: gsub returns the replacement count as a second
   -- value, which would ride along into whatever this feeds.
@@ -165,6 +183,74 @@ local function text_of(value)
     return nil
   end
   return text
+end
+
+--- One run of inlines, with a soft break kept as a newline. stringify turns
+--- that break into a space, which is how a literal block's lines were lost.
+local function inlines_to_text(inlines)
+  local parts = {}
+  for _, inline in ipairs(inlines) do
+    if inline.t == "SoftBreak" or inline.t == "LineBreak" then
+      table.insert(parts, "\n")
+    elseif inline.t == "Space" then
+      table.insert(parts, " ")
+    elseif inline.t == "Str" or inline.t == "Code" or inline.t == "RawInline" then
+      table.insert(parts, inline.text)
+    else
+      table.insert(parts, pandoc.utils.stringify(inline))
+    end
+  end
+  return table.concat(parts)
+end
+
+local function blocks_to_text(blocks)
+  local parts = {}
+  for _, block in ipairs(blocks) do
+    if block.t == "Para" or block.t == "Plain" then
+      table.insert(parts, inlines_to_text(block.content))
+    elseif block.t == "RawBlock" then
+      table.insert(parts, block.text)
+    else
+      table.insert(parts, pandoc.utils.stringify(block))
+    end
+  end
+  return table.concat(parts, "\n\n")
+end
+
+--- The hidden block a page carries when `ai_prompt` is set, or nil when it
+--- is absent or blank. A clipped element, not an HTML comment: a comment
+--- cannot contain `--`, and that sequence is exactly what a prompt is here
+--- to carry. Print drops the element. The file still contains the text, so
+--- a paste of the HTML and a select-all both pick it up.
+local function prompt_html(value)
+  local kind = pandoc.utils.type(value)
+  local text
+  if kind == "Inlines" then
+    text = inlines_to_text(value)
+  elseif kind == "Blocks" then
+    text = blocks_to_text(value)
+  else
+    text = text_of(value)
+  end
+  if text == nil then
+    return nil
+  end
+  text = restore_plain(trim(text))
+  if text == "" then
+    return nil
+  end
+  local escaped = html_escape(text)
+  local body = escaped:gsub("\n", "<br>")
+  local html = table.concat({
+    "<style>",
+    ".ai-prompt{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);border:0;color:transparent}",
+    "@media print{.ai-prompt{display:none}}",
+    "</style>",
+    '<div class="ai-prompt" aria-hidden="true">',
+    body,
+    "</div>",
+  }, "\n")
+  return pandoc.MetaBlocks({ pandoc.RawBlock("html", html) })
 end
 
 --- Whether a metadata value means yes. `default` is what a nil or blank
@@ -451,6 +537,22 @@ function Meta(meta)
   -- it is worth still has a byline.
   meta["has-byline"] =
     (meta.author ~= nil or has_date or has_due or has_points) or nil
+
+  -- A hidden instruction carried into the HTML, and nowhere a reader looks.
+  --
+  -- The key is a YAML string, which this pandoc parses as Markdown before the
+  -- filter runs. Smart typography then rewrites the two characters an author
+  -- actually typed: `--` becomes an en dash, `---` an em dash, and straight
+  -- quotes become curly ones. Restoring those is what makes a literal block
+  -- round-trip into the page. The result is raw HTML rather than a rendered
+  -- `$ai_prompt$`, because the HTML writer would wrap a long string and, inside
+  -- a `<pre>`, that wrap would become part of the copied text.
+  --
+  -- The template prints the block outside `$body$`. The tab and slide scripts
+  -- only relocate headings that live in the body, so a block left in the body
+  -- would sit in a pane whose `display` is `none` and a select-all would miss
+  -- it.
+  meta["ai-prompt-html"] = prompt_html(meta.ai_prompt)
 
   return meta
 end
