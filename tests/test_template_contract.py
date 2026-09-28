@@ -131,6 +131,7 @@ CONTRACT = {
         "verapdf_image",
         "verapdf_script",
     },
+    "_ai-prompt.html.j2": set(),
     "_doc-body.html.j2": set(),
     # The self-download control reads nothing from the Jinja context --
     # everything it needs comes from the DOM at runtime, not from a variable

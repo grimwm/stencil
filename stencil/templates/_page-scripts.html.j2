@@ -258,6 +258,13 @@ $endif$
     const tabContent = document.createElement('div');
     tabContent.className = 'tab-content';
 
+    // One prompt lives outside the body so a page with no tabs still
+    // carries it. A pane is display:none until it is the one on screen, and
+    // a copy of that pane does not include a node that lives outside it.
+    // Queried once, before any clone exists: the clones are not in the
+    // document yet, and a later query would still find this node first.
+    const prompt = document.querySelector('.ai-prompt');
+
     // Find all heading sections that match our tab links
     links.forEach((link, i) => {
       const targetId = link.getAttribute('href').slice(1);
@@ -293,6 +300,12 @@ $endif$
 
       // Move elements into pane
       elements.forEach(e => pane.appendChild(e));
+      // After the heading, not in front of it. `.tab-pane h2:first-child`
+      // is what drops the heading's top margin, and a clone ahead of the
+      // heading would take that place.
+      if (prompt) {
+        pane.insertBefore(prompt.cloneNode(true), pane.firstChild.nextSibling);
+      }
       tabContent.appendChild(pane);
     });
 
