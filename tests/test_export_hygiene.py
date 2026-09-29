@@ -13,6 +13,14 @@ not an incident -- which is exactly why it needs a guard rather than a
 one-time scrub. The volume grows with every agent-written note, and nobody is
 going to re-run the check by hand.
 
+The hyphenated form is the same directory. Claude Code names its
+per-project temp folder by replacing slashes with hyphens, so the home
+path is stored as ``-Users-<user>-Documents-Repositories-stencil`` under
+``/private/tmp/claude-501/``. pytest's basetemp is ``pytest-of-<user>``.
+An ``ls -l`` paste carries the owner column. None of those match a
+slash-form home path, which is how they stayed in the export while the
+original guard was green.
+
 THE FIX IS IN THE DATABASE, NEVER IN THIS FILE'S SUBJECT. Editing
 `.beads/issues.jsonl` by hand desyncs it from the Dolt database and trips the
 pre-push drift guard, which is the whole reason that guard exists. When this
@@ -35,8 +43,30 @@ EXPORT = Path(__file__).parent.parent / ".beads" / "issues.jsonl"
 # ``'/Users/' + U``, where the username is a variable rather than a literal,
 # and a naive search for "/Users/" reports every one of them. The trailing
 # path-character class is what separates a real path from a string being
-# built: `/Users/wgrim/Documents` matches, `/Users/'+U` does not.
+# built: `/Users/someone/Documents` matches, `/Users/'+U` does not.
 HOME_PATH = re.compile(r"/(?:Users|home)/[a-z][a-z0-9_.-]{1,31}/[A-Za-z0-9._-]")
+
+# Claude Code's per-project temp directory is the same home path with
+# slashes turned into hyphens:
+# /Users/someone/Documents/Repositories/stencil ->
+# -Users-someone-Documents-Repositories-stencil
+# The snippet ``'-Users-' + U`` does not match, because a quote is not a
+# username character.
+MANGLED_HOME = re.compile(r"-Users-[a-z][a-z0-9_.-]{1,31}-")
+
+# pytest's basetemp is /tmp/pytest-of-<username>. The placeholder form
+# pytest-of-<user> does not match.
+PYTEST_USER_TMP = re.compile(r"pytest-of-[A-Za-z0-9_][A-Za-z0-9_.-]*")
+
+# An `ls -l` owner column pasted from a repro. `<user>` does not match.
+LS_OWNER = re.compile(r"  1 [a-z][a-z0-9_-]+  wheel")
+
+LEAKS = (
+    (HOME_PATH, "absolute home path"),
+    (MANGLED_HOME, "hyphenated home path"),
+    (PYTEST_USER_TMP, "pytest per-user basetemp"),
+    (LS_OWNER, "ls owner column"),
+)
 
 # Everything the tracker has legitimate reason to carry stays out of this:
 # a GitHub noreply address is the issue owner and is public by construction.
@@ -71,13 +101,17 @@ def test_no_absolute_home_path_reaches_the_public_export():
     offenders = {}
     for record in records():
         blob = json.dumps(record)
-        found = HOME_PATH.findall(blob)
+        found = []
+        for pattern, kind in LEAKS:
+            hits = pattern.findall(blob)
+            if hits:
+                found.append(f"{len(hits)} {kind}")
         if found:
-            offenders[record.get("id")] = len(found)
+            offenders[record.get("id")] = ", ".join(found)
 
     assert not offenders, (
-        "the committed export carries absolute home paths: "
-        + ", ".join(f"{i} ({n})" for i, n in sorted(offenders.items()))
+        "the committed export carries home-directory leaks: "
+        + "; ".join(f"{i} ({n})" for i, n in sorted(offenders.items()))
         + ". Fix the ISSUE and re-export -- `bd update <id> --notes ...`, or "
         "`bd import` for a field too large for argv -- never by editing "
         ".beads/issues.jsonl, which desyncs it from the database and trips "
@@ -94,6 +128,12 @@ def test_the_pattern_does_not_fire_on_a_path_being_built():
     assert not HOME_PATH.search("checked /home/ and /Users/ prefixes")
     assert HOME_PATH.search("/Users/someone/Documents/x.md")
     assert HOME_PATH.search("/home/someone/code/y.py")
+    assert not MANGLED_HOME.search("'-Users-' + U")
+    assert MANGLED_HOME.search("-Users-someone-Documents-Repositories-stencil")
+    assert not PYTEST_USER_TMP.search("pytest-of-<user>/pytest-38")
+    assert PYTEST_USER_TMP.search("pytest-of-someone/pytest-38")
+    assert not LS_OWNER.search("-rw-r--r--  1 <user>  wheel")
+    assert LS_OWNER.search("-rw-r--r--  1 someone  wheel")
 
 
 @pytest.mark.parametrize("pattern,what", SECRETS, ids=[w for _, w in SECRETS])
