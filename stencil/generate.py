@@ -1111,6 +1111,8 @@ def get_template_context(
     return context
 
 
+_BASE_COMPOSE = ".stencil/docker-compose.yml"
+
 _FORMAT_LOCKFILE = {
     "src": "format-package-lock.json.j2",
     "dest": ".stencil/format-package-lock.json",
@@ -1154,13 +1156,19 @@ def apply_capabilities(
         for fragment in cap.fragments:
             definitions.append(fragment)
             includes.append(fragment["dest"])
+    compose_files = [_BASE_COMPOSE]
+    for cap in matched:
+        fragment_dest = f".stencil/{cap.id}.compose.yml"
+        if any(item["dest"] == fragment_dest for item in cap.templates + cap.fragments):
+            compose_files.append(fragment_dest)
     definitions.insert(0, {"src": "Makefile.j2", "dest": "Makefile"})
     definitions.append(
-        {"src": "docker-compose.yml.j2", "dest": ".stencil/docker-compose.yml"}
+        {"src": "docker-compose.yml.j2", "dest": _BASE_COMPOSE}
     )
     definitions.append(dict(_FORMAT_LOCKFILE))
     context["capability_templates"] = definitions
     context["capability_includes"] = includes
+    context["compose_files"] = compose_files
 
 
 def declared_template_env_keys(config: dict) -> set[str]:

@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 
+from stencil import generate
 from stencil.capabilities import (
     Capability,
     builtin_capabilities,
@@ -223,6 +224,50 @@ def test_help_prints_the_compose_command_make_runs(generate_package):
     assert "--project-directory ." in text
     assert "-f .stencil/docker-compose.yml" in text
     assert text.count("--project-directory .") >= 2
+
+
+def test_compose_files_default_is_the_base_file_for_a_documents_only_package(
+    generate_package,
+):
+    package = generate_package(
+        {"packages": {"demo": {"package_type": "doc", "docs": ["Notes.md"]}}}
+    )
+    text = (package / "Makefile").read_text()
+    assert "COMPOSE_FILES ?= .stencil/docker-compose.yml\n" in text
+    assert "web.compose.yml" not in text
+
+
+@pytest.mark.parametrize("kind", ["templates", "fragments"])
+def test_compose_files_default_adds_each_matched_compose_fragment(
+    tmp_path, kind
+):
+    cap = tmp_path / "caps" / "web"
+    cap.mkdir(parents=True)
+    (cap / "capability.yaml").write_text(
+        "id: web\n"
+        "when: \"'web' in services\"\n"
+        f"{kind}:\n"
+        "  - src: web.compose.yml.j2\n"
+        "    dest: .stencil/web.compose.yml\n"
+    )
+    (tmp_path / "tpl").mkdir()
+    (tmp_path / "tpl" / "web.compose.yml.j2").write_text("services: {}\n")
+
+    config = {
+        "capabilities_dir": ["caps"],
+        "templates_dir": ["tpl"],
+        "packages": {"demo": {"package_type": "none", "services": ["web"]}},
+    }
+    # make_package does not pass config_dir, and capabilities_dir resolves
+    # from it, so drive generate_package directly.
+    env = generate.build_environment(config, tmp_path)
+    out = tmp_path / "out"
+    generate.generate_package(env, config, out, "demo", config_dir=tmp_path)
+    text = (out / "demo" / "Makefile").read_text()
+    assert (
+        "COMPOSE_FILES ?= .stencil/docker-compose.yml .stencil/web.compose.yml\n"
+        in text
+    )
 
 
 def test_stored_boolean_strings_evaluate_as_booleans():
