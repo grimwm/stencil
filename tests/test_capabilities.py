@@ -62,6 +62,13 @@ def test_missing_name_in_when_is_false():
     assert when_matches("grading.engine == 'playwright'", {}) is False
 
 
+def test_missing_name_in_when_is_none():
+    assert when_matches("grading is none", {}) is True
+    assert when_matches("grading == none", {}) is True
+    assert when_matches("grading > 1", {}) is False
+    assert when_matches("'web' in services", {}) is False
+
+
 def test_shape_expression_matches_services():
     assert when_matches("'web' in services", {"services": ["web"]}) is True
     assert when_matches("'web' in services", {"services": []}) is False

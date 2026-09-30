@@ -14,15 +14,15 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import yaml
-from jinja2 import ChainableUndefined, Environment, TemplateSyntaxError
+from jinja2 import Environment, TemplateSyntaxError, meta
 
 MANIFEST = "capability.yaml"
 
-# A ``when`` expression is a question about the context, and "no such name" is a
-# legitimate answer to it: a missing name is falsy and attribute access on it
-# does not raise. Template bodies keep StrictUndefined; this environment is only
-# for ``when``.
-_WHEN_ENV = Environment(undefined=ChainableUndefined)
+# A ``when`` expression is a question about the context. A name the package did
+# not set is ``None``, so ``grading is none`` is true and a comparison the
+# value cannot answer does not match. Template bodies keep StrictUndefined;
+# this environment is only for ``when``.
+_WHEN_ENV = Environment()
 
 
 @dataclass
@@ -110,12 +110,20 @@ def load_capabilities(roots: list[Path]) -> list[Capability]:
 def when_matches(expression: str, context: dict) -> bool:
     """Evaluate a capability's ``when`` expression against ``context``.
 
-    Missing names are ``None``, so ``grading.engine == 'x'`` is simply false
-    when there is no ``grading``. A Jinja syntax error raises ``ValueError``
-    naming the expression.
+    Missing names are ``None``, so ``grading is none`` is true and
+    ``grading.engine == 'x'`` is false when there is no ``grading``. A
+    comparison ``None`` cannot answer does not match. A Jinja syntax error
+    raises ``ValueError`` naming the expression.
     """
     try:
+        ast = _WHEN_ENV.parse("{{ " + expression + " }}")
         compiled = _WHEN_ENV.compile_expression(expression)
     except TemplateSyntaxError as e:
         raise ValueError(f"invalid when expression {expression!r}: {e}") from e
-    return bool(compiled(**context))
+    bound = dict(context)
+    for name in meta.find_undeclared_variables(ast):
+        bound.setdefault(name, None)
+    try:
+        return bool(compiled(**bound))
+    except TypeError:
+        return False
