@@ -1809,7 +1809,11 @@ def _collision_scope(
 
 
 def package_contexts(
-    config: dict, config_dir: Path | None = None, trailer: str | None = None
+    config: dict,
+    config_dir: Path | None = None,
+    trailer: str | None = None,
+    *,
+    capabilities_root: Path | None = None,
 ) -> dict[str, dict]:
     """Every package's template context, read before anything is written.
 
@@ -1843,10 +1847,22 @@ def package_contexts(
     pass -- skips it; a real path -- what validate_config's `gen` caller
     passes -- runs it.
 
+    capabilities_root is the directory `capabilities_dir` entries resolve
+    against, and it is SEPARATE from config_dir because the two answer
+    different questions on different commands. The brand check is gen-only
+    (decision d-96da97d8); reading the capability directory is not -- every
+    command that needs to know what a package generates needs it, or
+    `install` writes a managed .gitignore section missing those files and
+    `clean` refuses to remove them. Folding both onto config_dir would have
+    turned a missing logo into an `install` failure, so install and clean
+    pass this one and leave config_dir None. When it is omitted, config_dir
+    serves as the root, which keeps `gen`'s single-argument call correct.
+
     trailer is forwarded to _raise_config_problems verbatim (None keeps its
     gen/install default); see that function's docstring for why `clean`'s
     degraded path passes a different one.
     """
+    capability_root = capabilities_root if capabilities_root is not None else config_dir
     packages = config.get("packages", {})
     problems: list[str] = []
     contexts: dict[str, dict] = {}
@@ -1980,7 +1996,7 @@ def package_contexts(
 
     for package_id, package in packages.items():
         try:
-            context = get_template_context(package_id, config, config_dir)
+            context = get_template_context(package_id, config, capability_root)
         except ValueError as e:
             # Passed through verbatim, with NO class name and NO package
             # prefix of our own. Two separate reasons.
@@ -3998,7 +4014,7 @@ def package_entries(
     return entries
 
 
-def get_generated_files(config: dict) -> list[str]:
+def get_generated_files(config: dict, config_dir: Path | None = None) -> list[str]:
     """Determine what files stencil will generate based on templates config.
 
     All entries are prefixed with the package directory. Respects `when` conditions
@@ -4010,8 +4026,15 @@ def get_generated_files(config: dict) -> list[str]:
     blind to its files, with nothing said about either. Consumes
     package_contexts' own contexts rather than building them a second time
     with its own get_template_context loop, which would double the work
-    every `install` and `clean` do. No config_dir is passed: the brand
-    file-existence check is gen-only (see package_contexts).
+    every `install` and `clean` do.
+
+    config_dir is where `capabilities_dir` resolves from, and it reaches
+    package_contexts as `capabilities_root`, NOT as its config_dir -- the
+    brand file-existence check stays gen-only (see package_contexts and
+    brand_problem). Optional, because a library caller that has no config
+    file on disk still gets everything stencil itself writes; what it loses
+    is the files a consumer's own capability contributes, which cannot be
+    named without a root to resolve the directory against.
 
     Each package's own entries come from `package_entries` -- see there for
     why. The per-package manifest name is added on top, here, rather than in
@@ -4020,7 +4043,7 @@ def get_generated_files(config: dict) -> list[str]:
     entries = set()
     config_templates = config.get("templates", [])
 
-    contexts = package_contexts(config)
+    contexts = package_contexts(config, capabilities_root=config_dir)
 
     # stn-jl3. Every entry carries the top-level `output_dir` as well as the
     # package `dir`, because that is where `gen` and `clean` both resolve to
@@ -4035,8 +4058,7 @@ def get_generated_files(config: dict) -> list[str]:
     # path -- package_contexts above calls it -- so this adds no second
     # spelling of a rule that lives in two places already. It is NOT
     # `checked_output_base`, which returns a resolved ABSOLUTE path: useless
-    # as a gitignore prefix, and it needs a config_dir this function is not
-    # given.
+    # as a gitignore prefix, whatever config_dir this function was handed.
     #
     # Note what that means for `install` specifically: `_main`'s install
     # branch returns above `checked_output_base`, so on `install` this value
@@ -4859,7 +4881,10 @@ def _config_template_defs(config: dict, who: str, problems: list[str]) -> list[d
 
 
 def _config_derived_entries(
-    pids: list[str], config: dict, problems: list[str]
+    pids: list[str],
+    config: dict,
+    problems: list[str],
+    config_dir: Path | None = None,
 ) -> set[str]:
     """`package_entries` for each of `pids`, unioned -- the same union
     `get_generated_files` has always produced for packages sharing a `dir`
@@ -4869,13 +4894,20 @@ def _config_derived_entries(
     Every failure is a named problem rather than an exception, because this
     runs INSIDE `clean`, interleaved with the deleting. See
     `_config_template_defs` for the shape this exists to survive.
+
+    config_dir is the root `capabilities_dir` resolves against. It is not
+    optional in practice on the CLI path, and the failure without it is
+    louder than a short list: this set is also what the manifest is checked
+    against, and a manifest may narrow it but never widen it -- so a
+    capability file the config could not name made `clean` refuse the whole
+    package and remove nothing at all.
     """
     who = ", ".join(sorted(pids))
     config_templates = _config_template_defs(config, who, problems)
     entries: set[str] = set()
     for pid in pids:
         try:
-            context = get_template_context(pid, config)
+            context = get_template_context(pid, config, config_dir)
             entries |= package_entries(
                 pid, config["packages"][pid], context, config_templates
             )
@@ -4897,6 +4929,7 @@ def _clean_one_directory(
     config_readable: bool,
     dry_run: bool,
     problems: list[str],
+    config_dir: Path | None = None,
 ) -> None:
     """Clean everything under one resolved package directory, on behalf of
     every package_id in `members` that is configured with it (stn-2x4.8
@@ -5004,7 +5037,7 @@ def _clean_one_directory(
         # manifest.
         authorised_problems: list[str] = []
         authorised = _config_derived_entries(
-            sorted(full_member_set), config, authorised_problems
+            sorted(full_member_set), config, authorised_problems, config_dir
         )
         if authorised_problems:
             # THE DOCUMENTED DEGRADED TRADE, and with the whole-config gate
@@ -5139,7 +5172,9 @@ def _clean_one_directory(
         unnamed = [pid for pid in sorted(member_set) if pid != manifest_pkg]
         if unnamed:
             if config_readable:
-                entries |= _config_derived_entries(unnamed, config, entry_problems)
+                entries |= _config_derived_entries(
+                    unnamed, config, entry_problems, config_dir
+                )
             else:
                 # Nothing can name these files: not the manifest, which is
                 # another package's, and not the config, which does not
@@ -5210,7 +5245,9 @@ def _clean_one_directory(
     # Config-derived fallback, unioned across every selected package
     # sharing this directory.
     entry_problems: list[str] = []
-    entries = _config_derived_entries(sorted(member_set), config, entry_problems)
+    entries = _config_derived_entries(
+        sorted(member_set), config, entry_problems, config_dir
+    )
     removed = _remove_entries(
         representative_id, root, pkg_path, entries, dry_run, entry_problems
     )
@@ -5224,6 +5261,7 @@ def clean_generated(
     package_id: str | None = None,
     dry_run: bool = False,
     config_readable: bool = True,
+    config_dir: Path | None = None,
 ) -> list[str]:
     """Remove files and directories that stencil generates.
 
@@ -5250,6 +5288,12 @@ def clean_generated(
     either way, so the API cannot be made to delete from a config it never
     checked, and a mistyped package_id is answered as a mistyped package_id
     rather than with an unrelated sibling's problem.
+
+    `config_dir` is the root `capabilities_dir` resolves against, and the
+    brand file-existence check stays off without it (see package_contexts).
+    Omitting it narrows every config-derived removal list to what stencil
+    itself writes, which is both a short list and -- because a manifest is
+    checked against that same list -- a refusal to clean the package at all.
     """
     if package_id is not None and package_id not in config.get("packages", {}):
         print(f"Error: Unknown package {package_id}", file=sys.stderr)
@@ -5264,7 +5308,7 @@ def clean_generated(
         # caller that never checked this itself. On the CLI path this is a
         # cheap (microseconds) repeat of a check `_main` already made and
         # already knows succeeded.
-        package_contexts(config)
+        package_contexts(config, capabilities_root=config_dir)
 
     scope = _clean_scope(config, package_id, problems)
     if scope is None:
@@ -5306,6 +5350,7 @@ def clean_generated(
             config_readable,
             dry_run,
             problems,
+            config_dir,
         )
 
     return problems
@@ -5331,7 +5376,10 @@ def install_gitignore(config: dict, config_dir: Path, dry_run: bool = False):
     """
     gitignore_path = config_dir / ".gitignore"
 
-    entries = get_generated_files(config)
+    # Handed down, so the section names what a `capabilities_dir` capability
+    # writes as well as what stencil itself does. Without it those files are
+    # generated on every `gen` and ignored by nothing.
+    entries = get_generated_files(config, config_dir)
 
     # Build the stencil section
     stencil_section = f"{GITIGNORE_START}\n"
@@ -5652,7 +5700,11 @@ def _main():
         # lie about the run that just happened (architecture review D2).
         config_readable = True
         try:
-            package_contexts(config, trailer=CLEAN_DEGRADED_TRAILER)
+            package_contexts(
+                config,
+                trailer=CLEAN_DEGRADED_TRAILER,
+                capabilities_root=config_dir,
+            )
         except ValueError as e:
             config_readable = False
             print(f"Warning: {e}", file=sys.stderr)
@@ -5662,6 +5714,7 @@ def _main():
             package_id=package_id,
             dry_run=args.dry_run,
             config_readable=config_readable,
+            config_dir=config_dir,
         )
         if problems:
             # _safe on every line, for the reason _raise_config_problems runs

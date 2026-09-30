@@ -478,3 +478,111 @@ def test_the_cli_generates_from_capabilities_without_a_templates_list(tmp_path):
     assert result.returncode == 0, result.stderr
     assert (tmp_path / "out" / "demo" / ".stencil" / "extras.txt").is_file()
     assert (tmp_path / "out" / "demo" / "Makefile").is_file()
+
+
+# --- install and clean see what a capabilities_dir capability writes --------
+#
+# `capabilities_dir` is resolved against the config file's directory, so a
+# caller that does not hand that directory down loads only the built-ins.
+# `gen` passed it; `get_generated_files` did not, so every file a course's
+# own capability wrote was missing from the managed .gitignore section and
+# from the list `clean` removes -- generated on every `gen`, removed by
+# nothing, and offered to the author as untracked forever. That is stn-633's
+# failure mode reached by a different route, and it is why these tests drive
+# the real commands rather than asserting on the loader.
+
+
+def _extras_project_on_disk(tmp_path):
+    """`_extras_project`, written out as a config file `gen` can be run against."""
+    import yaml
+
+    config = _extras_project(tmp_path, {"extras": True})
+    config["output_dir"] = "out"
+    (tmp_path / ".config.yaml").write_text(yaml.safe_dump(config))
+    return config
+
+
+def test_get_generated_files_names_a_capabilities_dir_template(tmp_path):
+    config = _extras_project(tmp_path, {"extras": True})
+    assert ".stencil/extras.txt" in {
+        entry.removeprefix("demo/")
+        for entry in generate.get_generated_files(config, tmp_path)
+    }
+
+
+def test_get_generated_files_without_a_config_dir_still_names_the_builtins(tmp_path):
+    """The parameter is optional, and a caller that omits it keeps today's
+    answer for everything stencil itself writes -- only the capability
+    directory, which cannot be resolved without a root, drops out."""
+    config = _extras_project(tmp_path, {"extras": True})
+    entries = {entry.removeprefix("demo/") for entry in generate.get_generated_files(config)}
+    assert "Makefile" in entries
+    assert ".stencil/extras.txt" not in entries
+
+
+def test_install_ignores_a_capabilities_dir_template(tmp_path):
+    from tests.test_cli import run_cli
+
+    _extras_project_on_disk(tmp_path)
+    result = run_cli("install", cwd=tmp_path)
+    assert result.returncode == 0, result.stderr
+    assert "out/demo/.stencil/extras.txt" in (tmp_path / ".gitignore").read_text()
+
+
+def test_clean_removes_a_capabilities_dir_template_from_the_config(tmp_path):
+    """The manifest `gen` leaves behind already names this file, so the gap
+    only shows with the manifest gone -- which is exactly the state a
+    consumer reaches by cleaning a tree generated before manifests, or by
+    deleting one. Drive the config-derived fallback deliberately."""
+    from tests.test_cli import run_cli
+
+    _extras_project_on_disk(tmp_path)
+    assert run_cli("gen", "demo", cwd=tmp_path).returncode == 0
+
+    written = tmp_path / "out" / "demo" / ".stencil" / "extras.txt"
+    assert written.is_file()
+    (tmp_path / "out" / "demo" / generate.MANIFEST_NAME).unlink()
+
+    result = run_cli("clean", "--all", cwd=tmp_path)
+    assert result.returncode == 0, result.stderr
+    assert not written.exists()
+
+
+def test_clean_removes_a_capabilities_dir_template_from_the_manifest(tmp_path):
+    """The other half: with the manifest present, `clean` drives from it.
+    Both routes have to reach the same file, or which one runs decides
+    whether the file survives."""
+    from tests.test_cli import run_cli
+
+    _extras_project_on_disk(tmp_path)
+    assert run_cli("gen", "demo", cwd=tmp_path).returncode == 0
+
+    written = tmp_path / "out" / "demo" / ".stencil" / "extras.txt"
+    assert written.is_file()
+
+    result = run_cli("clean", "--all", cwd=tmp_path)
+    assert result.returncode == 0, result.stderr
+    assert not written.exists()
+
+
+def test_install_does_not_check_that_a_brand_image_exists(tmp_path):
+    """Regression guard for the way this was nearly fixed. `config_dir` in
+    `package_contexts` gates brand's file-existence check, which is
+    deliberately gen-only (decision d-96da97d8) -- so threading the config
+    directory in through THAT parameter would make `install` and `clean`
+    fail on a missing logo. The capability root is a separate question and
+    travels separately."""
+    import yaml
+
+    from tests.test_cli import run_cli
+
+    config = _extras_project(tmp_path, {"extras": True})
+    config["output_dir"] = "out"
+    config["brand"] = "logo.svg"
+    config["brand-alt"] = "SIU"
+    (tmp_path / ".config.yaml").write_text(yaml.safe_dump(config))
+
+    # logo.svg is not on disk anywhere.
+    result = run_cli("install", cwd=tmp_path)
+    assert result.returncode == 0, result.stderr
+    assert "not a file" not in result.stderr

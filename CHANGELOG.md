@@ -31,6 +31,15 @@ How the version gets bumped is written down in
 - **Breaking: config-level `template_env` is removed.** Defaults for names a
   shared template might read now live on the capability, once, as `optional`.
   Package-level `template_env` stays for keys no capability has taken over.
+- **`install` and `clean` see what a capability writes.** `capabilities_dir`
+  resolves against the config file's directory, and the list that feeds the
+  managed `.gitignore` section and `clean` was built without that directory,
+  so it named only stencil's own files. A capability's output was generated
+  on every `gen`, ignored by nothing, and left untracked forever -- and with
+  a manifest on disk `clean` refused the package outright, since a manifest
+  may narrow what the config authorises and never widen it. `get_generated_files`
+  and `clean_generated` take an optional config directory; the CLI passes it.
+  Brand's file-existence check stays `gen`-only.
 - **Breaking: the `COMPOSE_FILES` default path changed.** It was
   `docker-compose.yml`; it is now `.stencil/docker-compose.yml` plus one
   `.stencil/<id>.compose.yml` for each matched capability that ships one.
