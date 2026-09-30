@@ -44,12 +44,10 @@ else
 _compose_has_project_dir := $(shell $(DC) --help 2>&1 | grep -q -- --project-directory && echo yes)
 endif
 ifeq ($(_compose_has_project_dir),yes)
-STENCIL_COMPOSE_PROJECT :=  --project-directory .stencil
+STENCIL_COMPOSE = $(_stencil_pin_check)$(DC) --project-directory .stencil $(addprefix -f ,$(COMPOSE_FILES))
 else
-STENCIL_COMPOSE_PROJECT :=
+STENCIL_COMPOSE = $(_stencil_pin_check)$(DC) $(addprefix -f ,$(COMPOSE_FILES))
 endif
-
-STENCIL_COMPOSE = $(_stencil_pin_check)$(DC)$(STENCIL_COMPOSE_PROJECT) $(addprefix -f ,$(COMPOSE_FILES))
 
 override STENCIL_CONTAINER = $(firstword $(subst -, ,$(DC)))
 

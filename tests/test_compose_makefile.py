@@ -443,8 +443,8 @@ _DC_REFERENCE_RE = re.compile(r"\$[({]DC[)}]")
 _ALLOWED_DC_WINDOWS = (
     re.compile(r"\$\(firstword \$\(subst -, ,\$[({]DC[)}]\)\)"),
     re.compile(
-        r"^STENCIL_COMPOSE\s*=\s*(?:\$\(_stencil_pin_check\))?\s*\$[({]DC[)}]"
-        r"(?:\$\(STENCIL_COMPOSE_PROJECT\))?\s*"
+        r"^STENCIL_COMPOSE\s*=\s*(?:\$\(_stencil_pin_check\))?\s*\$[({]DC[)}]\s*"
+        r"(?:--project-directory\s+\.stencil\s+)?"
         r"\$\(addprefix -f ,\$\(COMPOSE_FILES\)\)\s*$",
         re.MULTILINE,
     ),
