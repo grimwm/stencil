@@ -117,7 +117,7 @@ _SCRUBBED_ENV_VARS = (
 
 # What every generated compose invocation must expand to, immediately after
 # the sentinel, once this task's fix lands.
-PIN = " --project-directory . -f .stencil/docker-compose.yml"
+PIN = " -f .stencil/docker-compose.yml"
 
 MAKEFILE_TEMPLATES = [{"src": "Makefile.j2"}, {"src": "docker-compose.yml.j2"}]
 
@@ -444,7 +444,6 @@ _ALLOWED_DC_WINDOWS = (
     re.compile(r"\$\(firstword \$\(subst -, ,\$[({]DC[)}]\)\)"),
     re.compile(
         r"^STENCIL_COMPOSE\s*=\s*(?:\$\(_stencil_pin_check\))?\s*\$[({]DC[)}]\s*"
-        r"--project-directory\s+\.\s*"
         r"\$\(addprefix -f ,\$\(COMPOSE_FILES\)\)\s*$",
         re.MULTILINE,
     ),

@@ -40,13 +40,19 @@ How the version gets bumped is written down in
   may narrow what the config authorises and never widen it. `get_generated_files`
   and `clean_generated` take an optional config directory; the CLI passes it.
   Brand's file-existence check stays `gen`-only.
+- **Breaking: relative Compose paths are from `.stencil/`, not `--project-directory`.**
+  Docker Compose v2 and podman-compose 1.x both resolve a relative bind from
+  the directory of the first Compose file. `--project-directory` is a
+  Compose v2 flag; podman-compose 1.5.0 rejects it, so `make pdf` and
+  `make format-md` exited 2 wherever `docker` is the podman shim. The
+  generated files mount the package root as `..` and do not pass the flag.
+  `make help` still prints the command `make` runs.
 - **Breaking: the `COMPOSE_FILES` default path changed.** It was
   `docker-compose.yml`; it is now `.stencil/docker-compose.yml` plus one
   `.stencil/<id>.compose.yml` for each matched capability that ships one.
-  Every Compose call also passes `--project-directory .`, so a relative path
-  in a Compose file still means the package root. `make help` prints the
-  exact command. A caller that passed `COMPOSE_FILES=docker-compose.yml` must
-  update the path.
+  Relative paths in those files are resolved from `.stencil/`, so the package
+  root is `..`. That is the directory both Docker Compose v2 and
+  podman-compose use when no project directory is passed.
 
 ## 0.45.0
 

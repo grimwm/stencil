@@ -221,9 +221,12 @@ def test_help_prints_the_compose_command_make_runs(generate_package):
         {"packages": {"demo": {"package_type": "doc", "docs": ["Notes.md"]}}}
     )
     text = (package / "Makefile").read_text()
-    assert "--project-directory ." in text
     assert "-f .stencil/docker-compose.yml" in text
-    assert text.count("--project-directory .") >= 2
+    assignment = next(
+        line for line in text.splitlines() if line.startswith("STENCIL_COMPOSE ")
+    )
+    assert "--project-directory" not in assignment
+    assert text.count("$(STENCIL_COMPOSE)") >= 2
 
 
 def test_compose_files_default_is_the_base_file_for_a_documents_only_package(

@@ -167,14 +167,17 @@ matched capability that ships `.stencil/<id>.compose.yml` adds it, in the same o
 
 ```makefile
 COMPOSE_FILES ?= .stencil/docker-compose.yml .stencil/reports.compose.yml
-STENCIL_COMPOSE = $(DC) --project-directory . $(addprefix -f ,$(COMPOSE_FILES))
+STENCIL_COMPOSE = $(DC) $(addprefix -f ,$(COMPOSE_FILES))
 ```
 
-`--project-directory .` makes every relative path in a Compose file mean the package root, not
-`.stencil/`. `make help` prints the command it will run, so what you read is what runs:
+Relative paths in those files are from `.stencil/`. The package root is `..`.
+Docker Compose v2 and podman-compose both resolve a relative bind from the
+first Compose file's directory, and podman-compose does not accept
+`--project-directory`, so the generated command does not pass it. `make help`
+prints the command it will run:
 
 ```text
-Compose, from this directory: docker compose --project-directory . -f .stencil/docker-compose.yml
+Compose, from this directory: docker compose -f .stencil/docker-compose.yml
 ```
 
 A zip built from `package_sources` that walks `.` leaves `.stencil/` out of the archive. Files

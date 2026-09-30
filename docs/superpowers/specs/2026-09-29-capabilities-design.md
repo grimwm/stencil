@@ -321,23 +321,22 @@ that has a compose fragment adds `.stencil/<id>.compose.yml`.
 
 ```makefile
 COMPOSE_FILES ?= .stencil/docker-compose.yml .stencil/web.compose.yml
-STENCIL_COMPOSE = $(DC) --project-directory . $(addprefix -f ,$(COMPOSE_FILES))
+STENCIL_COMPOSE = $(DC) $(addprefix -f ,$(COMPOSE_FILES))
 ```
 
-`--project-directory .` is required. Relative bind paths in a Compose file
-are resolved from the first file's directory, and without the flag a
-`./htdocs` mount written in `.stencil/docker-compose.yml` would look for
-`.stencil/htdocs`. The flag makes every relative path the package root,
-which is the directory `make` runs in. `DC` may be `docker compose` or
-`podman compose`, as it is today; both take `--project-directory` before
-the subcommand.
+Relative paths in those files are written from `.stencil/`, the directory of
+the first Compose file. That is the default project directory for Docker
+Compose v2 and the directory podman-compose joins bind sources onto.
+`--project-directory` is a Compose v2 flag; podman-compose 1.x rejects it, so
+the generated command does not pass it. The package root is `..`. `DC` may be
+`docker compose` or `podman compose`, as it is today.
 
 The generated Makefile opens with a comment, and `make help` prints one
 line, both built from `DC` and `COMPOSE_FILES` so they cannot drift from
 `STENCIL_COMPOSE`:
 
 ```text
-Compose, from this directory: docker compose --project-directory . -f .stencil/docker-compose.yml -f .stencil/web.compose.yml
+Compose, from this directory: docker compose -f .stencil/docker-compose.yml -f .stencil/web.compose.yml
 ```
 
 Typing `docker compose up` in the package directory does not see those
@@ -456,7 +455,7 @@ Loader tests, beside the existing generate tests:
   `include .stencil/documents.mk` and does not contain `grading.mk`; a
   grading package contains both; the grading fragment file is absent from
   the document package
-- Compose: `make help` prints `docker compose --project-directory . -f`
+- Compose: `make help` prints `docker compose -f`
   for each compose file the package generated, and that command is the
   same one `STENCIL_COMPOSE` runs
 - a SQL grading package's manifest has no `test.sh`
