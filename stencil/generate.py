@@ -1151,16 +1151,17 @@ def apply_capabilities(
     matched = matching(loaded, context)
     definitions: list[dict] = []
     includes: list[str] = []
+    compose_files = [_BASE_COMPOSE]
     for cap in matched:
+        compose_dest = f".stencil/{cap.id}.compose.yml"
         definitions.extend(cap.templates)
         for fragment in cap.fragments:
             definitions.append(fragment)
-            includes.append(fragment["dest"])
-    compose_files = [_BASE_COMPOSE]
-    for cap in matched:
-        fragment_dest = f".stencil/{cap.id}.compose.yml"
-        if any(item["dest"] == fragment_dest for item in cap.templates + cap.fragments):
-            compose_files.append(fragment_dest)
+            # A compose fragment is YAML for docker compose, not Make.
+            if fragment["dest"] != compose_dest:
+                includes.append(fragment["dest"])
+        if any(item["dest"] == compose_dest for item in cap.templates + cap.fragments):
+            compose_files.append(compose_dest)
     definitions.insert(0, {"src": "Makefile.j2", "dest": "Makefile"})
     definitions.append(
         {"src": "docker-compose.yml.j2", "dest": _BASE_COMPOSE}

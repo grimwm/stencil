@@ -268,6 +268,50 @@ def test_compose_files_default_adds_each_matched_compose_fragment(
         "COMPOSE_FILES ?= .stencil/docker-compose.yml .stencil/web.compose.yml\n"
         in text
     )
+    assert "include .stencil/web.compose.yml" not in text
+
+
+def test_compose_files_default_lists_matched_fragments_in_sorted_order(tmp_path):
+    for cap_id, when in (
+        ("web", "'web' in services"),
+        ("mysql", "'mysql' in services"),
+    ):
+        cap = tmp_path / "caps" / cap_id
+        cap.mkdir(parents=True)
+        (cap / "capability.yaml").write_text(
+            f"id: {cap_id}\n"
+            f"when: \"{when}\"\n"
+            "fragments:\n"
+            f"  - src: {cap_id}.compose.yml.j2\n"
+            f"    dest: .stencil/{cap_id}.compose.yml\n"
+        )
+    (tmp_path / "tpl").mkdir()
+    for cap_id in ("web", "mysql"):
+        (tmp_path / "tpl" / f"{cap_id}.compose.yml.j2").write_text("services: {}\n")
+
+    config = {
+        "capabilities_dir": ["caps"],
+        "templates_dir": ["tpl"],
+        "packages": {
+            "demo": {
+                "package_type": "none",
+                "docs": ["Notes.md"],
+                "services": ["web", "mysql"],
+            }
+        },
+    }
+    env = generate.build_environment(config, tmp_path)
+    out = tmp_path / "out"
+    generate.generate_package(env, config, out, "demo", config_dir=tmp_path)
+    text = (out / "demo" / "Makefile").read_text()
+    lines = [ln for ln in text.splitlines() if ln.startswith("COMPOSE_FILES ?=")]
+    assert lines == [
+        "COMPOSE_FILES ?= .stencil/docker-compose.yml"
+        " .stencil/mysql.compose.yml .stencil/web.compose.yml"
+    ]
+    assert "include .stencil/documents.mk" in text
+    assert "include .stencil/mysql.compose.yml" not in text
+    assert "include .stencil/web.compose.yml" not in text
 
 
 def test_stored_boolean_strings_evaluate_as_booleans():
