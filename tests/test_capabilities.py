@@ -2,7 +2,7 @@
 
 import pytest
 
-from stencil.capabilities import load_capabilities
+from stencil.capabilities import load_capabilities, when_matches
 
 
 def test_load_reads_id_when_and_templates(tmp_path):
@@ -55,3 +55,24 @@ def test_every_problem_is_listed_in_one_error(tmp_path):
     assert "id other" in message
     assert "duplicate id same" in message
     assert "plain" not in message
+
+
+def test_missing_name_in_when_is_false():
+    assert when_matches("grading", {}) is False
+    assert when_matches("grading.engine == 'playwright'", {}) is False
+
+
+def test_shape_expression_matches_services():
+    assert when_matches("'web' in services", {"services": ["web"]}) is True
+    assert when_matches("'web' in services", {"services": []}) is False
+
+
+def test_when_syntax_error_names_the_expression():
+    with pytest.raises(ValueError, match="when"):
+        when_matches("{% if %}", {})
+
+
+def test_stored_boolean_strings_evaluate_as_booleans():
+    # A YAML `when: true` is stored by the loader as the string "True".
+    assert when_matches("True", {}) is True
+    assert when_matches("False", {}) is False
