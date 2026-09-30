@@ -43,7 +43,7 @@ PANDOC_TAG = "docker.io/pandoc/core:3.10.0.0"
 
 # The pdf and check-access services share one image, built from this Dockerfile
 # in the generated package. Tests build it once and reuse the tag.
-BROWSER_DOCKERFILE = "Dockerfile.browser"
+BROWSER_DOCKERFILE = ".stencil/Dockerfile.browser"
 BROWSER_IMAGE_TAG = "localhost/stencil_browser:test"
 
 # ...unless something asks for a different one. Two suites running at once --
@@ -85,8 +85,8 @@ FORMAT_NPM_PINS = {
 
 # ---------------------------------------------------------------------------
 # The lockfiles the two installs above actually resolve through.
-BROWSER_LOCKFILE = "browser-package-lock.json"
-FORMAT_LOCKFILE = "format-package-lock.json"
+BROWSER_LOCKFILE = ".stencil/browser-package-lock.json"
+FORMAT_LOCKFILE = ".stencil/format-package-lock.json"
 
 # The `name` each manifest declares. It ends up in the lockfile's root entry,
 # so changing one means re-vendoring: `npm ci` compares them.
@@ -329,7 +329,7 @@ def read_lockfile(filename: str) -> str:
     generated file is byte-identical to the committed one while the template
     itself stays an ordinary text file ending in a newline.
     """
-    path = ASSETS_DIR / filename
+    path = ASSETS_DIR / Path(filename).name
     if not path.is_file():
         raise VendoredAssetError(
             f"npm lockfile not vendored: {filename}; "
@@ -463,7 +463,10 @@ def __dir__() -> list[str]:
     return sorted(set(globals()) | set(_LAZY_IMAGES))
 
 
-_TEMPLATE = {"doc": "html-template.html", "slide": "slide-template.html"}
+_TEMPLATE = {
+    "doc": ".stencil/html-template.html",
+    "slide": ".stencil/slide-template.html",
+}
 
 
 def annotated_argv(kind: str) -> list[tuple[str, str | None]]:
@@ -479,19 +482,19 @@ def annotated_argv(kind: str) -> list[tuple[str, str | None]]:
         ("--standalone", None),
         (f"--template={_TEMPLATE[kind]}", None),
         ("--fail-if-warnings", _FAIL_IF_WARNINGS),
-        ("--lua-filter=frontmatter-filter.lua", _FRONTMATTER_FIRST),
-        ("--lua-filter=hidden-filter.lua", None),
+        ("--lua-filter=.stencil/frontmatter-filter.lua", _FRONTMATTER_FIRST),
+        ("--lua-filter=.stencil/hidden-filter.lua", None),
         (
             "--citeproc",
             _CITEPROC_BEFORE_SLIDES if kind == "slide" else _CITEPROC_AFTER_HIDDEN,
         ),
-        ("--lua-filter=mermaid-figure-filter.lua", None),
-        ("--lua-filter=figure-name-filter.lua", _FIGURE_NAME_AFTER_MERMAID),
-        ("--lua-filter=embed-images.lua", None),
+        ("--lua-filter=.stencil/mermaid-figure-filter.lua", None),
+        ("--lua-filter=.stencil/figure-name-filter.lua", _FIGURE_NAME_AFTER_MERMAID),
+        ("--lua-filter=.stencil/embed-images.lua", None),
     ]
     if kind == "slide":
-        argv.append(("--lua-filter=slide-sections.lua", None))
-    argv.append(("--lua-filter=code-bundle-filter.lua", _CODE_BUNDLE_AFTER_HIDDEN))
+        argv.append(("--lua-filter=.stencil/slide-sections.lua", None))
+    argv.append(("--lua-filter=.stencil/code-bundle-filter.lua", _CODE_BUNDLE_AFTER_HIDDEN))
     argv.append(("--mathml", None))
     return argv
 

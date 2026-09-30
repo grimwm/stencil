@@ -227,7 +227,7 @@ LANG_CONFIG = {
 
 def generated_lang_default(generate_package, config) -> str:
     """The language the template falls back to when front matter names none."""
-    text = (generate_package(config) / "html-template.html").read_text()
+    text = (generate_package(config) / ".stencil" / "html-template.html").read_text()
     match = re.search(r'<html lang="\$if\(lang\)\$\$lang\$\$else\$([^"$]*)\$', text)
     assert match, "the lang attribute is not in the shape these tests assume"
     return match.group(1)
@@ -277,9 +277,9 @@ def test_a_package_dir_is_not_read_as_a_text_direction(generate_package):
     # make_package returns out/<package_id> and does not follow `dir:`, so
     # find the template wherever generation actually put it.
     pkg = generate_package(config)
-    generated = list(pkg.parent.rglob("html-template.html"))
+    generated = list((pkg.parent / "rtl" / ".stencil").glob("html-template.html"))
     assert len(generated) == 1, f"expected one generated template, got {generated}"
     text = generated[0].read_text()
 
     assert 'dir="rtl"' not in text, "a package's output dir leaked into <html dir>"
-    assert generated[0].parent.name == "rtl", "`dir:` should still pick the folder"
+    assert generated[0].parent.parent.name == "rtl", "`dir:` should still pick the folder"

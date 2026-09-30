@@ -240,7 +240,7 @@ def css(generate_package) -> str:
         ("html-template.html", "/* Document title"),
         ("slide-template.html", "/* --- Deck layout ---"),
     ):
-        text = (package / name).read_text()
+        text = (package / ".stencil" / name).read_text()
         sheets.append(text[text.index(marker) :])
     return "\n".join(sheets)
 
@@ -328,7 +328,7 @@ def config_logo(tmp_path):
 def test_a_config_wide_name_reaches_the_filter(generate_package):
     lua = (
         generate_package(brand_config(brand="Southern Illinois University"))
-        / "frontmatter-filter.lua"
+        / ".stencil" / "frontmatter-filter.lua"
     ).read_text()
     assert '"Southern Illinois University"' in lua
 
@@ -336,7 +336,7 @@ def test_a_config_wide_name_reaches_the_filter(generate_package):
 def test_a_package_brand_beats_the_config_wide_one(generate_package):
     config = brand_config(brand="Config Wide")
     config["packages"]["demo"]["brand"] = "Package Own"
-    lua = (generate_package(config) / "frontmatter-filter.lua").read_text()
+    lua = (generate_package(config) / ".stencil" / "frontmatter-filter.lua").read_text()
     assert '"Package Own"' in lua
     assert "Config Wide" not in lua
 
@@ -347,12 +347,12 @@ def test_a_package_brand_does_not_inherit_the_config_alt(generate_package):
     name, which is worse than the build failing."""
     config = brand_config(brand="Config Wide", **{"brand-alt": "Config Alt"})
     config["packages"]["demo"]["brand"] = "Package Own"
-    lua = (generate_package(config) / "frontmatter-filter.lua").read_text()
+    lua = (generate_package(config) / ".stencil" / "frontmatter-filter.lua").read_text()
     assert "Config Alt" not in lua
 
 
 def test_nothing_configured_leaves_the_fallback_nil(generate_package):
-    lua = (generate_package(brand_config()) / "frontmatter-filter.lua").read_text()
+    lua = (generate_package(brand_config()) / ".stencil" / "frontmatter-filter.lua").read_text()
     assert "local CONFIG_BRAND = nil" in lua
 
 
@@ -377,7 +377,7 @@ def test_the_two_fallbacks_are_separate_local_statements(generate_package, confi
     rendered -- the failure was invisible from the outside, which is the only
     reason it is worth a test of its own.
     """
-    lua = (generate_package(brand_config(**config)) / "frontmatter-filter.lua").read_text()
+    lua = (generate_package(brand_config(**config)) / ".stencil" / "frontmatter-filter.lua").read_text()
     # Comments stripped: the file explains this bug by name, so a plain
     # substring search finds the explanation rather than the defect.
     code = "\n".join(
@@ -412,7 +412,7 @@ def test_the_filter_names_the_copy_not_the_source_path(generate_package, config_
                 brand=f"file://img/{CONFIG_LOGO}", **{"brand-alt": "SIU"}
             )
         )
-        / "frontmatter-filter.lua"
+        / ".stencil" / "frontmatter-filter.lua"
     ).read_text()
     assert f'"{CONFIG_LOGO}"' in lua
     assert "img/" not in lua

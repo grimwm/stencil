@@ -669,9 +669,10 @@ def test_a_corrupt_vendored_lockfile_is_not_collected_as_a_config_problem(
     monkeypatch.setattr(pipeline, "ASSETS_DIR", tmp_path)
     for name in (pipeline.BROWSER_LOCKFILE, pipeline.FORMAT_LOCKFILE):
         shutil.copy(
-            Path(pipeline.__file__).parent / "assets" / name, tmp_path / name
+            Path(pipeline.__file__).parent / "assets" / Path(name).name,
+            tmp_path / Path(name).name,
         )
-    corrupt = tmp_path / pipeline.BROWSER_LOCKFILE
+    corrupt = tmp_path / Path(pipeline.BROWSER_LOCKFILE).name
     corrupt.write_text(corrupt.read_text() + "\n")
 
     cfg = {"packages": {"demo": package(docs=["README.md"])}}

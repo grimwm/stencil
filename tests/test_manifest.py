@@ -461,7 +461,7 @@ def test_the_managed_entries_stay_unprefixed_when_output_dir_is_unset():
     expected = {
         f"demo/{MANIFEST_NAME}",
         "demo/Makefile",
-        "demo/format-package-lock.json",
+        "demo/.stencil/format-package-lock.json",
     }
 
     no_output_dir = {"templates": templates, "packages": copy.deepcopy(packages)}

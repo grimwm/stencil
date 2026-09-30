@@ -8,6 +8,3 @@
 .PHONY: {{ phony | join(' ') }}
 
 {% include 'Makefile-doc.j2' %}
-{% include 'Makefile-pkg.j2' %}
-
-clean: clean-pkg

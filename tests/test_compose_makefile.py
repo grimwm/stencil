@@ -243,7 +243,9 @@ def test_every_compose_invocation_names_its_file(
     and a `${DC}`-spelled or otherwise unpinned mutation of the Windows arm
     would pass this sweep with 566 tests green and nothing here to say so.
     """
-    makefile_text = (compose_driving_package / "Makefile").read_text()
+    makefile_text = (compose_driving_package / "Makefile").read_text() + (
+        compose_driving_package / ".stencil" / "documents.mk"
+    ).read_text()
     targets = derived_targets(makefile_text)
     assert targets, "derived no targets from the help pattern -- derivation is broken"
 
@@ -633,7 +635,9 @@ def test_the_pinned_file_is_one_the_package_actually_has(compose_driving_package
     out of the config, which is a `stencil/generate.py` change and outside
     this ticket. STENCIL.md says so instead -- see stn-144.4.
     """
-    makefile_text = (compose_driving_package / "Makefile").read_text()
+    makefile_text = (compose_driving_package / "Makefile").read_text() + (
+        compose_driving_package / ".stencil" / "documents.mk"
+    ).read_text()
 
     match = re.search(r"^COMPOSE_FILES\s*\?=\s*(.+)$", makefile_text, re.MULTILINE)
     assert match, "no COMPOSE_FILES default in the generated Makefile yet"
@@ -1676,7 +1680,9 @@ def test_windows_build_date_default_does_not_invoke_cmd_date(pages_package):
     `date +%F`. Measured: both defaults appear in the generated Makefile, and
     the Windows one never spells `date +`.
     """
-    text = (pages_package / "Makefile").read_text()
+    text = (pages_package / "Makefile").read_text() + (
+        pages_package / ".stencil" / "documents.mk"
+    ).read_text()
     defaults = [
         line for line in text.splitlines() if line.startswith("BUILD_DATE ?=")
     ]

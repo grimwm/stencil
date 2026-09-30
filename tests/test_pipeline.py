@@ -29,7 +29,7 @@ def test_citeproc_runs_after_hidden_filter(kind):
     so hidden-filter has to have removed the presenter-only content first.
     """
     argv = pipeline.pandoc_argv(kind)
-    assert index_of(argv, "--lua-filter=hidden-filter.lua") < index_of(
+    assert index_of(argv, "--lua-filter=.stencil/hidden-filter.lua") < index_of(
         argv, "--citeproc"
     )
 
@@ -43,7 +43,7 @@ def test_citeproc_runs_before_slide_sections():
     """
     argv = pipeline.pandoc_argv("slide")
     assert index_of(argv, "--citeproc") < index_of(
-        argv, "--lua-filter=slide-sections.lua"
+        argv, "--lua-filter=.stencil/slide-sections.lua"
     )
 
 
@@ -55,16 +55,25 @@ def test_warnings_are_fatal(kind):
 
 def test_slide_sections_is_deck_only():
     """Running the slide grouper over a flowing document would wrap it in cards."""
-    assert "--lua-filter=slide-sections.lua" not in pipeline.pandoc_argv("doc")
-    assert "--lua-filter=slide-sections.lua" in pipeline.pandoc_argv("slide")
+    assert "--lua-filter=.stencil/slide-sections.lua" not in pipeline.pandoc_argv("doc")
+    assert "--lua-filter=.stencil/slide-sections.lua" in pipeline.pandoc_argv("slide")
 
 
 @pytest.mark.parametrize(
     ("kind", "template"),
-    [("doc", "html-template.html"), ("slide", "slide-template.html")],
+    [
+        ("doc", ".stencil/html-template.html"),
+        ("slide", ".stencil/slide-template.html"),
+    ],
 )
 def test_each_kind_uses_its_own_template(kind, template):
     assert f"--template={template}" in pipeline.pandoc_argv(kind)
+
+
+def test_pandoc_filters_live_under_dot_stencil():
+    argv = pipeline.pandoc_argv("doc")
+    assert "--template=.stencil/html-template.html" in argv
+    assert "--lua-filter=.stencil/frontmatter-filter.lua" in argv
 
 
 def test_unknown_kind_is_rejected():
@@ -85,7 +94,7 @@ def test_the_pdf_converter_defers_to_the_print_stylesheet(doc_package):
     The behaviour it stands for is covered by the geometry tests in
     test_pdf.py, which do fail when an @page block is edited.
     """
-    script = (doc_package / "html-to-pdf.js").read_text()
+    script = (doc_package / ".stencil" / "html-to-pdf.js").read_text()
 
     assert "preferCSSPageSize: true" in script
     assert "printBackground: true" in script, (
@@ -109,8 +118,8 @@ def test_the_ready_flag_is_set_by_the_page_and_waited_on_by_the_converter(
     hangs for the full 120s timeout and then reports a timeout, which says
     nothing about the cause. That is why this is a test and not a comment.
     """
-    page_scripts = (doc_package / "html-template.html").read_text()
-    converter = (doc_package / "html-to-pdf.js").read_text()
+    page_scripts = (doc_package / ".stencil" / "html-template.html").read_text()
+    converter = (doc_package / ".stencil" / "html-to-pdf.js").read_text()
 
     assert f"{READY_FLAG} = true" in page_scripts, (
         "the page never sets the ready flag, so every PDF build will hang "
@@ -180,7 +189,9 @@ def test_the_makefile_checks_for_the_image_compose_actually_runs(doc_package):
     green after a fix that repaired only the POSIX half, leaving every Windows
     consumer pulling on every build.
     """
-    makefile = (doc_package / "Makefile").read_text()
+    makefile = (doc_package / "Makefile").read_text() + (
+        doc_package / ".stencil" / "documents.mk"
+    ).read_text()
 
     # The negative assertion is what makes this un-skippable: a rewrite that
     # merely added an inspect-based branch somewhere while leaving the other

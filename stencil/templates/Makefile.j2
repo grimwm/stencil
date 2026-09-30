@@ -2,3 +2,6 @@
 {% for inc in capability_includes %}
 include {{ inc }}
 {% endfor %}
+{% include 'Makefile-pkg.j2' %}
+
+clean: clean-pkg

@@ -149,7 +149,9 @@ def test_a_step_that_produces_nothing_is_an_error_and_leaves_no_stamp(hooked):
 
 def test_doc_and_slide_depend_on_the_hook(hooked):
     """The edge that was missing. `make doc` has to pull the step in."""
-    makefile = (hooked / "Makefile").read_text()
+    makefile = (hooked / "Makefile").read_text() + (
+        hooked / ".stencil" / "documents.mk"
+    ).read_text()
     doc = next(l for l in makefile.splitlines() if l.startswith("doc:"))
     slide = next(l for l in makefile.splitlines() if l.startswith("slide:"))
     assert "pre-build" in doc, doc
@@ -158,7 +160,9 @@ def test_doc_and_slide_depend_on_the_hook(hooked):
 
 def test_a_package_without_the_key_gets_no_hook_machinery(doc_package):
     """Every existing package declares no pre_build and must be unchanged."""
-    makefile = (doc_package / "Makefile").read_text()
+    makefile = (doc_package / "Makefile").read_text() + (
+        doc_package / ".stencil" / "documents.mk"
+    ).read_text()
     assert "pre-build" not in makefile
     assert ".stencil-pre-build" not in makefile
 

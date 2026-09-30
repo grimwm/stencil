@@ -53,6 +53,7 @@ import json
 import re
 import shutil
 import subprocess
+from pathlib import Path
 
 import pytest
 import yaml
@@ -88,7 +89,7 @@ LOCKFILES = [
 
 
 def lockfile(name: str) -> dict:
-    return json.loads((ASSETS / name).read_text())
+    return json.loads((ASSETS / Path(name).name).read_text())
 
 
 # ---------------------------------------------------------------------------
@@ -193,11 +194,12 @@ def test_the_install_scan_does_not_read_comments(tmp_path):
     actually went wrong before -- a commented example satisfied the old
     exact-version property while the real line went unchecked.
     """
-    (tmp_path / "Dockerfile.browser").write_text(
+    (tmp_path / ".stencil").mkdir()
+    (tmp_path / ".stencil" / "Dockerfile.browser").write_text(
         "# This used to run npm install pa11y, which left the tree floating.\n"
         "RUN cd /opt/tools && npm ci --ignore-scripts\n"
     )
-    (tmp_path / "html-to-pdf.js").write_text(
+    (tmp_path / ".stencil" / "html-to-pdf.js").write_text(
         "// npm install is not what happens here\nconst x = 1;\n"
     )
     lines = [line for _, line in code_lines(tmp_path)]
@@ -348,7 +350,7 @@ def test_every_image_the_scaffolding_pulls_is_pinned_by_digest(doc_package):
     }
     assert named, "no compose service pulls an image any more"
 
-    dockerfile = (doc_package / "Dockerfile.browser").read_text()
+    dockerfile = (doc_package / ".stencil" / "Dockerfile.browser").read_text()
     from_lines = [
         line.removeprefix("FROM ").strip()
         for line in dockerfile.splitlines()
@@ -358,7 +360,9 @@ def test_every_image_the_scaffolding_pulls_is_pinned_by_digest(doc_package):
     for index, image in enumerate(from_lines):
         named[f"Dockerfile.browser FROM #{index}"] = image
 
-    makefile = (doc_package / "Makefile").read_text()
+    makefile = (doc_package / "Makefile").read_text() + (
+        doc_package / ".stencil" / "documents.mk"
+    ).read_text()
     call_sites = re.findall(r"\$\(call ensure_image,([^,]+),", makefile)
     assert call_sites, "no ensure_image call sites in the generated Makefile"
     for index, image in enumerate(call_sites):
@@ -491,7 +495,7 @@ def test_the_browser_image_installs_from_the_pinned_manifest_and_lockfile(doc_pa
     """The rendered text is the constants, not a copy of them -- so bumping a
     pin is one edit, and a test cannot go on asserting a version the image
     stopped installing."""
-    dockerfile = (doc_package / "Dockerfile.browser").read_text()
+    dockerfile = (doc_package / ".stencil" / "Dockerfile.browser").read_text()
     manifest = pipeline.npm_manifest(
         pipeline.BROWSER_MANIFEST_NAME, pipeline.BROWSER_NPM_PINS
     )
@@ -521,11 +525,11 @@ def test_the_pdf_driver_is_baked_into_the_image_at_the_pinned_path(doc_package):
     an image whose pdf service cannot start, and `Cannot find module` is a poor
     way to find that out.
     """
-    dockerfile = (doc_package / "Dockerfile.browser").read_text()
+    dockerfile = (doc_package / ".stencil" / "Dockerfile.browser").read_text()
     compose = yaml.safe_load((doc_package / "docker-compose.yml").read_text())
 
     assert (
-        f"COPY {pipeline.BROWSER_SCRIPT} {pipeline.BROWSER_SCRIPT_PATH}" in dockerfile
+        f"COPY .stencil/{pipeline.BROWSER_SCRIPT} {pipeline.BROWSER_SCRIPT_PATH}" in dockerfile
     ), "Dockerfile.browser no longer bakes the pdf driver into the image"
     assert compose["services"]["pdf"]["entrypoint"] == [
         "node",
@@ -533,7 +537,7 @@ def test_the_pdf_driver_is_baked_into_the_image_at_the_pinned_path(doc_package):
     ], "the pdf service is not running the baked script"
 
     # AFTER the install, or every edit to the script pays for `npm ci` again.
-    assert dockerfile.index("COPY " + pipeline.BROWSER_SCRIPT) > dockerfile.index(
+    assert dockerfile.index("COPY .stencil/" + pipeline.BROWSER_SCRIPT) > dockerfile.index(
         f"RUN cd {pipeline.BROWSER_TOOLS_DIR} && npm ci"
     ), "the COPY was moved above npm ci, which invalidates the install layer"
 
@@ -574,7 +578,7 @@ def test_the_baked_scripts_manifest_cannot_reopen_either_defect(doc_package):
     # moves itself out of the mount, these are the only reason a RELATIVE
     # argument from the generated Makefile (OUT := . for a package with no
     # output_dir) still resolves inside it.
-    dockerfile = (doc_package / "Dockerfile.browser").read_text()
+    dockerfile = (doc_package / ".stencil" / "Dockerfile.browser").read_text()
     compose = yaml.safe_load((doc_package / "docker-compose.yml").read_text())
     assert dockerfile.rstrip().endswith("WORKDIR /workspace"), (
         "Dockerfile.browser no longer leaves the image's working directory in "
@@ -1475,7 +1479,7 @@ def test_a_package_that_renders_nothing_still_gets_no_browser_lockfile(
             "packages": {"demo": {"name": "Demo", "package_type": "none"}},
         }
     )
-    assert not (package / "Dockerfile.browser").exists()
+    assert not (package / ".stencil" / "Dockerfile.browser").exists()
     assert not (package / pipeline.BROWSER_LOCKFILE).exists()
     assert (package / pipeline.FORMAT_LOCKFILE).is_file()
 
@@ -1489,7 +1493,9 @@ def test_the_generated_lockfile_is_the_committed_one(doc_package, filename):
     a reviewer read. A rendering that reformatted it would still work and would
     make the two impossible to compare.
     """
-    assert (doc_package / filename).read_bytes() == (ASSETS / filename).read_bytes()
+    assert (doc_package / filename).read_bytes() == (
+        ASSETS / Path(filename).name
+    ).read_bytes()
 
 
 # ---------------------------------------------------------------------------
@@ -1999,7 +2005,7 @@ def _copy_rendered_page(pdf_workspace, dest):
     node_modules layout) is disturbed by whatever gets planted in ``dest``.
     """
     shutil.copy2(pdf_workspace / "document.html", dest / "document.html")
-    shutil.copy2(pdf_workspace / "html-to-pdf.js", dest / "html-to-pdf.js")
+    shutil.copy2(pdf_workspace / ".stencil" / "html-to-pdf.js", dest / ".stencil" / "html-to-pdf.js")
 
 
 def _plant_decoy(workdir, name, marker):

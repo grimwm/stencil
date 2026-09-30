@@ -138,6 +138,6 @@ RUN for theme in light dark; do \
         '}' > "/opt/pa11y-$theme.json"; \
     done
 
-COPY html-to-pdf.js {{ browser_tools_dir }}/html-to-pdf.js
+COPY .stencil/html-to-pdf.js {{ browser_tools_dir }}/html-to-pdf.js
 
 WORKDIR /workspace
