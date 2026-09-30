@@ -157,6 +157,23 @@ def test_zip_hands_a_directory_over_whole(makefile):
     assert "zip -r $(PKG) $(PKG_SOURCES)" in text
 
 
+def test_zip_of_dot_excludes_dot_stencil(generate_package):
+    package = generate_package(
+        {
+            "packages": {
+                "demo": {
+                    "package_type": "zip",
+                    "package_name": "demo.zip",
+                    "package_sources": ["."],
+                }
+            }
+        }
+    )
+    text = (package / "Makefile").read_text()
+    assert ".stencil" in text
+    assert "-x" in text or "--exclude" in text
+
+
 # --- the zip pkg target, and the hidden .git it has to carry ----------------
 #
 # A course that grades the repository needs the repository in the submission,

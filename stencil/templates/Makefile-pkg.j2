@@ -66,13 +66,15 @@ ifeq ($(OS),Windows_NT)
 # `zip -r` below already did, and a loud failure wherever it cannot be.
 pkg: ## Create submission zip file
 	@echo Creating submission zip file...
-	tar --format zip -cf "$(PKG)" $(PKG_SOURCES)
+	tar --format zip -cf "$(PKG)" $(PKG_SOURCES){% if '.' in package_sources %} --exclude=.stencil{% endif %}
+
 	@echo Created $(PKG)
 	@echo Upload $(PKG) to the course website.
 else
 pkg: ## Create submission zip file
 	@echo "Creating submission zip file..."
-	zip -r $(PKG) $(PKG_SOURCES)
+	zip -r $(PKG) $(PKG_SOURCES){% if '.' in package_sources %} -x '.stencil/*'{% endif %}
+
 	@echo "Created $(PKG)"
 	@echo "Upload $(PKG) to the course website."
 endif
