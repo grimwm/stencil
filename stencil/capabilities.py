@@ -195,6 +195,42 @@ def check_fields(capability: Capability, block: dict) -> list[str]:
     return problems
 
 
+def matching(capabilities: list[Capability], context: dict) -> list[Capability]:
+    """Return the capabilities whose ``when`` is true for ``context``.
+
+    ``documents`` comes first when it matches. Every other match follows,
+    sorted by id. A capability that does not match is absent, and that
+    absence is not an error.
+    """
+    matched = [cap for cap in capabilities if when_matches(cap.when, context)]
+    documents = [cap for cap in matched if cap.id == "documents"]
+    rest = sorted(
+        (cap for cap in matched if cap.id != "documents"),
+        key=lambda cap: cap.id,
+    )
+    return documents + rest
+
+
+def render_context(context: dict, capabilities: list[Capability]) -> dict:
+    """Copy ``context`` and fill the names those capabilities may read unset.
+
+    Optional names are filled only for capabilities that matched, because
+    only those templates render. An omitted ``activates`` key is ``None``
+    for every capability in the list, matched or not, so a shared template
+    can mention a block this package never turned on.
+    """
+    filled = dict(context)
+    matched_ids = {cap.id for cap in matching(capabilities, context)}
+    for cap in capabilities:
+        if cap.activates:
+            filled.setdefault(cap.activates, None)
+        if cap.id not in matched_ids:
+            continue
+        for name in cap.optional:
+            filled.setdefault(name, None)
+    return filled
+
+
 def when_matches(expression: str, context: dict) -> bool:
     """Evaluate a capability's ``when`` expression against ``context``.
 

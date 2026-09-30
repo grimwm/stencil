@@ -8,6 +8,8 @@ from stencil.capabilities import (
     Capability,
     check_fields,
     load_capabilities,
+    matching,
+    render_context,
     validate_capability,
     when_matches,
 )
@@ -148,6 +150,25 @@ def test_required_when_demands_the_key():
     )
     assert check_fields(cap, {"engine": "playwright"}) != []
     assert check_fields(cap, {"engine": "mysql"}) == []
+
+
+def test_inactive_capability_is_skipped_not_an_error():
+    docs = _capability(id="documents", when="docs", activates=None)
+    vscode = _capability(id="vscode", when="vscode", activates="vscode")
+    matched = matching([vscode, docs], {"docs": ["README.md"], "services": []})
+    assert [c.id for c in matched] == ["documents"]
+
+
+def test_optional_name_is_none_when_unset():
+    web = _capability(id="web", when="'web' in services", activates=None, optional=["grading"])
+    ctx = render_context({"services": ["web"]}, [web])
+    assert ctx["grading"] is None
+
+
+def test_omitted_activates_key_is_none():
+    grading = _capability(id="grading", when="grading", activates="grading")
+    ctx = render_context({}, [grading])
+    assert ctx["grading"] is None
 
 
 def test_stored_boolean_strings_evaluate_as_booleans():
