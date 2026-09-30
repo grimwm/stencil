@@ -617,7 +617,7 @@ def test_a_broken_capability_file_does_not_let_clean_trust_the_manifest(tmp_path
 
 
 def test_a_fragment_whose_when_is_false_is_not_included(tmp_path):
-    config = _extras_project(tmp_path)
+    config = _extras_project(tmp_path, {"extras": True})
     cap = tmp_path / "caps" / "extras" / "capability.yaml"
     text = cap.read_text()
     cap.write_text(
@@ -642,6 +642,12 @@ def test_a_hyphenated_when_name_is_still_a_key(tmp_path):
     config["templates_dir"] = ["."]
     package = _generate(tmp_path, config)
     assert (package / "marker.txt").read_text() == "yes\n"
+
+
+def test_when_true_is_a_jinja_literal_not_a_missing_key():
+    assert generate.when_holds({"when": "true"}, {}) is True
+    assert generate.when_holds({"when": "True"}, {}) is True
+    assert generate.when_holds({"when": "false"}, {}) is False
 
 
 def test_a_scalar_field_list_is_refused():

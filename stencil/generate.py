@@ -737,7 +737,10 @@ def get_template_context(
     # and hands to zip or pandoc. Same exposure as docs and slides, so the same
     # validation -- one helper, not three that drift apart.
     package_sources = [
-        check_config_path(package_id, "package_sources", src) for src in package_sources
+        "." if src in {".", "./", "./."} else src
+        for src in (
+            check_config_path(package_id, "package_sources", src) for src in package_sources
+        )
     ]
 
     if package_sources and package_type == "none":
@@ -2268,7 +2271,14 @@ def when_holds(tdef: dict, context: dict) -> bool:
         # A single key, including ones Jinja cannot use as a name (`has-vscode`).
         # Anything with spaces or other expression punctuation is Jinja, which
         # is how capability rules are written.
-        if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_-]*", when):
+        if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_-]*", when) and when not in {
+            "true",
+            "True",
+            "false",
+            "False",
+            "none",
+            "None",
+        }:
             return bool(context.get(when))
         return when_matches(when, context)
     return all(context.get(key) for key in when)

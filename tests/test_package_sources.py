@@ -174,6 +174,22 @@ def test_zip_of_dot_excludes_dot_stencil(generate_package):
     assert "-x" in text or "--exclude" in text
 
 
+def test_zip_of_dot_slash_excludes_dot_stencil(generate_package):
+    package = generate_package(
+        {
+            "packages": {
+                "demo": {
+                    "package_type": "zip",
+                    "package_name": "demo.zip",
+                    "package_sources": ["./"],
+                }
+            }
+        }
+    )
+    text = (package / "Makefile").read_text()
+    assert "-x '.stencil/*'" in text or "--exclude=.stencil" in text
+
+
 # --- the zip pkg target, and the hidden .git it has to carry ----------------
 #
 # A course that grades the repository needs the repository in the submission,
