@@ -443,8 +443,17 @@ _DC_REFERENCE_RE = re.compile(r"\$[({]DC[)}]")
 _ALLOWED_DC_WINDOWS = (
     re.compile(r"\$\(firstword \$\(subst -, ,\$[({]DC[)}]\)\)"),
     re.compile(
-        r"^STENCIL_COMPOSE\s*=\s*(?:\$\(_stencil_pin_check\))?\s*\$[({]DC[)}]\s*"
+        r"^STENCIL_COMPOSE\s*=\s*(?:\$\(_stencil_pin_check\))?\s*\$[({]DC[)}]"
+        r"(?:\$\(STENCIL_COMPOSE_PROJECT\))?\s*"
         r"\$\(addprefix -f ,\$\(COMPOSE_FILES\)\)\s*$",
+        re.MULTILINE,
+    ),
+    # `--help` only, so a generated Makefile can add `--project-directory
+    # .stencil` when DC is Docker Compose v2 and omit it when DC is
+    # podman-compose. The echo is a constant; the help text is not copied
+    # into the recipe.
+    re.compile(
+        r"^_compose_has_project_dir\s*:=\s*\$\(shell .*\$[({]DC[)}].*--project-directory.*$",
         re.MULTILINE,
     ),
     # The POINT-OF-USE half of the same two guards. `_stencil_pin_check` reads

@@ -171,10 +171,11 @@ STENCIL_COMPOSE = $(DC) $(addprefix -f ,$(COMPOSE_FILES))
 ```
 
 Relative paths in those files are from `.stencil/`. The package root is `..`.
-Docker Compose v2 and podman-compose both resolve a relative bind from the
-first Compose file's directory, and podman-compose does not accept
-`--project-directory`, so the generated command does not pass it. `make help`
-prints the command it will run:
+Docker Compose v2 and podman-compose both resolve a relative bind from a
+project directory. podman-compose's is the first Compose file's directory.
+Docker's defaults to the shell's cwd, so the Makefile adds
+`--project-directory .stencil` only when `$(DC) --help` lists that flag.
+`make help` prints the command it will run:
 
 ```text
 Compose, from this directory: docker compose -f .stencil/docker-compose.yml

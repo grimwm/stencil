@@ -30,14 +30,26 @@ endif
 
 _stencil_pin_check = $(if $(strip $(DC)),,$(error DC must name a compose implementation -- e.g. DC="podman compose"))$(if $(strip $(COMPOSE_FILES)),,$(error COMPOSE_FILES must name at least one compose file -- e.g. COMPOSE_FILES=docker-compose.yml))$(if $(filter -%,$(DC)),$(error DC names a compose implementation only -- e.g. DC="podman compose" -- and compose files belong in COMPOSE_FILES))
 
-# No --project-directory. Docker Compose v2's default project directory is the
-# parent of the first -f file, and podman-compose resolves bind sources from
-# that same directory. --project-directory is a Compose v2 flag podman-compose
-# 1.x rejects, which is what made `make pdf` and `make format-md` exit 2
-# when `docker` is the podman shim. Relative paths in the generated Compose
-# files are written from that directory (`.stencil/`), so `..` is the package
-# root for both tools.
-STENCIL_COMPOSE = $(_stencil_pin_check)$(DC) $(addprefix -f ,$(COMPOSE_FILES))
+# Relative binds in the generated files are written from `.stencil/`, which is
+# where podman-compose always resolves them (the first -f file's directory).
+# Docker Compose v2 instead resolves them from its project directory, and that
+# defaults to the shell's cwd -- the package root -- so `..` would leave the
+# package. `--project-directory .stencil` puts Docker on the same base.
+# podman-compose 1.x does not accept the flag and exits 2 if it is passed, so
+# this asks `--help` and adds it only when the chosen DC implements it.
+# The probe is `--help` only. The only flag it can add is the constant below.
+ifeq ($(OS),Windows_NT)
+_compose_has_project_dir := $(shell $(DC) --help 2>NUL | findstr /C:"--project-directory" >NUL && echo yes)
+else
+_compose_has_project_dir := $(shell $(DC) --help 2>&1 | grep -q -- --project-directory && echo yes)
+endif
+ifeq ($(_compose_has_project_dir),yes)
+STENCIL_COMPOSE_PROJECT :=  --project-directory .stencil
+else
+STENCIL_COMPOSE_PROJECT :=
+endif
+
+STENCIL_COMPOSE = $(_stencil_pin_check)$(DC)$(STENCIL_COMPOSE_PROJECT) $(addprefix -f ,$(COMPOSE_FILES))
 
 override STENCIL_CONTAINER = $(firstword $(subst -, ,$(DC)))
 
