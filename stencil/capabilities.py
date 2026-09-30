@@ -10,6 +10,7 @@ manifest's own words and holds every directory to the same rules.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -17,6 +18,27 @@ import yaml
 from jinja2 import Environment, TemplateSyntaxError, meta
 
 MANIFEST = "capability.yaml"
+_IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+# Names a shape ``when`` may use. Anything else belongs on an explicit block
+# via ``activates``. These are the fields ``get_template_context`` derives,
+# not keys a package author types as a capability switch.
+DERIVED_NAMES = frozenset({
+    "services",
+    "docs",
+    "slides",
+    "package_sources",
+    "package_type",
+    "has_package_sources",
+    "has_docs",
+    "has_slides",
+    "has_pages",
+    "has_web",
+    "has_mysql",
+    "has_services",
+    "has_package_output_dir",
+    "has_pre_build",
+})
 
 # A ``when`` expression is a question about the context. A name the package did
 # not set is ``None``, so ``grading is none`` is true and a comparison the
@@ -89,22 +111,62 @@ def load_capabilities(roots: list[Path]) -> list[Capability]:
             if missing:
                 continue
 
-            loaded.append(
-                Capability(
-                    id=cap_id,
-                    directory=directory,
-                    when=str(data["when"]),
-                    activates=data.get("activates"),
-                    fields=data.get("fields") or {},
-                    templates=data.get("templates") or [],
-                    fragments=data.get("fragments") or [],
-                    optional=data.get("optional") or [],
-                )
+            capability = Capability(
+                id=cap_id,
+                directory=directory,
+                when=str(data["when"]),
+                activates=data.get("activates"),
+                fields=data.get("fields") or {},
+                templates=data.get("templates") or [],
+                fragments=data.get("fragments") or [],
+                optional=data.get("optional") or [],
             )
+            for problem in validate_capability(capability):
+                problems.append(f"{manifest}: {problem}")
+            loaded.append(capability)
 
     if problems:
         raise ValueError("\n".join(problems))
     return loaded
+
+
+def validate_capability(capability: Capability) -> list[str]:
+    """Return the shape and explicit-block problems for one capability.
+
+    A shape rule (no ``activates``) may name only ``DERIVED_NAMES``. An
+    explicit block must activate one identifier stencil does not already
+    derive, and its ``when`` must mention that identifier. An empty list
+    means the rule is well formed. Callers collect these strings; this
+    function does not raise.
+    """
+    try:
+        names = meta.find_undeclared_variables(
+            _WHEN_ENV.parse("{{ " + capability.when + " }}")
+        )
+    except TemplateSyntaxError as e:
+        return [f"{capability.id}: invalid when expression {capability.when!r}: {e}"]
+
+    if capability.activates is None:
+        return [
+            f"{capability.id}: shape when names {name}, which stencil does not derive"
+            for name in sorted(names)
+            if name not in DERIVED_NAMES
+        ]
+
+    activates = capability.activates
+    problems: list[str] = []
+    if not isinstance(activates, str) or not _IDENTIFIER.fullmatch(activates):
+        problems.append(f"{capability.id}: activates must be a single identifier")
+        return problems
+    if activates in DERIVED_NAMES:
+        problems.append(
+            f"{capability.id}: activates {activates}, which stencil already derives"
+        )
+    if activates not in names:
+        problems.append(
+            f"{capability.id}: when does not mention its activates key {activates}"
+        )
+    return problems
 
 
 def when_matches(expression: str, context: dict) -> bool:

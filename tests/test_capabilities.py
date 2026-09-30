@@ -1,8 +1,10 @@
 """Loading a capability directory: manifests are read, problems are reported together."""
 
+from pathlib import Path
+
 import pytest
 
-from stencil.capabilities import load_capabilities, when_matches
+from stencil.capabilities import Capability, load_capabilities, validate_capability, when_matches
 
 
 def test_load_reads_id_when_and_templates(tmp_path):
@@ -77,6 +79,33 @@ def test_shape_expression_matches_services():
 def test_when_syntax_error_names_the_expression():
     with pytest.raises(ValueError, match="when"):
         when_matches("{% if %}", {})
+
+
+def test_shape_when_rejects_an_underived_name():
+    cap = Capability(
+        id="web", directory=Path("web"), when="vscode",
+        activates=None, fields={}, templates=[], fragments=[], optional=[],
+    )
+    problems = validate_capability(cap)
+    assert any("vscode" in problem for problem in problems)
+
+
+def test_activates_cannot_reuse_a_derived_name():
+    cap = Capability(
+        id="docs2", directory=Path("docs2"), when="docs",
+        activates="docs", fields={}, templates=[], fragments=[], optional=[],
+    )
+    problems = validate_capability(cap)
+    assert any("docs" in problem for problem in problems)
+
+
+def test_explicit_when_must_mention_activates():
+    cap = Capability(
+        id="grading", directory=Path("grading"), when="true",
+        activates="grading", fields={}, templates=[], fragments=[], optional=[],
+    )
+    problems = validate_capability(cap)
+    assert any("grading" in problem for problem in problems)
 
 
 def test_stored_boolean_strings_evaluate_as_booleans():
