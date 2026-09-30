@@ -222,10 +222,9 @@ def test_help_prints_the_compose_command_make_runs(generate_package):
     )
     text = (package / "Makefile").read_text()
     assert "-f .stencil/docker-compose.yml" in text
-    assignment = next(
-        line for line in text.splitlines() if line.startswith("STENCIL_COMPOSE ")
-    )
-    assert "--project-directory" not in assignment
+    lines = [line for line in text.splitlines() if line.startswith("STENCIL_COMPOSE ")]
+    assert any("--project-directory .stencil" in line for line in lines)
+    assert any("--project-directory" not in line for line in lines)
     assert text.count("$(STENCIL_COMPOSE)") >= 2
 
 
