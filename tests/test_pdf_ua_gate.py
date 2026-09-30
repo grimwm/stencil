@@ -375,7 +375,9 @@ def test_check_pdf_checks_the_same_files_the_pdf_target_wrote(doc_package):
     So this asserts the two lists are equal rather than asserting either one's
     shape: whatever `pdf` writes is what `check-pdf` opens.
     """
-    makefile = (doc_package / "Makefile").read_text()
+    makefile = (doc_package / "Makefile").read_text() + (
+        doc_package / ".stencil" / "documents.mk"
+    ).read_text()
 
     written = set()
     checked = set()
@@ -404,7 +406,9 @@ def test_every_checked_filename_carries_the_output_suffix(doc_package):
     absent entirely. A literal filename in the check-pdf line is the mistake
     this catches.
     """
-    makefile = (doc_package / "Makefile").read_text()
+    makefile = (doc_package / "Makefile").read_text() + (
+        doc_package / ".stencil" / "documents.mk"
+    ).read_text()
     line = next(
         stripped
         for stripped in (line.strip() for line in makefile.splitlines())

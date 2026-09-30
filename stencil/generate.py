@@ -14,6 +14,7 @@ Usage:
 
 import argparse
 import fnmatch
+import hashlib
 import json
 import os
 import re
@@ -26,6 +27,7 @@ from typing import NoReturn
 
 import yaml
 from jinja2 import (
+    ChoiceLoader,
     Environment,
     FileSystemLoader,
     StrictUndefined,
@@ -36,6 +38,15 @@ from jinja2 import (
 from jinja2.exceptions import TemplateNotFound
 
 from . import __version__, assets, pipeline
+from .capabilities import (
+    Capability,
+    builtin_capabilities,
+    check_fields,
+    load_capabilities,
+    matching,
+    render_context,
+    when_matches,
+)
 
 # Script directory
 SCRIPT_DIR = Path(__file__).parent
@@ -644,7 +655,31 @@ def check_glob_vocabulary(package_id: str, where: str, entry: str) -> None:
         )
 
 
-def get_template_context(package_id: str, config: dict) -> dict:
+def compose_project_name(package_id: str) -> str:
+    """Compose project name that stays unique after Compose's own normalization.
+
+    Compose lowercases a project name and drops every character outside
+    ``[a-z0-9_-]``. ``hw.1`` and ``hw1`` would otherwise share a project, and
+    so would ``Demo`` and ``demo``. The suffix is the start of the sha256 of
+    the id as written, so the readable stem can collide and the project
+    still cannot.
+    """
+    safe = []
+    for ch in package_id.lower():
+        if ch.isascii() and (ch.isalnum() or ch in "-_"):
+            safe.append(ch)
+        else:
+            safe.append("-")
+    stem = "".join(safe).strip("-_")
+    if not stem or not stem[0].isalnum():
+        stem = "pkg" if not stem else f"pkg-{stem}"
+    digest = hashlib.sha256(package_id.encode("utf-8")).hexdigest()[:8]
+    return f"{stem[:40]}-{digest}"
+
+
+def get_template_context(
+    package_id: str, config: dict, config_dir: Path | None = None
+) -> dict:
     """Build the template context for a package."""
     package = config.get("packages", {}).get(package_id)
 
@@ -725,7 +760,10 @@ def get_template_context(package_id: str, config: dict) -> dict:
     # and hands to zip or pandoc. Same exposure as docs and slides, so the same
     # validation -- one helper, not three that drift apart.
     package_sources = [
-        check_config_path(package_id, "package_sources", src) for src in package_sources
+        "." if src in {".", "./", "./."} else src
+        for src in (
+            check_config_path(package_id, "package_sources", src) for src in package_sources
+        )
     ]
 
     if package_sources and package_type == "none":
@@ -956,6 +994,13 @@ def get_template_context(package_id: str, config: dict) -> dict:
         # compose file into no second mount, so a package that does not set it
         # is byte-identical to before.
         "package_output_dir": package_output_dir,
+        # Relative prefix for compose bind sources. "." is the package root,
+        # which is where `docker compose -f docker-compose.yml` resolves
+        # paths. The copy written to .stencil/docker-compose.yml overrides
+        # this to ".." at render time, because that file's project directory
+        # is .stencil/ and ".." is the package root from there.
+        "compose_up": ".",
+        "compose_project": compose_project_name(package_id),
         "has_package_output_dir": bool(package_output_dir),
         "sql_imports": sql_imports,
         "pre_build": pre_build,
@@ -1059,20 +1104,8 @@ def get_template_context(package_id: str, config: dict) -> dict:
             "pick a different name for the custom one."
         )
 
-    # Config-level template_env declares which custom keys these templates may
-    # read and supplies the value for packages that do not set one. A
-    # project can point several configs at one templates directory, where a
-    # shared template then reads a key only some of those configs set. Without
-    # a way to declare a key without setting it, StrictUndefined would make one
-    # shared template impossible to serve from more than one config.
-    config_env = config.get("template_env")
-    if isinstance(config_env, dict):
-        reject_derived("config-level", config_env)
-        for key, value in config_env.items():
-            context.setdefault(key, value)
-
-    # Any remaining custom key some package sets, left *undefined* for the
-    # packages that do not -- the lenient Undefined, not this environment's
+    # A custom key some package sets is left *undefined* for the packages that
+    # do not -- the lenient Undefined, not this environment's
     # StrictUndefined. It is falsy in a condition, renders as nothing, and
     # still satisfies `| default(...)`, which a concrete False does not. A
     # template writing `{{ front_controller | default('index.html') }}` against
@@ -1084,12 +1117,9 @@ def get_template_context(package_id: str, config: dict) -> dict:
     # Custom template vars: merge into top-level context so `when` conditions
     # and templates can access them directly.
     #
-    # This is an update rather than a setdefault ON PURPOSE and unlike the two
-    # passes above: a package's own value has to beat the config-wide default,
-    # which is the entire point of declaring one. What it must NOT beat is a
-    # derived key, and until 0.25.0 it did -- the comment here claimed
-    # "setdefault throughout, so a config cannot shadow a derived key", which
-    # was true of the passes above and false of this line directly beneath it.
+    # An update rather than a setdefault ON PURPOSE: a package's own value has
+    # to beat the undefined placeholder set above. What it must NOT beat is a
+    # derived key, and until 0.25.0 it did; reject_derived refuses that.
     template_env = package.get("template_env", {})
     if isinstance(template_env, dict):
         reject_derived(f"package {package_id!r}", template_env)
@@ -1097,15 +1127,123 @@ def get_template_context(package_id: str, config: dict) -> dict:
     # Also keep as nested dict for backward compatibility
     context["template_env"] = template_env if isinstance(template_env, dict) else {}
 
+    apply_capabilities(context, config, config_dir, package, derived_keys)
     return context
 
 
+_BASE_COMPOSE = ".stencil/docker-compose.yml"
+
+# Key a capability's template definition carries: the directory holding its
+# capability.yaml, searched before the usual template path.
+CAPABILITY_DIR = "capability_dir"
+
+_FORMAT_LOCKFILE = {
+    "src": "format-package-lock.json.j2",
+    "dest": ".stencil/format-package-lock.json",
+}
+
+
+def loaded_capabilities(config: dict, config_dir: Path | None) -> list[Capability]:
+    """Stencil's built-in capabilities, then every ``capabilities_dir`` one."""
+    loaded = list(builtin_capabilities())
+    raw = config.get("capabilities_dir") or []
+    if isinstance(raw, str):
+        raw = [raw]
+    if raw and config_dir is not None:
+        loaded.extend(load_capabilities([(config_dir / item) for item in raw]))
+    return loaded
+
+
+def apply_capabilities(
+    context: dict,
+    config: dict,
+    config_dir: Path | None,
+    package: dict | None = None,
+    derived_keys: set[str] | frozenset[str] = frozenset(),
+) -> None:
+    """Choose the capabilities this package runs and record what they write.
+
+    Stencil's built-in capabilities always load. ``capabilities_dir`` adds
+    more, resolved from the config file. A capability that does not match
+    contributes no files. The format lockfile is written for every package.
+
+    A loaded capability's ``activates`` key, when the package mapping itself
+    carries it, goes into the context as the value the package wrote. That
+    copy happens before any ``when`` is evaluated, and it is the same for every
+    capability: nothing here knows what a given key means. A key the package
+    omits stays unset here and ``render_context`` fills it with ``None``.
+    """
+    loaded = loaded_capabilities(config, config_dir)
+
+    problems: list[str] = []
+    for cap in loaded:
+        if not cap.activates or package is None or cap.activates not in package:
+            continue
+        if cap.activates in derived_keys:
+            problems.append(
+                f"{cap.id}: activates {cap.activates}, which stencil derives "
+                "for every package; the package's value would replace it"
+            )
+            continue
+        context[cap.activates] = package[cap.activates]
+    for cap in loaded:
+        if not cap.activates or not when_matches(cap.when, context):
+            continue
+        block = context.get(cap.activates)
+        if isinstance(block, dict):
+            problems.extend(check_fields(cap, block))
+    if problems:
+        raise ValueError("\n".join(problems))
+
+    for key, value in render_context(context, loaded).items():
+        context.setdefault(key, value)
+
+    matched = matching(loaded, context)
+    definitions: list[dict] = []
+    includes: list[str] = []
+    compose_files = [_BASE_COMPOSE]
+    for cap in matched:
+        compose_dest = f".stencil/{cap.id}.compose.yml"
+        # Tagged with the directory it came from, so a template sitting next to
+        # capability.yaml is found there first at render time.
+        for template in cap.templates:
+            definitions.append({**template, CAPABILITY_DIR: str(cap.directory)})
+        for fragment in cap.fragments:
+            fragment = {**fragment, CAPABILITY_DIR: str(cap.directory)}
+            definitions.append(fragment)
+            # A compose fragment is YAML for docker compose, not Make. A
+            # fragment whose when is false is not written, so it must not
+            # be named in an include either.
+            dest = fragment.get("dest") or template_dest(fragment.get("src", ""))
+            if not when_holds(fragment, context) or dest == compose_dest:
+                continue
+            includes.append(dest)
+        for item in cap.templates + cap.fragments:
+            dest = item.get("dest") or template_dest(item.get("src", ""))
+            if dest == compose_dest and when_holds(item, context):
+                compose_files.append(compose_dest)
+                break
+    definitions.insert(0, {"src": "Makefile.j2", "dest": "Makefile"})
+    definitions.append(
+        {
+            "src": "docker-compose.yml.j2",
+            "dest": _BASE_COMPOSE,
+            # This copy lives in .stencil/. Both compose tools resolve a
+            # relative bind from that directory, so the package root is `..`.
+            # A config that still lists the same template at the package root
+            # keeps the old `.` prefix.
+            "compose_up": "..",
+        }
+    )
+    definitions.append(dict(_FORMAT_LOCKFILE))
+    context["capability_templates"] = definitions
+    context["capability_includes"] = includes
+    context["compose_files"] = compose_files
+
+
 def declared_template_env_keys(config: dict) -> set[str]:
-    """Every custom context key the config declares, at either level."""
+    """Every custom context key some package declares in its template_env."""
     keys: set[str] = set()
-    config_env = config.get("template_env")
-    if isinstance(config_env, dict):
-        keys |= set(config_env)
     for package in config.get("packages", {}).values():
         custom = package.get("template_env")
         if isinstance(custom, dict):
@@ -1250,6 +1388,30 @@ def validate_config(
             read |= found
             complete = complete and found_complete
 
+    # What the capabilities read counts too: a key a capability's `when` names,
+    # or its own template reads, is used. Each template is read through the
+    # same search path it renders from, its capability directory first.
+    for cap in loaded_capabilities(config, config_dir):
+        read |= meta.find_undeclared_variables(
+            env.parse("{{ " + cap.when + " }}")
+        )
+    scanned: set[tuple[str, str]] = set()
+    for context in contexts.values():
+        for tdef in injected_templates(context):
+            when = tdef.get("when")
+            if isinstance(when, str):
+                read |= meta.find_undeclared_variables(env.parse("{{ " + when + " }}"))
+            elif when:
+                read |= set(when)
+            src = tdef.get("src")
+            key = (str(tdef.get(CAPABILITY_DIR, "")), str(src))
+            if not src or key in scanned:
+                continue
+            scanned.add(key)
+            found, found_complete = template_reads(template_environment(env, tdef), src)
+            read |= found
+            complete = complete and found_complete
+
     # Only an exhaustive reading of the templates can prove a key is unused. If
     # any of them hid part of itself, a missed typo is the better failure --
     # the alternative refuses a config that is perfectly correct.
@@ -1291,6 +1453,23 @@ def build_environment(config: dict, config_dir: Path) -> Environment:
         # keep indentation on lines after {% ... %} so templates stay readable
         lstrip_blocks=False,
         keep_trailing_newline=True,
+    )
+
+
+def template_environment(env: Environment, tdef: dict) -> Environment:
+    """The environment to load one template definition's ``src`` from.
+
+    A capability's own directory is searched first, then the usual template
+    path, so a template beside ``capability.yaml`` renders without
+    ``templates_dir`` having to point there. Every other definition gets
+    ``env`` unchanged. The overlay shares ``env``'s settings, so StrictUndefined
+    and the rest still apply.
+    """
+    directory = tdef.get(CAPABILITY_DIR)
+    if not directory:
+        return env
+    return env.overlay(
+        loader=ChoiceLoader([FileSystemLoader(str(directory)), env.loader])
     )
 
 
@@ -1678,7 +1857,11 @@ def _collision_scope(
 
 
 def package_contexts(
-    config: dict, config_dir: Path | None = None, trailer: str | None = None
+    config: dict,
+    config_dir: Path | None = None,
+    trailer: str | None = None,
+    *,
+    capabilities_root: Path | None = None,
 ) -> dict[str, dict]:
     """Every package's template context, read before anything is written.
 
@@ -1712,10 +1895,22 @@ def package_contexts(
     pass -- skips it; a real path -- what validate_config's `gen` caller
     passes -- runs it.
 
+    capabilities_root is the directory `capabilities_dir` entries resolve
+    against, and it is SEPARATE from config_dir because the two answer
+    different questions on different commands. The brand check is gen-only
+    (decision d-96da97d8); reading the capability directory is not -- every
+    command that needs to know what a package generates needs it, or
+    `install` writes a managed .gitignore section missing those files and
+    `clean` refuses to remove them. Folding both onto config_dir would have
+    turned a missing logo into an `install` failure, so install and clean
+    pass this one and leave config_dir None. When it is omitted, config_dir
+    serves as the root, which keeps `gen`'s single-argument call correct.
+
     trailer is forwarded to _raise_config_problems verbatim (None keeps its
     gen/install default); see that function's docstring for why `clean`'s
     degraded path passes a different one.
     """
+    capability_root = capabilities_root if capabilities_root is not None else config_dir
     packages = config.get("packages", {})
     problems: list[str] = []
     contexts: dict[str, dict] = {}
@@ -1849,7 +2044,7 @@ def package_contexts(
 
     for package_id, package in packages.items():
         try:
-            context = get_template_context(package_id, config)
+            context = get_template_context(package_id, config, capability_root)
         except ValueError as e:
             # Passed through verbatim, with NO class name and NO package
             # prefix of our own. Two separate reasons.
@@ -2111,7 +2306,19 @@ def when_holds(tdef: dict, context: dict) -> bool:
     if when is None:
         return True
     if isinstance(when, str):
-        when = [when]
+        # A single key, including ones Jinja cannot use as a name (`has-vscode`).
+        # Anything with spaces or other expression punctuation is Jinja, which
+        # is how capability rules are written.
+        if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_-]*", when) and when not in {
+            "true",
+            "True",
+            "false",
+            "False",
+            "none",
+            "None",
+        }:
+            return bool(context.get(when))
+        return when_matches(when, context)
     return all(context.get(key) for key in when)
 
 
@@ -2129,7 +2336,14 @@ def injected_sources(context: dict) -> list[str]:
 
 
 def injected_templates(context: dict) -> list[dict]:
-    """``injected_sources`` as template definitions render_templates accepts."""
+    """Templates this package's capabilities contribute, ``when`` still to apply.
+
+    Falls back to ``injected_sources`` only when a context was built without
+    ``apply_capabilities``. ``get_template_context`` always applies it.
+    """
+    selected = context.get("capability_templates")
+    if selected is not None:
+        return list(selected)
     return [{"src": src} for src in injected_sources(context)]
 
 
@@ -2419,6 +2633,15 @@ def template_destinations(template_defs: list, context: dict) -> list[tuple[str,
     `when`" is the drift bug this file has already paid for three times --
     see `package_entries`' docstring for the other two.
     """
+    return [(src, dest) for _tdef, src, dest in resolved_templates(template_defs, context)]
+
+
+def resolved_templates(
+    template_defs: list, context: dict
+) -> list[tuple[dict, str, str]]:
+    """``template_destinations`` with each surviving definition kept alongside,
+    so a caller that needs more than the pair (the capability directory a
+    template was declared in) does not re-derive which ones survived."""
     destinations = []
     for tdef in template_defs:
         if not when_holds(tdef, context):
@@ -2450,7 +2673,7 @@ def template_destinations(template_defs: list, context: dict) -> list[tuple[str,
         # it as "not a recognized glob shape" forever. stn-9rn's harm again,
         # through the very channel this function was added to close.
         check_no_glob("config", where, dest)
-        destinations.append((src, dest))
+        destinations.append((tdef, src, dest))
     return destinations
 
 
@@ -3398,7 +3621,7 @@ def generate_package(
 ) -> Path | None:
     """Generate scaffolding for a single package. Returns output_dir on success, None on skip."""
     try:
-        context = get_template_context(package_id, config)
+        context = get_template_context(package_id, config, config_dir)
     except ValueError as e:
         print(f"Error: {e}", file=sys.stderr)
         return None
@@ -3578,10 +3801,13 @@ def render_templates(
     with no `dir_fd` support, or any `--dry-run` call, always passes --
     is today's behaviour, completely unchanged.
     """
-    for template_name, output_name in template_destinations(template_defs, context):
+    for tdef, template_name, output_name in resolved_templates(template_defs, context):
         try:
-            template = env.get_template(template_name)
-            content = template.render(**context)
+            template = template_environment(env, tdef).get_template(template_name)
+            render_ctx = context
+            if tdef.get("compose_up"):
+                render_ctx = {**context, "compose_up": tdef["compose_up"]}
+            content = template.render(**render_ctx)
 
             output_path = output_dir / output_name
 
@@ -3809,8 +4035,12 @@ def package_entries(
     # from, on the same predicates -- spelling them twice is what left a
     # package_sources-only doc package with five generated files that clean
     # could not see.
-    for src in injected_sources(context):
-        entries.add(template_dest(src))
+    for tdef in injected_templates(context):
+        if not when_holds(tdef, context):
+            continue
+        dest = tdef.get("dest") or template_dest(tdef.get("src", ""))
+        if dest:
+            entries.add(dest)
 
     if context["has_pages"]:
         # The copied brand image, which `clean` should be able to see and
@@ -3847,7 +4077,7 @@ def package_entries(
     return entries
 
 
-def get_generated_files(config: dict) -> list[str]:
+def get_generated_files(config: dict, config_dir: Path | None = None) -> list[str]:
     """Determine what files stencil will generate based on templates config.
 
     All entries are prefixed with the package directory. Respects `when` conditions
@@ -3859,8 +4089,15 @@ def get_generated_files(config: dict) -> list[str]:
     blind to its files, with nothing said about either. Consumes
     package_contexts' own contexts rather than building them a second time
     with its own get_template_context loop, which would double the work
-    every `install` and `clean` do. No config_dir is passed: the brand
-    file-existence check is gen-only (see package_contexts).
+    every `install` and `clean` do.
+
+    config_dir is where `capabilities_dir` resolves from, and it reaches
+    package_contexts as `capabilities_root`, NOT as its config_dir -- the
+    brand file-existence check stays gen-only (see package_contexts and
+    brand_problem). Optional, because a library caller that has no config
+    file on disk still gets everything stencil itself writes; what it loses
+    is the files a consumer's own capability contributes, which cannot be
+    named without a root to resolve the directory against.
 
     Each package's own entries come from `package_entries` -- see there for
     why. The per-package manifest name is added on top, here, rather than in
@@ -3869,7 +4106,7 @@ def get_generated_files(config: dict) -> list[str]:
     entries = set()
     config_templates = config.get("templates", [])
 
-    contexts = package_contexts(config)
+    contexts = package_contexts(config, capabilities_root=config_dir)
 
     # stn-jl3. Every entry carries the top-level `output_dir` as well as the
     # package `dir`, because that is where `gen` and `clean` both resolve to
@@ -3884,8 +4121,7 @@ def get_generated_files(config: dict) -> list[str]:
     # path -- package_contexts above calls it -- so this adds no second
     # spelling of a rule that lives in two places already. It is NOT
     # `checked_output_base`, which returns a resolved ABSOLUTE path: useless
-    # as a gitignore prefix, and it needs a config_dir this function is not
-    # given.
+    # as a gitignore prefix, whatever config_dir this function was handed.
     #
     # Note what that means for `install` specifically: `_main`'s install
     # branch returns above `checked_output_base`, so on `install` this value
@@ -4708,7 +4944,10 @@ def _config_template_defs(config: dict, who: str, problems: list[str]) -> list[d
 
 
 def _config_derived_entries(
-    pids: list[str], config: dict, problems: list[str]
+    pids: list[str],
+    config: dict,
+    problems: list[str],
+    config_dir: Path | None = None,
 ) -> set[str]:
     """`package_entries` for each of `pids`, unioned -- the same union
     `get_generated_files` has always produced for packages sharing a `dir`
@@ -4718,13 +4957,38 @@ def _config_derived_entries(
     Every failure is a named problem rather than an exception, because this
     runs INSIDE `clean`, interleaved with the deleting. See
     `_config_template_defs` for the shape this exists to survive.
+
+    config_dir is the root `capabilities_dir` resolves against. It is not
+    optional in practice on the CLI path, and the failure without it is
+    louder than a short list: this set is also what the manifest is checked
+    against, and a manifest may narrow it but never widen it -- so a
+    capability file the config could not name made `clean` refuse the whole
+    package and remove nothing at all.
     """
     who = ", ".join(sorted(pids))
     config_templates = _config_template_defs(config, who, problems)
+    # A fault in the capability loader is one fact about the whole config, not
+    # a reason this directory's manifest can be trusted. Fall back to the
+    # built-in capabilities and keep the widen check armed. Putting the loader
+    # error in `problems` is what made a broken capability.yaml delete a file
+    # the config never derived.
+    derivation_root = config_dir
+    if config_dir is not None:
+        try:
+            loaded_capabilities(config, config_dir)
+        except ValueError as error:
+            print(
+                "Warning: capabilities could not be loaded "
+                f"({error}). clean will not trust the manifest; "
+                "files a capability would have written stay until that "
+                "file is fixed.",
+                file=sys.stderr,
+            )
+            derivation_root = None
     entries: set[str] = set()
     for pid in pids:
         try:
-            context = get_template_context(pid, config)
+            context = get_template_context(pid, config, derivation_root)
             entries |= package_entries(
                 pid, config["packages"][pid], context, config_templates
             )
@@ -4746,6 +5010,7 @@ def _clean_one_directory(
     config_readable: bool,
     dry_run: bool,
     problems: list[str],
+    config_dir: Path | None = None,
 ) -> None:
     """Clean everything under one resolved package directory, on behalf of
     every package_id in `members` that is configured with it (stn-2x4.8
@@ -4853,7 +5118,7 @@ def _clean_one_directory(
         # manifest.
         authorised_problems: list[str] = []
         authorised = _config_derived_entries(
-            sorted(full_member_set), config, authorised_problems
+            sorted(full_member_set), config, authorised_problems, config_dir
         )
         if authorised_problems:
             # THE DOCUMENTED DEGRADED TRADE, and with the whole-config gate
@@ -4988,7 +5253,9 @@ def _clean_one_directory(
         unnamed = [pid for pid in sorted(member_set) if pid != manifest_pkg]
         if unnamed:
             if config_readable:
-                entries |= _config_derived_entries(unnamed, config, entry_problems)
+                entries |= _config_derived_entries(
+                    unnamed, config, entry_problems, config_dir
+                )
             else:
                 # Nothing can name these files: not the manifest, which is
                 # another package's, and not the config, which does not
@@ -5059,7 +5326,9 @@ def _clean_one_directory(
     # Config-derived fallback, unioned across every selected package
     # sharing this directory.
     entry_problems: list[str] = []
-    entries = _config_derived_entries(sorted(member_set), config, entry_problems)
+    entries = _config_derived_entries(
+        sorted(member_set), config, entry_problems, config_dir
+    )
     removed = _remove_entries(
         representative_id, root, pkg_path, entries, dry_run, entry_problems
     )
@@ -5073,6 +5342,7 @@ def clean_generated(
     package_id: str | None = None,
     dry_run: bool = False,
     config_readable: bool = True,
+    config_dir: Path | None = None,
 ) -> list[str]:
     """Remove files and directories that stencil generates.
 
@@ -5099,6 +5369,12 @@ def clean_generated(
     either way, so the API cannot be made to delete from a config it never
     checked, and a mistyped package_id is answered as a mistyped package_id
     rather than with an unrelated sibling's problem.
+
+    `config_dir` is the root `capabilities_dir` resolves against, and the
+    brand file-existence check stays off without it (see package_contexts).
+    Omitting it narrows every config-derived removal list to what stencil
+    itself writes, which is both a short list and -- because a manifest is
+    checked against that same list -- a refusal to clean the package at all.
     """
     if package_id is not None and package_id not in config.get("packages", {}):
         print(f"Error: Unknown package {package_id}", file=sys.stderr)
@@ -5113,7 +5389,7 @@ def clean_generated(
         # caller that never checked this itself. On the CLI path this is a
         # cheap (microseconds) repeat of a check `_main` already made and
         # already knows succeeded.
-        package_contexts(config)
+        package_contexts(config, capabilities_root=config_dir)
 
     scope = _clean_scope(config, package_id, problems)
     if scope is None:
@@ -5155,6 +5431,7 @@ def clean_generated(
             config_readable,
             dry_run,
             problems,
+            config_dir,
         )
 
     return problems
@@ -5180,7 +5457,10 @@ def install_gitignore(config: dict, config_dir: Path, dry_run: bool = False):
     """
     gitignore_path = config_dir / ".gitignore"
 
-    entries = get_generated_files(config)
+    # Handed down, so the section names what a `capabilities_dir` capability
+    # writes as well as what stencil itself does. Without it those files are
+    # generated on every `gen` and ignored by nothing.
+    entries = get_generated_files(config, config_dir)
 
     # Build the stencil section
     stencil_section = f"{GITIGNORE_START}\n"
@@ -5409,7 +5689,7 @@ def _main():
         # the alternative is threading the list through a signature this
         # ticket deliberately left alone.
         try:
-            package_contexts(config)
+            package_contexts(config, capabilities_root=config_dir)
         except ValueError as e:
             print(f"Error: {e}", file=sys.stderr)
             sys.exit(1)
@@ -5501,7 +5781,11 @@ def _main():
         # lie about the run that just happened (architecture review D2).
         config_readable = True
         try:
-            package_contexts(config, trailer=CLEAN_DEGRADED_TRAILER)
+            package_contexts(
+                config,
+                trailer=CLEAN_DEGRADED_TRAILER,
+                capabilities_root=config_dir,
+            )
         except ValueError as e:
             config_readable = False
             print(f"Warning: {e}", file=sys.stderr)
@@ -5511,6 +5795,7 @@ def _main():
             package_id=package_id,
             dry_run=args.dry_run,
             config_readable=config_readable,
+            config_dir=config_dir,
         )
         if problems:
             # _safe on every line, for the reason _raise_config_problems runs
@@ -5547,23 +5832,10 @@ def _main():
         print(f"Error: {e}", file=sys.stderr)
         sys.exit(1)
 
-    # stn-dl3r: moved BELOW validate_config (which runs package_contexts),
-    # not above it. `{}`, `None` and `""` are all falsy just like `[]`, so
-    # this check used to fire FIRST for a malformed, non-list `templates:`
-    # -- printing "No templates defined in config" before package_contexts
-    # ever got a chance to name the actual shape mistake. `install` has no
-    # matching emptiness check and went straight to package_contexts, so the
-    # two commands disagreed about the identical config. Below
-    # validate_config, a shape mistake is reported identically on both;
-    # only a config with a WELL-SHAPED but genuinely empty `templates:`
-    # (`[]`, or the key absent) still reaches this line. `gen` refusing
-    # `templates: []` while `install` accepts it is a separate,
-    # pre-existing asymmetry -- about emptiness, not shape -- and is out of
-    # scope here.
-    template_defs = config.get("templates", [])
-    if not template_defs:
-        print("Error: No templates defined in config", file=sys.stderr)
-        sys.exit(1)
+    # No "templates defined" refusal here. A config that only names
+    # capabilities and packages generates the Makefile, the base compose file
+    # and whatever its capabilities contribute; `templates:` is optional. A
+    # malformed `templates:` is still named by validate_config above.
 
     # stn-zfc. Two ways a package could fail while `gen` still exited 0, and
     # both of them are here rather than inside generate_package, because this

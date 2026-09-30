@@ -493,7 +493,7 @@ def test_a_templates_dir_override_of_the_pdf_driver_reaches_the_service(
     package = generate_package(config, "override")
     install_sources(package)
 
-    assert OVERRIDE_MARKER in (package / "html-to-pdf.js").read_text(), (
+    assert OVERRIDE_MARKER in (package / ".stencil" / "html-to-pdf.js").read_text(), (
         "the override did not even reach the generated package, so this test "
         "would be measuring the search path rather than the image"
     )

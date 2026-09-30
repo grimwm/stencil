@@ -133,47 +133,6 @@ def test_a_key_read_only_through_an_include_counts_as_read(check):
     )
 
 
-# --- config-level template_env: declaring a key without setting it ---------
-#
-# A project can point several configs at one templates directory, and a shared
-# Makefile.j2 reads has_playwright (set only by answers/.config.yaml) and
-# deps_script (set only by assignments/.config.yaml). Each config therefore
-# needs to say "my templates may read this key" without any package setting it.
-
-
-def test_a_config_level_key_is_a_default_for_every_package(check):
-    check(
-        {
-            "template_env": {"has_playwright": False},
-            "templates": BUNDLED + [{"src": "Makefile.j2", "when": "has_playwright"}],
-            "packages": {"demo": package()},
-        }
-    )
-
-
-def test_a_config_level_key_read_only_by_a_template_body_counts_as_read(check):
-    check(
-        {
-            "template_env": {"deps_script": None},
-            "templates": BUNDLED + [{"src": "deps.j2"}],
-            "packages": {"demo": package()},
-        },
-        local={"deps.j2": "{% if deps_script %}yes{% endif %}\n"},
-    )
-
-
-def test_a_config_level_key_nothing_reads_is_still_an_error(check):
-    """Declaring it does not excuse it from having to do something."""
-    with pytest.raises(ValueError, match="has_playwrigt"):
-        check(
-            {
-                "template_env": {"has_playwrigt": False},
-                "templates": BUNDLED,
-                "packages": {"demo": package()},
-            }
-        )
-
-
 def test_a_dynamic_include_suspends_the_unread_key_check(check):
     """`{% include which %}` is opaque to static analysis -- Jinja reports the
     reference as None because the name is only known at render time. What that
@@ -227,7 +186,7 @@ LANG_CONFIG = {
 
 def generated_lang_default(generate_package, config) -> str:
     """The language the template falls back to when front matter names none."""
-    text = (generate_package(config) / "html-template.html").read_text()
+    text = (generate_package(config) / ".stencil" / "html-template.html").read_text()
     match = re.search(r'<html lang="\$if\(lang\)\$\$lang\$\$else\$([^"$]*)\$', text)
     assert match, "the lang attribute is not in the shape these tests assume"
     return match.group(1)
@@ -277,9 +236,9 @@ def test_a_package_dir_is_not_read_as_a_text_direction(generate_package):
     # make_package returns out/<package_id> and does not follow `dir:`, so
     # find the template wherever generation actually put it.
     pkg = generate_package(config)
-    generated = list(pkg.parent.rglob("html-template.html"))
+    generated = list((pkg.parent / "rtl" / ".stencil").glob("html-template.html"))
     assert len(generated) == 1, f"expected one generated template, got {generated}"
     text = generated[0].read_text()
 
     assert 'dir="rtl"' not in text, "a package's output dir leaked into <html dir>"
-    assert generated[0].parent.name == "rtl", "`dir:` should still pick the folder"
+    assert generated[0].parent.parent.name == "rtl", "`dir:` should still pick the folder"

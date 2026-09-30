@@ -117,7 +117,7 @@ _SCRUBBED_ENV_VARS = (
 
 # What every generated compose invocation must expand to, immediately after
 # the sentinel, once this task's fix lands.
-PIN = " -f docker-compose.yml"
+PIN = " -f .stencil/docker-compose.yml"
 
 MAKEFILE_TEMPLATES = [{"src": "Makefile.j2"}, {"src": "docker-compose.yml.j2"}]
 
@@ -243,7 +243,9 @@ def test_every_compose_invocation_names_its_file(
     and a `${DC}`-spelled or otherwise unpinned mutation of the Windows arm
     would pass this sweep with 566 tests green and nothing here to say so.
     """
-    makefile_text = (compose_driving_package / "Makefile").read_text()
+    makefile_text = (compose_driving_package / "Makefile").read_text() + (
+        compose_driving_package / ".stencil" / "documents.mk"
+    ).read_text()
     targets = derived_targets(makefile_text)
     assert targets, "derived no targets from the help pattern -- derivation is broken"
 
@@ -442,7 +444,16 @@ _ALLOWED_DC_WINDOWS = (
     re.compile(r"\$\(firstword \$\(subst -, ,\$[({]DC[)}]\)\)"),
     re.compile(
         r"^STENCIL_COMPOSE\s*=\s*(?:\$\(_stencil_pin_check\))?\s*\$[({]DC[)}]\s*"
+        r"(?:--project-directory\s+\.stencil\s+)?"
         r"\$\(addprefix -f ,\$\(COMPOSE_FILES\)\)\s*$",
+        re.MULTILINE,
+    ),
+    # `--help` only, so a generated Makefile can add `--project-directory
+    # .stencil` when DC is Docker Compose v2 and omit it when DC is
+    # podman-compose. The echo is a constant; the help text is not copied
+    # into the recipe.
+    re.compile(
+        r"^_compose_has_project_dir\s*:=\s*\$\(shell .*\$[({]DC[)}].*--project-directory.*$",
         re.MULTILINE,
     ),
     # The POINT-OF-USE half of the same two guards. `_stencil_pin_check` reads
@@ -633,7 +644,9 @@ def test_the_pinned_file_is_one_the_package_actually_has(compose_driving_package
     out of the config, which is a `stencil/generate.py` change and outside
     this ticket. STENCIL.md says so instead -- see stn-144.4.
     """
-    makefile_text = (compose_driving_package / "Makefile").read_text()
+    makefile_text = (compose_driving_package / "Makefile").read_text() + (
+        compose_driving_package / ".stencil" / "documents.mk"
+    ).read_text()
 
     match = re.search(r"^COMPOSE_FILES\s*\?=\s*(.+)$", makefile_text, re.MULTILINE)
     assert match, "no COMPOSE_FILES default in the generated Makefile yet"
@@ -685,6 +698,26 @@ def _run_make_on_rendered_partial(
         capture_output=True,
         text=True,
     )
+
+
+def test_compose_project_names_stay_distinct_after_normalization(env):
+    """Compose drops '.', and lowercases. Those two ids must not share a project."""
+    dotted = get_template_context(
+        "hw.1", {"packages": {"hw.1": {"name": "A", "package_type": "none"}}}
+    )
+    plain = get_template_context(
+        "hw1", {"packages": {"hw1": {"name": "B", "package_type": "none"}}}
+    )
+    upper = get_template_context(
+        "Demo", {"packages": {"Demo": {"name": "C", "package_type": "none"}}}
+    )
+    lower = get_template_context(
+        "demo", {"packages": {"demo": {"name": "D", "package_type": "none"}}}
+    )
+    assert dotted["compose_project"] != plain["compose_project"]
+    assert upper["compose_project"] != lower["compose_project"]
+    rendered = env.get_template("docker-compose.yml.j2").render(dotted)
+    assert f'name: "{dotted["compose_project"]}"\n' in rendered
 
 
 def test_makefile_doc_guard_fires_without_makefile_base(require_make, env, tmp_path):
@@ -1676,7 +1709,9 @@ def test_windows_build_date_default_does_not_invoke_cmd_date(pages_package):
     `date +%F`. Measured: both defaults appear in the generated Makefile, and
     the Windows one never spells `date +`.
     """
-    text = (pages_package / "Makefile").read_text()
+    text = (pages_package / "Makefile").read_text() + (
+        pages_package / ".stencil" / "documents.mk"
+    ).read_text()
     defaults = [
         line for line in text.splitlines() if line.startswith("BUILD_DATE ?=")
     ]

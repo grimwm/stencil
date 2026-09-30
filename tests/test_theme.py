@@ -454,7 +454,7 @@ def test_the_dark_code_theme_is_sealed_in_media_screen(generate_package):
     """The vendored dark highlight theme is a dark declaration like any other
     and obeys the same containment: print must not see it, or a printed code
     listing comes out white-on-black."""
-    page = (generate_package(THEME_CONFIG) / "html-template.html").read_text()
+    page = (generate_package(THEME_CONFIG) / ".stencil" / "html-template.html").read_text()
     assert ':root[data-theme="dark"] .hljs{' in page, "dark theme not emitted"
     sealed = "".join(screen_blocks(page))
     assert ':root[data-theme="dark"] .hljs{' in sealed, (

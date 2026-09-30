@@ -1,4 +1,6 @@
 # Makefile for course activities
+# Compose, from this directory: $(DC){% for f in compose_files %} -f {{ f }}{% endfor %}
+
 # Override to use another Compose implementation, e.g. DC="podman compose"
 DC ?= docker compose
 
@@ -16,7 +18,7 @@ endif
 # A consumer who genuinely wants such a file merged in still can --
 # by naming it explicitly, e.g.
 # `make doc COMPOSE_FILES="docker-compose.yml docker-compose.override.yml"`.
-COMPOSE_FILES ?= docker-compose.yml
+COMPOSE_FILES ?= {{ compose_files | join(' ') }}
 
 ifeq ($(strip $(COMPOSE_FILES)),)
 $(error COMPOSE_FILES must name at least one compose file, e.g. COMPOSE_FILES=docker-compose.yml)
@@ -28,7 +30,24 @@ endif
 
 _stencil_pin_check = $(if $(strip $(DC)),,$(error DC must name a compose implementation -- e.g. DC="podman compose"))$(if $(strip $(COMPOSE_FILES)),,$(error COMPOSE_FILES must name at least one compose file -- e.g. COMPOSE_FILES=docker-compose.yml))$(if $(filter -%,$(DC)),$(error DC names a compose implementation only -- e.g. DC="podman compose" -- and compose files belong in COMPOSE_FILES))
 
+# Relative binds in the generated files are written from `.stencil/`, which is
+# where podman-compose always resolves them (the first -f file's directory).
+# Docker Compose v2 instead resolves them from its project directory, and that
+# defaults to the shell's cwd -- the package root -- so `..` would leave the
+# package. `--project-directory .stencil` puts Docker on the same base.
+# podman-compose 1.x does not accept the flag and exits 2 if it is passed, so
+# this asks `--help` and adds it only when the chosen DC implements it.
+# The probe is `--help` only. The only flag it can add is the constant below.
+ifeq ($(OS),Windows_NT)
+_compose_has_project_dir := $(shell $(DC) --help 2>NUL | findstr /C:"--project-directory" >NUL && echo yes)
+else
+_compose_has_project_dir := $(shell $(DC) --help 2>&1 | grep -q -- --project-directory && echo yes)
+endif
+ifeq ($(_compose_has_project_dir),yes)
+STENCIL_COMPOSE = $(_stencil_pin_check)$(DC) --project-directory .stencil $(addprefix -f ,$(COMPOSE_FILES))
+else
 STENCIL_COMPOSE = $(_stencil_pin_check)$(DC) $(addprefix -f ,$(COMPOSE_FILES))
+endif
 
 override STENCIL_CONTAINER = $(firstword $(subst -, ,$(DC)))
 
@@ -45,10 +64,12 @@ endif
 # Default target
 ifeq ($(OS),Windows_NT)
 help: ## Show this help message
+	@echo Compose, from this directory: $(STENCIL_COMPOSE)
 	@echo Available targets:
 	@powershell -NoProfile -Command "Get-Content $(MAKEFILE_LIST) | Select-String '^[a-zA-Z0-9_-]+:.*?## .*$$' | ForEach-Object { $$_ -match '^([a-zA-Z0-9_-]+):.*?## (.*)$$' | Out-Null; '  {0,-15} {1}' -f $$matches[1], $$matches[2] } | Select-Object -Unique"
 else
 help: ## Show this help message
+	@echo "Compose, from this directory: $(STENCIL_COMPOSE)"
 	@echo "Available targets:"
 	@grep -hE '^[a-zA-Z0-9_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-15s %s\n", $$1, $$2}' | uniq
 endif

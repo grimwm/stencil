@@ -567,8 +567,8 @@ Two things hold it, and both are needed:
 
 `StrictUndefined` is why custom keys have to be declared. A key set by at least one package is
 undefined — not `False` — for the packages that do not set it, so `{% if key %}` and
-`{{ key | default('x') }}` both still behave. A key no package in the config sets must be
-declared in the config-level `template_env`; see STENCIL.md. Do not "fix" an undefined-key
+`{{ key | default('x') }}` both still behave. There is no config-level `template_env`; see
+STENCIL.md. Do not "fix" an undefined-key
 error by defaulting the key to `False`: a concrete `False` satisfies `| default(...)`, which
 is how the literal string "False" once reached generated TypeScript where a filename belonged.
 

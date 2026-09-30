@@ -38,7 +38,7 @@ title: "T"
 @pytest.fixture
 def css(generate_package) -> str:
     """Stencil's own stylesheet, past the inlined Bootstrap."""
-    text = (generate_package(CONFIG) / "html-template.html").read_text()
+    text = (generate_package(CONFIG) / ".stencil" / "html-template.html").read_text()
     return text[text.index("/* Document title") :]
 
 

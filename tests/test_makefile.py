@@ -56,7 +56,12 @@ def makefile(generate_package):
         pkg = generate_package(
             {"templates": MAKEFILE_TEMPLATES, "packages": {"demo": package}}
         )
-        return (pkg / "Makefile").read_text()
+        text = (pkg / "Makefile").read_text()
+
+        def _expand(match: re.Match) -> str:
+            return (pkg / match.group(1)).read_text()
+
+        return re.sub(r"^include (\S+)\s*$", _expand, text, flags=re.MULTILINE)
 
     return _makefile
 

@@ -2626,12 +2626,14 @@ def test_a_config_declaring_dest_gnumakefile_is_not_refused_by_its_own_output(
     )
 
 
-def test_a_package_that_writes_no_makefile_is_not_refused_by_a_gnumakefile(
+def test_a_planted_gnumakefile_is_refused_even_without_a_listed_makefile(
     tmp_path,
 ):
-    """A GNUmakefile beside a package that never writes any make-file name
-    at all is none of this check's business -- there is nothing here for
-    `make` to run instead of, so nothing is shadowed."""
+    """Every package gets a Makefile, so a GNUmakefile beside it shadows it.
+
+    A config that does not list Makefile.j2 still receives one. The planted
+    file would be what `make` runs.
+    """
     config_dir, package_dir, _target = _planted_package(
         tmp_path, templates=[{"src": "docker-compose.yml.j2"}]
     )
@@ -2639,8 +2641,8 @@ def test_a_package_that_writes_no_makefile_is_not_refused_by_a_gnumakefile(
 
     result = run_cli("gen", "demo", cwd=config_dir)
 
-    assert result.returncode == 0, result.stderr
-    assert (package_dir / "docker-compose.yml").exists()
+    assert result.returncode != 0
+    assert "GNUmakefile" in result.stderr
 
 
 def test_gen_refuses_a_lowercase_makefile_of_higher_precedence(tmp_path):

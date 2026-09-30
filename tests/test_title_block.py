@@ -79,7 +79,7 @@ def css(generate_package) -> str:
     that is not anchored past it reads Bootstrap's rules and concludes stencil
     sets sizes it does not.
     """
-    text = (generate_package(CONFIG) / "html-template.html").read_text()
+    text = (generate_package(CONFIG) / ".stencil" / "html-template.html").read_text()
     return text[text.index("/* Document title") :]
 
 

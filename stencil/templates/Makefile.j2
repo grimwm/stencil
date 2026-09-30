@@ -1,15 +1,13 @@
 {% include 'Makefile-base.j2' %}
-
-{% set phony = ['help'] %}
-{% do phony.append('format-md') %}
-{% if has_pages %}{% do phony.append('doc') %}{% endif %}
-{% if has_slides %}{% do phony.append('slide') %}{% endif %}
-{% if has_pages %}{% do phony.append('pdf') %}{% endif %}
-{% if has_pages %}{% do phony.append('check-access') %}{% endif %}
-{% do phony.extend(['clean', 'clean-pkg']) %}
-.PHONY: {{ phony | join(' ') }}
-
-{% include 'Makefile-doc.j2' %}
+{% if '.stencil/documents.mk' not in capability_includes %}
+.PHONY: help format-md clean clean-pkg pkg
+format-md: ## Format markdown files
+	$(call ensure_image,{{ node_image }},format-md)
+	$(STENCIL_COMPOSE) run --rm format-md
+{% endif %}
+{% for inc in capability_includes %}
+include {{ inc }}
+{% endfor %}
 {% include 'Makefile-pkg.j2' %}
 
 clean: clean-pkg

@@ -26,7 +26,7 @@ CDN_HOSTS = (
 
 @pytest.fixture
 def page_html(doc_package):
-    return (doc_package / "html-template.html").read_text()
+    return (doc_package / ".stencil" / "html-template.html").read_text()
 
 
 def test_every_vendored_asset_is_present():

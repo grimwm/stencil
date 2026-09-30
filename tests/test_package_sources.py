@@ -39,7 +39,11 @@ def makefile(generate_package):
         pkg = generate_package(
             {"templates": MAKEFILE_TEMPLATES, "packages": {"demo": package}}
         )
-        return (pkg / "Makefile").read_text()
+        text = (pkg / "Makefile").read_text()
+        rules = pkg / ".stencil" / "documents.mk"
+        if rules.is_file():
+            text += "\n" + rules.read_text()
+        return text
 
     return _makefile
 
@@ -151,6 +155,39 @@ def test_zip_hands_a_directory_over_whole(makefile):
     # Not recipe(): the pkg body is split across an ifeq/else, and the helper
     # stops at the first line that is not a tab-indented recipe line.
     assert "zip -r $(PKG) $(PKG_SOURCES)" in text
+
+
+def test_zip_of_dot_excludes_dot_stencil(generate_package):
+    package = generate_package(
+        {
+            "packages": {
+                "demo": {
+                    "package_type": "zip",
+                    "package_name": "demo.zip",
+                    "package_sources": ["."],
+                }
+            }
+        }
+    )
+    text = (package / "Makefile").read_text()
+    assert ".stencil" in text
+    assert "-x" in text or "--exclude" in text
+
+
+def test_zip_of_dot_slash_excludes_dot_stencil(generate_package):
+    package = generate_package(
+        {
+            "packages": {
+                "demo": {
+                    "package_type": "zip",
+                    "package_name": "demo.zip",
+                    "package_sources": ["./"],
+                }
+            }
+        }
+    )
+    text = (package / "Makefile").read_text()
+    assert "-x '.stencil/*'" in text or "--exclude=.stencil" in text
 
 
 # --- the zip pkg target, and the hidden .git it has to carry ----------------
@@ -331,18 +368,18 @@ def sources_only_config():
 def test_sources_only_shared_page_files_are_cleanable(filename):
     """generate writes them off has_pages, so clean and .gitignore must agree.
     Left out, they sit untracked in a course repo and nothing removes them."""
-    assert f"demo/{filename}" in get_generated_files(sources_only_config())
+    assert f"demo/.stencil/{filename}" in get_generated_files(sources_only_config())
 
 
 def test_sources_only_doc_template_is_cleanable():
-    assert "demo/html-template.html" in get_generated_files(sources_only_config())
+    assert "demo/.stencil/html-template.html" in get_generated_files(sources_only_config())
 
 
 def test_sources_only_pkg_gets_the_template_its_pandoc_run_names(generate_package):
     """Makefile-pkg builds PKG_HTML through the doc service, and pipeline.py
     makes that service pass --template=html-template.html. Without the file the
     generated target exists and fails."""
-    assert (generate_package(sources_only_config()) / "html-template.html").exists()
+    assert (generate_package(sources_only_config()) / ".stencil" / "html-template.html").exists()
 
 
 def test_sources_only_gets_no_slide_template(generate_package):
@@ -360,7 +397,7 @@ def test_a_docs_package_still_lists_every_page_file():
     config["packages"]["demo"]["docs"] = ["README.md"]
     listed = get_generated_files(config)
     for filename in SHARED_PAGE_FILES + ["html-template.html"]:
-        assert f"demo/{filename}" in listed
+        assert f"demo/.stencil/{filename}" in listed
 
 
 # --- the general form of the bug above --------------------------------------

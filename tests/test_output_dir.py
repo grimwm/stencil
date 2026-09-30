@@ -44,7 +44,11 @@ def elsewhere(demo_config, generate_package):
 
 
 def makefile(package):
-    return (package / "Makefile").read_text()
+    text = (package / "Makefile").read_text()
+    rules = package / ".stencil" / "documents.mk"
+    if rules.is_file():
+        text += "\n" + rules.read_text()
+    return text
 
 
 def compose(package):
@@ -520,6 +524,9 @@ def test_a_relative_escape_in_the_declared_output_dir_still_generates(
     cfg["packages"]["demo"]["output_dir"] = "../build/demo"
     package_dir = generate_package(cfg)
     text = (package_dir / "Makefile").read_text()
+    rules = package_dir / ".stencil" / "documents.mk"
+    if rules.is_file():
+        text += "\n" + rules.read_text()
     line = next(l for l in text.splitlines() if l.startswith("OUT_HOST"))
     assert ".." in line, (
         f"the declared '..' escape did not reach OUT_HOST: {line!r}"
@@ -632,7 +639,8 @@ def test_make_pdf_reads_a_page_from_the_output_directory_mount(
     out = tmp_path / "build"
     out.mkdir()
     shutil.copy2(pdf_workspace / "document.html", out / "document.html")
-    shutil.copy2(pdf_workspace / "html-to-pdf.js", workspace / "html-to-pdf.js")
+    (workspace / ".stencil").mkdir(exist_ok=True)
+    shutil.copy2(pdf_workspace / ".stencil" / "html-to-pdf.js", workspace / ".stencil" / "html-to-pdf.js")
 
     result = pipeline.html_to_pdf(
         "/out/document.html",

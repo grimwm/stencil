@@ -411,6 +411,13 @@ then run `clean`, the manifest legitimately names a file the config no longer de
 now refuses that package rather than removing it. The message names the entry; restore the config
 entry if you still want the file, or delete it by hand.
 
+### Capabilities
+
+Which files a package gets is decided by capabilities: directories that say when they apply, and
+that write their output under `.stencil/` beside the package `Makefile`. The README's
+[Capabilities](README.md#capabilities) section describes the rule (`when`), explicit blocks, and the
+Compose command `make help` prints.
+
 ### Where the managed `.gitignore` goes
 
 `stencil install` writes its section into a `.gitignore` **beside the config file**, not in the
@@ -762,23 +769,20 @@ A package's `template_env` puts arbitrary keys into the context, and `when:` con
 them:
 
 ```yaml
-template_env: # config level: declares a key, and gives every package its value
-  has_playwright: false
-
 packages:
   graded:
-    template_env: # package level: overrides the config-level value
+    template_env:
       has_playwright: true
 ```
 
-Declare a key at config level whenever your templates read it but no package in *this* config
-sets it — which happens as soon as one `templates_dir` serves more than one `.config.yaml`.
-A key set by at least one package needs no declaration; the packages that do not set it see it
-as undefined, so `{% if key %}` is false and `{{ key | default('x') }}` still gives `x`.
+`template_env` is package level only; a config-level `template_env` is not read. A key set by at
+least one package needs no declaration; the packages that do not set it see it as undefined, so
+`{% if key %}` is false and `{{ key | default('x') }}` still gives `x`. A capability's own
+`activates` key is not a `template_env` key: write it on the package.
 
 Stencil refuses a key that cannot do anything, in either direction:
 
-- a `when:` naming a key that is neither derived nor declared anywhere, which would skip the
+- a `when:` naming a key that is neither derived nor set by any package, which would skip the
   template it guards for every package;
 - a `template_env` key whose name appears in no `when:` and nowhere in any template.
   Appearing is all that is asked, because a key does not have to reach a template as a
