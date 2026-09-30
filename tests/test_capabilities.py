@@ -326,3 +326,155 @@ def test_readme_reference_does_not_define_capabilities_with_consumer_names():
     assert "## Use cases" in text
     for word in ("grading", "vscode", "runner"):
         assert word not in reference.split("## Configuration")[-1]
+
+
+# --- a package field turns a capability on; templates live beside it --------
+
+
+def _extras_project(tmp_path, package_extra=None, config_extra=None):
+    """A capability that activates ``extras`` with one template beside its manifest.
+
+    Nothing here sets ``templates:`` or ``template_env``, and ``templates_dir``
+    does not point at the capability directory.
+    """
+    cap = tmp_path / "caps" / "extras"
+    cap.mkdir(parents=True, exist_ok=True)
+    (cap / "capability.yaml").write_text(
+        "id: extras\n"
+        "activates: extras\n"
+        "when: extras\n"
+        "templates:\n"
+        "  - src: extras.txt.j2\n"
+        "    dest: .stencil/extras.txt\n"
+    )
+    (cap / "extras.txt.j2").write_text("extras for {{ package_id }}\n")
+    package = {"package_type": "none", "docs": ["Notes.md"]}
+    package.update(package_extra or {})
+    config = {"capabilities_dir": ["caps"], "packages": {"demo": package}}
+    config.update(config_extra or {})
+    return config
+
+
+def _generate(tmp_path, config):
+    env = generate.build_environment(config, tmp_path)
+    out = tmp_path / "out"
+    generate.generate_package(env, config, out, "demo", config_dir=tmp_path)
+    return out / "demo"
+
+
+def test_a_package_field_turns_on_the_capability_and_its_template_renders(tmp_path):
+    config = _extras_project(tmp_path, {"extras": True})
+    package = _generate(tmp_path, config)
+    assert (package / ".stencil" / "extras.txt").read_text() == "extras for demo\n"
+
+
+def test_omitting_the_field_leaves_the_capability_off(tmp_path):
+    config = _extras_project(tmp_path)
+    package = _generate(tmp_path, config)
+    assert (package / "Makefile").is_file()
+    assert not (package / ".stencil" / "extras.txt").exists()
+
+
+def test_the_context_holds_the_block_or_none(tmp_path):
+    config = _extras_project(tmp_path, {"extras": {"mode": "fast"}})
+    context = generate.get_template_context("demo", config, tmp_path)
+    assert context["extras"] == {"mode": "fast"}
+
+    config = _extras_project(tmp_path)
+    context = generate.get_template_context("demo", config, tmp_path)
+    assert context["extras"] is None
+
+
+def test_a_capability_named_something_else_gets_the_same_treatment(tmp_path):
+    # Nothing special-cases `extras`: any loaded activates key is copied.
+    cap = tmp_path / "caps" / "reports"
+    cap.mkdir(parents=True)
+    (cap / "capability.yaml").write_text(
+        "id: reports\nactivates: reports\nwhen: reports is not none\n"
+    )
+    config = {
+        "capabilities_dir": ["caps"],
+        "packages": {"demo": {"package_type": "none", "reports": {"kind": "pdf"}}},
+    }
+    context = generate.get_template_context("demo", config, tmp_path)
+    assert context["reports"] == {"kind": "pdf"}
+
+
+def test_a_package_field_may_not_replace_a_derived_key(tmp_path):
+    cap = tmp_path / "caps" / "clash"
+    cap.mkdir(parents=True)
+    (cap / "capability.yaml").write_text(
+        "id: clash\nactivates: pandoc_image\nwhen: pandoc_image\n"
+    )
+    config = {
+        "capabilities_dir": ["caps"],
+        "packages": {"demo": {"package_type": "none", "pandoc_image": "x/y:1"}},
+    }
+    with pytest.raises(ValueError, match="pandoc_image"):
+        generate.get_template_context("demo", config, tmp_path)
+
+
+def test_a_config_level_template_env_key_is_not_in_the_context(tmp_path):
+    config = _extras_project(tmp_path, config_extra={"template_env": {"leaked": 1}})
+    context = generate.get_template_context("demo", config, tmp_path)
+    assert "leaked" not in context
+    assert "leaked" not in context["template_env"]
+
+
+def test_a_config_level_template_env_cannot_turn_a_capability_on(tmp_path):
+    config = _extras_project(tmp_path, config_extra={"template_env": {"extras": True}})
+    package = _generate(tmp_path, config)
+    assert not (package / ".stencil" / "extras.txt").exists()
+
+
+def test_the_capability_directory_is_searched_before_the_template_path(tmp_path):
+    config = _extras_project(tmp_path, {"extras": True})
+    (tmp_path / "tpl").mkdir()
+    (tmp_path / "tpl" / "extras.txt.j2").write_text("from the template path\n")
+    config["templates_dir"] = ["tpl"]
+    package = _generate(tmp_path, config)
+    assert (package / ".stencil" / "extras.txt").read_text() == "extras for demo\n"
+
+
+def test_a_capability_template_not_beside_it_still_comes_from_the_template_path(
+    tmp_path,
+):
+    config = _extras_project(tmp_path, {"extras": True})
+    (tmp_path / "caps" / "extras" / "extras.txt.j2").unlink()
+    (tmp_path / "tpl").mkdir()
+    (tmp_path / "tpl" / "extras.txt.j2").write_text("shared\n")
+    config["templates_dir"] = ["tpl"]
+    package = _generate(tmp_path, config)
+    assert (package / ".stencil" / "extras.txt").read_text() == "shared\n"
+
+
+def test_a_package_template_env_key_read_by_the_capability_template_is_used(tmp_path):
+    config = _extras_project(tmp_path, {"extras": True, "template_env": {"flavor": "x"}})
+    (tmp_path / "caps" / "extras" / "extras.txt.j2").write_text(
+        "{{ flavor }}\n"
+    )
+    generate.validate_config(config, generate.build_environment(config, tmp_path), tmp_path)
+    package = _generate(tmp_path, config)
+    assert (package / ".stencil" / "extras.txt").read_text() == "x\n"
+
+
+def test_a_package_template_env_key_nothing_reads_is_still_rejected(tmp_path):
+    config = _extras_project(tmp_path, {"extras": True, "template_env": {"unused": 1}})
+    with pytest.raises(ValueError, match="unused"):
+        generate.validate_config(
+            config, generate.build_environment(config, tmp_path), tmp_path
+        )
+
+
+def test_the_cli_generates_from_capabilities_without_a_templates_list(tmp_path):
+    import yaml
+
+    from tests.test_cli import run_cli
+
+    config = _extras_project(tmp_path, {"extras": True})
+    config["output_dir"] = "out"
+    (tmp_path / ".config.yaml").write_text(yaml.safe_dump(config))
+    result = run_cli("gen", "demo", cwd=tmp_path)
+    assert result.returncode == 0, result.stderr
+    assert (tmp_path / "out" / "demo" / ".stencil" / "extras.txt").is_file()
+    assert (tmp_path / "out" / "demo" / "Makefile").is_file()

@@ -290,30 +290,6 @@ def test_a_template_env_key_left_unset_is_falsy_rather_than_undefined(
     assert (package / "deps").read_text().strip() == "no"
 
 
-def test_a_config_level_default_is_overridden_per_package(generate_package, tmp_path):
-    """The declaration supplies the value a package does not; a package that
-    does set the key wins. This is what lets one shared template serve configs
-    that define different subsets of the flags it reads."""
-    directory = tmp_path / "templates"
-    directory.mkdir()
-    (directory / "flag.j2").write_text("{% if has_playwright %}on{% else %}off{% endif %}\n")
-    config = {
-        "templates_dir": "templates",
-        "template_env": {"has_playwright": False},
-        "templates": [{"src": "flag.j2"}],
-        "packages": {
-            "graded": {
-                "name": "Graded",
-                "package_type": "none",
-                "template_env": {"has_playwright": True},
-            },
-            "plain": {"name": "Plain", "package_type": "none"},
-        },
-    }
-    assert (generate_package(config, "graded") / "flag").read_text().strip() == "on"
-    assert (generate_package(config, "plain") / "flag").read_text().strip() == "off"
-
-
 def test_an_unset_key_still_triggers_the_default_filter(generate_package, tmp_path):
     """A key some package sets must stay *undefined* for the packages that do
     not, rather than becoming False. A template writing
@@ -358,14 +334,11 @@ def test_an_unset_key_still_triggers_the_default_filter(generate_package, tmp_pa
 # whatever the template rendered.
 
 
-def context_for(template_env: dict | None = None, config_env: dict | None = None):
+def context_for(template_env: dict | None = None):
     package = {"package_type": "doc", "docs": ["a.md"]}
     if template_env is not None:
         package["template_env"] = template_env
-    config = {"packages": {"demo": package}}
-    if config_env is not None:
-        config["template_env"] = config_env
-    return get_template_context("demo", config)
+    return get_template_context("demo", {"packages": {"demo": package}})
 
 
 def test_a_custom_key_still_reaches_the_context():
@@ -380,15 +353,6 @@ def test_a_package_may_not_shadow_a_derived_key():
     assert "pandoc_image" in str(caught.value)
 
 
-def test_a_config_may_not_shadow_a_derived_key_either():
-    """Both levels, or the rule is a suggestion. This one already could not
-    shadow -- setdefault silently dropped it -- so the change here is that it
-    says so instead of ignoring you."""
-    with pytest.raises(ValueError) as caught:
-        context_for(config_env={"package_type": "zip"})
-    assert "package_type" in str(caught.value)
-
-
 def test_the_error_names_every_collision_not_just_the_first():
     """A config with two mistakes should need one round trip, not two."""
     with pytest.raises(ValueError) as caught:
@@ -396,15 +360,6 @@ def test_the_error_names_every_collision_not_just_the_first():
     message = str(caught.value)
     assert "assets" in message and "pandoc_image" in message
     assert "harmless" not in message
-
-
-def test_a_package_value_still_beats_the_config_wide_default():
-    """The behaviour the update() is FOR, which a careless fix would break by
-    turning that line into a setdefault as well."""
-    context = context_for(
-        {"has_playwright": True}, config_env={"has_playwright": False}
-    )
-    assert context["has_playwright"] is True
 
 
 def test_the_keys_the_real_consumers_use_are_all_still_accepted():
