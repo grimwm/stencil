@@ -1,3 +1,4 @@
+{% set bind = compose_up | default('.', true) %}
   format-md:
     image: {{ node_image }}
     volumes:

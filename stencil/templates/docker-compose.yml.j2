@@ -1,4 +1,3 @@
-{% set bind = compose_up | default('.', true) %}
 name: {{ package_id | lower }}
 services:
 {% include 'docker-compose-html.yml.j2' %}

@@ -971,6 +971,12 @@ def get_template_context(
         # compose file into no second mount, so a package that does not set it
         # is byte-identical to before.
         "package_output_dir": package_output_dir,
+        # Relative prefix for compose bind sources. "." is the package root,
+        # which is where `docker compose -f docker-compose.yml` resolves
+        # paths. The copy written to .stencil/docker-compose.yml overrides
+        # this to ".." at render time, because that file's project directory
+        # is .stencil/ and ".." is the package root from there.
+        "compose_up": ".",
         "has_package_output_dir": bool(package_output_dir),
         "sql_imports": sql_imports,
         "pre_build": pre_build,

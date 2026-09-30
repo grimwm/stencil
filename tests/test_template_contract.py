@@ -115,6 +115,7 @@ CONTRACT = {
         # provides every other key here and not this one renders a pdf service
         # that cannot start.
         "browser_tools_dir",
+        "compose_up",
         "check_access_script",
         "format_lockfile_digest",
         "format_lockfile_name",
