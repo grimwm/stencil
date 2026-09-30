@@ -4,7 +4,29 @@ from pathlib import Path
 
 import pytest
 
-from stencil.capabilities import Capability, load_capabilities, validate_capability, when_matches
+from stencil.capabilities import (
+    Capability,
+    check_fields,
+    load_capabilities,
+    validate_capability,
+    when_matches,
+)
+
+
+def _capability(**overrides) -> Capability:
+    values = dict(
+        id="grading",
+        directory=Path("grading"),
+        when="grading",
+        activates="grading",
+        fields={},
+        templates=[],
+        fragments=[],
+        optional=[],
+        required_when={},
+    )
+    values.update(overrides)
+    return Capability(**values)
 
 
 def test_load_reads_id_when_and_templates(tmp_path):
@@ -106,6 +128,26 @@ def test_explicit_when_must_mention_activates():
     )
     problems = validate_capability(cap)
     assert any("grading" in problem for problem in problems)
+
+
+def test_unknown_field_value_is_rejected():
+    cap = _capability(fields={"engine": ["playwright", "mysql"]})
+    problems = check_fields(cap, {"engine": "sqlite"})
+    assert any("sqlite" in problem for problem in problems)
+
+
+def test_omitted_field_is_allowed():
+    cap = _capability(fields={"engine": ["playwright", "mysql"]})
+    assert check_fields(cap, {}) == []
+
+
+def test_required_when_demands_the_key():
+    cap = _capability(
+        fields={"runner": ["problems", "open"]},
+        required_when={"runner": "engine == 'playwright'"},
+    )
+    assert check_fields(cap, {"engine": "playwright"}) != []
+    assert check_fields(cap, {"engine": "mysql"}) == []
 
 
 def test_stored_boolean_strings_evaluate_as_booleans():

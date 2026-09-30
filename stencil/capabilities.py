@@ -57,6 +57,7 @@ class Capability:
     templates: list[dict] = field(default_factory=list)
     fragments: list[dict] = field(default_factory=list)
     optional: list[str] = field(default_factory=list)
+    required_when: dict[str, str] = field(default_factory=dict)
 
 
 def load_capabilities(roots: list[Path]) -> list[Capability]:
@@ -120,6 +121,7 @@ def load_capabilities(roots: list[Path]) -> list[Capability]:
                 templates=data.get("templates") or [],
                 fragments=data.get("fragments") or [],
                 optional=data.get("optional") or [],
+                required_when=data.get("required_when") or {},
             )
             for problem in validate_capability(capability):
                 problems.append(f"{manifest}: {problem}")
@@ -166,6 +168,30 @@ def validate_capability(capability: Capability) -> list[str]:
         problems.append(
             f"{capability.id}: when does not mention its activates key {activates}"
         )
+    return problems
+
+
+def check_fields(capability: Capability, block: dict) -> list[str]:
+    """Return problems for a package block this capability activates.
+
+    A key the block omits is allowed. A key it sets must be one of the
+    values the capability listed. A ``required_when`` entry names a key
+    that must be present when its expression is true of the block.
+    """
+    problems: list[str] = []
+    for key, allowed in capability.fields.items():
+        if key not in block:
+            continue
+        value = block[key]
+        if value not in allowed:
+            problems.append(
+                f"{capability.id}: {key} is {value!r}, not one of {list(allowed)}"
+            )
+    for key, expression in capability.required_when.items():
+        if key not in block and when_matches(expression, block):
+            problems.append(
+                f"{capability.id}: {key} is required when {expression}"
+            )
     return problems
 
 
