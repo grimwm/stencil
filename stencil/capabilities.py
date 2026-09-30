@@ -60,6 +60,12 @@ class Capability:
     required_when: dict[str, str] = field(default_factory=dict)
 
 
+def builtin_capabilities() -> list[Capability]:
+    """The capabilities stencil ships. Today that is only ``documents``."""
+    root = Path(__file__).resolve().parent / "templates" / "capabilities"
+    return load_capabilities([root])
+
+
 def load_capabilities(roots: list[Path]) -> list[Capability]:
     """Load every capability found one level below each root.
 

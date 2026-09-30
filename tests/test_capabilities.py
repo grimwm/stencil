@@ -6,6 +6,7 @@ import pytest
 
 from stencil.capabilities import (
     Capability,
+    builtin_capabilities,
     check_fields,
     load_capabilities,
     matching,
@@ -169,6 +170,49 @@ def test_omitted_activates_key_is_none():
     grading = _capability(id="grading", when="grading", activates="grading")
     ctx = render_context({}, [grading])
     assert ctx["grading"] is None
+
+
+def test_documents_runs_for_docs_and_not_for_an_empty_package():
+    docs = {c.id: c for c in builtin_capabilities()}["documents"]
+    present = {
+        "docs": ["a.md"],
+        "slides": [],
+        "package_type": "none",
+        "package_sources": [],
+    }
+    empty = {
+        "docs": [],
+        "slides": [],
+        "package_type": "none",
+        "package_sources": [],
+    }
+    assert when_matches(docs.when, present)
+    assert not when_matches(docs.when, empty)
+
+
+def test_documents_destinations_are_under_dot_stencil():
+    docs = {c.id: c for c in builtin_capabilities()}["documents"]
+    dests = [item["dest"] for item in docs.templates + docs.fragments]
+    assert dests
+    assert all(dest.startswith(".stencil/") for dest in dests)
+
+
+def test_document_package_includes_only_documents(generate_package):
+    package = generate_package(
+        {
+            "packages": {
+                "demo": {
+                    "package_type": "doc",
+                    "docs": ["Notes.md"],
+                }
+            }
+        }
+    )
+    makefile = (package / "Makefile").read_text()
+    assert "include .stencil/documents.mk" in makefile
+    assert "grading.mk" not in makefile
+    assert (package / ".stencil" / "html-template.html").is_file()
+    assert not (package / "html-template.html").exists()
 
 
 def test_stored_boolean_strings_evaluate_as_booleans():

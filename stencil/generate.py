@@ -36,6 +36,14 @@ from jinja2 import (
 from jinja2.exceptions import TemplateNotFound
 
 from . import __version__, assets, pipeline
+from .capabilities import (
+    builtin_capabilities,
+    check_fields,
+    load_capabilities,
+    matching,
+    render_context,
+    when_matches,
+)
 
 # Script directory
 SCRIPT_DIR = Path(__file__).parent
@@ -644,7 +652,9 @@ def check_glob_vocabulary(package_id: str, where: str, entry: str) -> None:
         )
 
 
-def get_template_context(package_id: str, config: dict) -> dict:
+def get_template_context(
+    package_id: str, config: dict, config_dir: Path | None = None
+) -> dict:
     """Build the template context for a package."""
     package = config.get("packages", {}).get(package_id)
 
@@ -1097,7 +1107,57 @@ def get_template_context(package_id: str, config: dict) -> dict:
     # Also keep as nested dict for backward compatibility
     context["template_env"] = template_env if isinstance(template_env, dict) else {}
 
+    apply_capabilities(context, config, config_dir)
     return context
+
+
+_FORMAT_LOCKFILE = {
+    "src": "format-package-lock.json.j2",
+    "dest": ".stencil/format-package-lock.json",
+}
+
+
+def apply_capabilities(
+    context: dict, config: dict, config_dir: Path | None
+) -> None:
+    """Choose the capabilities this package runs and record what they write.
+
+    Stencil's built-in capabilities always load. ``capabilities_dir`` adds
+    more, resolved from the config file. A capability that does not match
+    contributes no files. The format lockfile is written for every package.
+    """
+    loaded = list(builtin_capabilities())
+    raw = config.get("capabilities_dir") or []
+    if isinstance(raw, str):
+        raw = [raw]
+    if raw and config_dir is not None:
+        loaded.extend(load_capabilities([(config_dir / item) for item in raw]))
+
+    problems: list[str] = []
+    for cap in loaded:
+        if not cap.activates or not when_matches(cap.when, context):
+            continue
+        block = context.get(cap.activates)
+        if isinstance(block, dict):
+            problems.extend(check_fields(cap, block))
+    if problems:
+        raise ValueError("\n".join(problems))
+
+    for key, value in render_context(context, loaded).items():
+        context.setdefault(key, value)
+
+    matched = matching(loaded, context)
+    definitions: list[dict] = []
+    includes: list[str] = []
+    for cap in matched:
+        definitions.extend(cap.templates)
+        for fragment in cap.fragments:
+            definitions.append(fragment)
+            includes.append(fragment["dest"])
+    definitions.insert(0, {"src": "Makefile.j2", "dest": "Makefile"})
+    definitions.append(dict(_FORMAT_LOCKFILE))
+    context["capability_templates"] = definitions
+    context["capability_includes"] = includes
 
 
 def declared_template_env_keys(config: dict) -> set[str]:
@@ -1849,7 +1909,7 @@ def package_contexts(
 
     for package_id, package in packages.items():
         try:
-            context = get_template_context(package_id, config)
+            context = get_template_context(package_id, config, config_dir)
         except ValueError as e:
             # Passed through verbatim, with NO class name and NO package
             # prefix of our own. Two separate reasons.
@@ -2111,7 +2171,7 @@ def when_holds(tdef: dict, context: dict) -> bool:
     if when is None:
         return True
     if isinstance(when, str):
-        when = [when]
+        return when_matches(when, context)
     return all(context.get(key) for key in when)
 
 
@@ -2129,7 +2189,14 @@ def injected_sources(context: dict) -> list[str]:
 
 
 def injected_templates(context: dict) -> list[dict]:
-    """``injected_sources`` as template definitions render_templates accepts."""
+    """Templates this package's capabilities contribute, ``when`` still to apply.
+
+    Falls back to ``injected_sources`` only when a context was built without
+    ``apply_capabilities``. ``get_template_context`` always applies it.
+    """
+    selected = context.get("capability_templates")
+    if selected is not None:
+        return list(selected)
     return [{"src": src} for src in injected_sources(context)]
 
 
@@ -3398,7 +3465,7 @@ def generate_package(
 ) -> Path | None:
     """Generate scaffolding for a single package. Returns output_dir on success, None on skip."""
     try:
-        context = get_template_context(package_id, config)
+        context = get_template_context(package_id, config, config_dir)
     except ValueError as e:
         print(f"Error: {e}", file=sys.stderr)
         return None
@@ -3809,8 +3876,12 @@ def package_entries(
     # from, on the same predicates -- spelling them twice is what left a
     # package_sources-only doc package with five generated files that clean
     # could not see.
-    for src in injected_sources(context):
-        entries.add(template_dest(src))
+    for tdef in injected_templates(context):
+        if not when_holds(tdef, context):
+            continue
+        dest = tdef.get("dest") or template_dest(tdef.get("src", ""))
+        if dest:
+            entries.add(dest)
 
     if context["has_pages"]:
         # The copied brand image, which `clean` should be able to see and

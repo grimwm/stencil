@@ -1,0 +1,33 @@
+id: documents
+when: "docs or slides or (package_type == 'doc' and package_sources)"
+templates:
+  - src: html-template.html.j2
+    dest: .stencil/html-template.html
+    when: "has_docs or has_package_sources"
+  - src: frontmatter-filter.lua.j2
+    dest: .stencil/frontmatter-filter.lua
+  - src: hidden-filter.lua.j2
+    dest: .stencil/hidden-filter.lua
+  - src: mermaid-figure-filter.lua.j2
+    dest: .stencil/mermaid-figure-filter.lua
+  - src: figure-name-filter.lua.j2
+    dest: .stencil/figure-name-filter.lua
+  - src: embed-images.lua.j2
+    dest: .stencil/embed-images.lua
+  - src: code-bundle-filter.lua.j2
+    dest: .stencil/code-bundle-filter.lua
+  - src: html-to-pdf.js.j2
+    dest: .stencil/html-to-pdf.js
+  - src: Dockerfile.browser.j2
+    dest: .stencil/Dockerfile.browser
+  - src: browser-package-lock.json.j2
+    dest: .stencil/browser-package-lock.json
+  - src: slide-template.html.j2
+    dest: .stencil/slide-template.html
+    when: has_slides
+  - src: slide-sections.lua.j2
+    dest: .stencil/slide-sections.lua
+    when: has_slides
+fragments:
+  - src: documents.mk.j2
+    dest: .stencil/documents.mk
