@@ -318,3 +318,11 @@ def test_stored_boolean_strings_evaluate_as_booleans():
     # A YAML `when: true` is stored by the loader as the string "True".
     assert when_matches("True", {}) is True
     assert when_matches("False", {}) is False
+
+
+def test_readme_reference_does_not_define_capabilities_with_consumer_names():
+    text = Path("README.md").read_text()
+    reference, _, rest = text.partition("## Use cases")
+    assert "## Use cases" in text
+    for word in ("grading", "vscode", "runner"):
+        assert word not in reference.split("## Configuration")[-1]

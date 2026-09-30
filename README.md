@@ -2,7 +2,7 @@
 
 Generate project scaffolding from Jinja2 templates and YAML configuration.
 
-Stencil renders Jinja2 templates into per-package output directories, driven by a YAML config file. Conditional rendering lets you include or skip templates based on package features.
+Stencil renders Jinja2 templates into per-package output directories, driven by a YAML config file. A package gets the files of every _capability_ whose rule matches it, and none of the files of a capability whose rule does not.
 
 Two companion guides: [STENCIL.md](STENCIL.md) describes the bundled templates and package
 configuration; the [Authoring Guide](AUTHORING.md) covers writing the markdown itself, including
@@ -56,12 +56,13 @@ Stencil is driven by a YAML config file (default: `.config.yaml`). See [`config.
 
 ### Top-level fields
 
-| Field           | Description                                                                                      |
-| --------------- | ------------------------------------------------------------------------------------------------ |
-| `templates_dir` | Path(s) to template directories, relative to config. String or list.                             |
-| `output_dir`    | Base output directory, **relative to the working directory**, not to this file. Defaults to CWD. |
-| `templates`     | List of template definitions to render.                                                          |
-| `packages`      | Dictionary of package configurations keyed by package ID.                                        |
+| Field              | Description                                                                                      |
+| ------------------ | ------------------------------------------------------------------------------------------------ |
+| `templates_dir`    | Path(s) to template directories, relative to config. String or list.                             |
+| `capabilities_dir` | Path(s) to directories of capabilities, relative to config. String or list. See below.           |
+| `output_dir`       | Base output directory, **relative to the working directory**, not to this file. Defaults to CWD. |
+| `templates`        | Optional. Single files that belong to no capability, in the same shape a capability uses.        |
+| `packages`         | Dictionary of package configurations keyed by package ID.                                        |
 
 `output_dir` is resolved against the process's working directory rather than against the config
 file that names it, which is worth stating plainly because it is the opposite of what every other
@@ -70,9 +71,119 @@ So `output_dir: build` puts output under `build/` **wherever you happened to run
 and the same config generates into a different place depending on your shell's `cd`. Drive it from a
 Makefile that runs in a fixed directory, or pass an absolute path.
 
+### Capabilities
+
+A capability is a directory holding a `capability.yaml`, the templates it renders, and a rule
+saying which packages get them. A package does not list files. It sets fields, and the
+capabilities whose rule matches those fields write theirs.
+
+Point `capabilities_dir` at a directory whose immediate subdirectories are capabilities:
+
+```text
+capabilities/
+  reports/
+    capability.yaml
+    summary.txt.j2
+    reports.mk.j2
+```
+
+```yaml
+# capabilities/reports/capability.yaml
+id: reports # must equal the directory name
+activates: reports # the one package field that turns this on
+when: reports # a Jinja expression over the package
+fields: # optional: values the block may hold
+  format: [txt, html]
+required_when: # optional: a key the block must set when an expression over the block holds
+  destination: "format == 'html'"
+optional: [footer] # names the templates may read that a package may leave unset
+templates: # rendered files
+  - src: summary.txt.j2
+    dest: .stencil/summary.txt
+fragments: # Makefile fragments, included by the generated Makefile
+  - src: reports.mk.j2
+    dest: .stencil/reports.mk
+```
+
+A capability whose rule does not match a package contributes nothing to it: no files, and no
+names in its Makefile. A capability that matches no package in a config is not an error.
+
+#### `when`
+
+`when` is one Jinja expression, evaluated against the package. A name the package did not set is
+`None`, so `reports is none` is true, `reports.format == 'html'` is false, and a comparison a
+missing value cannot answer does not match. A syntax error in `when` fails the run and names the
+expression. There are two kinds of rule, told apart by whether `activates` is set.
+
+- **Shape rule** (no `activates`). `when` may name only values stencil derives from the package:
+  `services`, `docs`, `slides`, `package_sources`, `package_type`, and the `has_*` booleans built
+  from them. Setting the field is the switch. The built-in `documents` capability is a shape rule:
+  it applies when `docs` or `slides` is non-empty, or a `doc` package has `package_sources`.
+  Any other name in a shape rule is a validation error.
+- **Explicit block** (`activates: NAME`). `NAME` is one package field stencil does not derive, and
+  `when` must mention it. The field is optional on every package: set it and the capability
+  turns on, omit it and the capability stays off. The field's value is the payload the
+  capability's templates read.
+
+```yaml
+packages:
+  weekly:
+    package_type: none
+    docs: [README.md]
+    reports: # turns on the `reports` capability above
+      format: html
+  archive:
+    package_type: none
+    docs: [README.md] # no `reports`, so no reports files
+```
+
+When a capability lists `fields`, a block that sets a key to a value outside its list fails
+validation, and `required_when` demands a key when its expression, read against the block's own keys, is true. Both are
+checked before anything is written. `optional` names read as `None` when unset for the packages
+where the capability is active. Every other undefined name still fails the render.
+
+A template inside a matched capability may narrow further with its own `when`, the same field
+`templates:` entries have. That expression runs only after the capability has matched, so the
+block is a mapping by then.
+
+Template lookup for a capability checks its own directory, then each `templates_dir`, then
+stencil's bundled templates. The first match wins, so a project replaces one bundled file by
+shipping its own under the same name.
+
+#### Where the output goes
+
+The generated `Makefile` stays at the package root, because `make` looks there. Everything else
+stencil writes for a package goes under `.stencil/` beside it, so a plain `ls` of the package does
+not list generated tooling. The Makefile includes each matched capability's fragment, `documents`
+first, then the rest sorted by `id`:
+
+```makefile
+include .stencil/documents.mk
+include .stencil/reports.mk
+```
+
+Compose files work the same way. Stencil always writes `.stencil/docker-compose.yml`, and each
+matched capability that ships `.stencil/<id>.compose.yml` adds it, in the same order:
+
+```makefile
+COMPOSE_FILES ?= .stencil/docker-compose.yml .stencil/reports.compose.yml
+STENCIL_COMPOSE = $(DC) --project-directory . $(addprefix -f ,$(COMPOSE_FILES))
+```
+
+`--project-directory .` makes every relative path in a Compose file mean the package root, not
+`.stencil/`. `make help` prints the command it will run, so what you read is what runs:
+
+```text
+Compose, from this directory: docker compose --project-directory . -f .stencil/docker-compose.yml
+```
+
+A zip built from `package_sources` that walks `.` leaves `.stencil/` out of the archive. Files
+that another program requires at a fixed path (a copied brand image, for one) are not moved into
+`.stencil/`.
+
 ### Template definitions
 
-Each entry in `templates`:
+Each entry in a capability's `templates`, `fragments`, and in the optional top-level `templates`:
 
 | Field  | Description                                                                     |
 | ------ | ------------------------------------------------------------------------------- |
@@ -98,16 +209,16 @@ Each key under `packages` is a package ID passed to the CLI.
 
 **Optional:**
 
-| Field             | Default            | Description                                                                                                                                             |
-| ----------------- | ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `name`            | package ID         | Display name shown by `list`.                                                                                                                           |
-| `dir`             | package ID         | Output subdirectory under `output_dir`.                                                                                                                 |
-| `docs`            | `[]`               | Markdown files to convert to HTML documents.                                                                                                            |
-| `slides`          | `[]`               | Markdown files to convert to HTML slide decks.                                                                                                          |
-| `services`        | `[]`               | Docker Compose services (`web`, `mysql`).                                                                                                               |
-| `package_sources` | `[htdocs]` for zip | What `pkg` puts into `package_name`: a glob expands sorted, a directory means every file under it, recursively, anything else is used as written.       |
-| `sql_import`      |                    | SQL import config(s): `{target, database, file}` dict or list                                                                                           |
-| `template_env`    | `{}`               | Custom variables merged into template context. May not reuse a context-variable name from the table below; a collision raises rather than shadowing it. |
+| Field             | Default            | Description                                                                                                                                                                                                         |
+| ----------------- | ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `name`            | package ID         | Display name shown by `list`.                                                                                                                                                                                       |
+| `dir`             | package ID         | Output subdirectory under `output_dir`.                                                                                                                                                                             |
+| `docs`            | `[]`               | Markdown files to convert to HTML documents.                                                                                                                                                                        |
+| `slides`          | `[]`               | Markdown files to convert to HTML slide decks.                                                                                                                                                                      |
+| `services`        | `[]`               | Docker Compose services (`web`, `mysql`).                                                                                                                                                                           |
+| `package_sources` | `[htdocs]` for zip | What `pkg` puts into `package_name`: a glob expands sorted, a directory means every file under it, recursively, anything else is used as written.                                                                   |
+| `sql_import`      |                    | SQL import config(s): `{target, database, file}` dict or list                                                                                                                                                       |
+| `template_env`    | `{}`               | Custom variables merged into template context, for a key no capability has taken over. Package level only. May not reuse a context-variable name from the table below; a collision raises rather than shadowing it. |
 
 ### Package types
 
@@ -142,6 +253,85 @@ Templates receive these variables, derived from the package config:
 | `sql_imports`         | Normalized list of `sql_import` dicts               |
 | `template_env`        | Custom variables dict (also merged to top level)    |
 | _(custom)_            | All keys from `template_env` are available directly |
+
+## Use cases
+
+### Add one optional file set to a package
+
+The smallest complete capability: a directory with one template and one Makefile fragment, turned
+on by a package field.
+
+```text
+capabilities/
+  extras/
+    capability.yaml
+    notes.txt.j2
+    extras.mk.j2
+```
+
+```yaml
+# capabilities/extras/capability.yaml
+id: extras
+activates: extras
+when: extras
+templates:
+  - src: notes.txt.j2
+    dest: .stencil/notes.txt
+fragments:
+  - src: extras.mk.j2
+    dest: .stencil/extras.mk
+```
+
+```jinja
+{# notes.txt.j2 #}
+{{ extras.greeting }} from {{ package_id }}
+```
+
+```makefile
+# extras.mk.j2
+.PHONY: extras
+extras: ## Print the extras note
+	@cat .stencil/notes.txt
+```
+
+```yaml
+# .config.yaml
+capabilities_dir: capabilities
+
+packages:
+  demo:
+    package_type: none
+    docs: [README.md]
+    extras:
+      greeting: hello
+```
+
+`stencil gen demo` writes the Makefile at the package root and everything else under
+`.stencil/`. The `documents` capability matches because `docs` is set; `extras` matches because
+the package sets `extras`:
+
+```text
+demo/
+  Makefile                       # includes .stencil/documents.mk and .stencil/extras.mk
+  .stencil/
+    docker-compose.yml
+    documents.mk
+    extras.mk
+    notes.txt                    # hello from demo
+    ...                          # the document pipeline's filters and templates
+```
+
+A package that omits `extras` gets none of those `extras` files, and its Makefile does not
+mention them.
+
+### Example: a course repository
+
+A course repository is the case this was built for. Its generator keeps capabilities such as a
+web server, a database, an editor configuration and an autograder as directories under one
+`capabilities/`, and each assignment's `.config.yaml` only names its packages and sets the fields
+those capabilities read. A document-only handout sets `docs` and gets `documents` alone; a
+homework package that also sets `services` and an autograder block gets those too. Nothing in
+stencil knows those names. They are the course's capabilities, written the way `extras` is above.
 
 ## Bundled templates
 

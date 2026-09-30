@@ -411,6 +411,13 @@ then run `clean`, the manifest legitimately names a file the config no longer de
 now refuses that package rather than removing it. The message names the entry; restore the config
 entry if you still want the file, or delete it by hand.
 
+### Capabilities
+
+Which files a package gets is decided by capabilities: directories that say when they apply, and
+that write their output under `.stencil/` beside the package `Makefile`. The README's
+[Capabilities](README.md#capabilities) section describes the rule (`when`), explicit blocks, and the
+Compose command `make help` prints.
+
 ### Where the managed `.gitignore` goes
 
 `stencil install` writes its section into a `.gitignore` **beside the config file**, not in the

@@ -9,6 +9,36 @@ and the closed epics in `.beads/issues.jsonl` are the readable index.
 How the version gets bumped is written down in
 [AGENTS.md](AGENTS.md#cutting-a-release), not here.
 
+## 1.0.0
+
+- **Capabilities select a package's files.** A capability is a directory with a
+  `capability.yaml`: an `id` matching the directory, a `when` expression, and
+  the `templates` and `fragments` it renders. `capabilities_dir` in the config
+  names where to find them. A capability whose rule does not match a package
+  writes nothing for it and leaves no name in its Makefile. A shape rule
+  (no `activates`) may name only values stencil derives from the package; an
+  explicit block (`activates: NAME`) is turned on by the package setting that
+  one field. A block's `fields` list the values it accepts and `required_when`
+  the keys it demands, and a violation fails before anything is written.
+  Stencil ships one, `documents`. The top-level `templates:` list remains for a
+  single file that belongs to no capability.
+- **Generated files other than the Makefile move under `.stencil/`.** The
+  Makefile stays at the package root, because `make` reads it there. The
+  pandoc filters, HTML templates, browser Dockerfile, npm lockfiles, Compose
+  file and Makefile fragments are written to `.stencil/`. A zip of a package
+  directory leaves `.stencil/` out. Regenerate, and delete any old copies at
+  the package root.
+- **Breaking: config-level `template_env` is removed.** Defaults for names a
+  shared template might read now live on the capability, once, as `optional`.
+  Package-level `template_env` stays for keys no capability has taken over.
+- **Breaking: the `COMPOSE_FILES` default path changed.** It was
+  `docker-compose.yml`; it is now `.stencil/docker-compose.yml` plus one
+  `.stencil/<id>.compose.yml` for each matched capability that ships one.
+  Every Compose call also passes `--project-directory .`, so a relative path
+  in a Compose file still means the package root. `make help` prints the
+  exact command. A caller that passed `COMPOSE_FILES=docker-compose.yml` must
+  update the path.
+
 ## 0.45.0
 
 - **Windows hosts no longer fail `make doc` at `out-dir`** (stn-i0u). The
