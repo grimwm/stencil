@@ -1,12 +1,12 @@
   format-md:
     image: {{ node_image }}
     volumes:
-      - ..:/workspace:z
+      - {{ bind }}:/workspace:z
 {% if has_package_output_dir %}
       # Build products live outside the package directory, which the mount at
       # /workspace cannot reach: an output directory that is a sibling of the
       # sources is `..` away, and `..` escapes a bind mount. Mounted separately.
-      - ../{{ package_output_dir }}:/out:z
+      - {% if bind == '..' %}../{% endif %}{{ package_output_dir }}:/out:z
 {% endif %}
     working_dir: /workspace
     environment:
@@ -56,12 +56,12 @@
   doc:
     image: {{ pandoc_image }}
     volumes:
-      - ..:/workspace:z
+      - {{ bind }}:/workspace:z
 {% if has_package_output_dir %}
       # Build products live outside the package directory, which the mount at
       # /workspace cannot reach: an output directory that is a sibling of the
       # sources is `..` away, and `..` escapes a bind mount. Mounted separately.
-      - ../{{ package_output_dir }}:/out:z
+      - {% if bind == '..' %}../{% endif %}{{ package_output_dir }}:/out:z
 {% endif %}
     working_dir: /workspace
     entrypoint:
@@ -80,12 +80,12 @@
   slide:
     image: {{ pandoc_image }}
     volumes:
-      - ..:/workspace:z
+      - {{ bind }}:/workspace:z
 {% if has_package_output_dir %}
       # Build products live outside the package directory, which the mount at
       # /workspace cannot reach: an output directory that is a sibling of the
       # sources is `..` away, and `..` escapes a bind mount. Mounted separately.
-      - ../{{ package_output_dir }}:/out:z
+      - {% if bind == '..' %}../{% endif %}{{ package_output_dir }}:/out:z
 {% endif %}
     working_dir: /workspace
     entrypoint:
@@ -109,16 +109,16 @@
   # Invoked as: docker compose build pdf && docker compose run --rm pdf <in.html> <out.pdf>
   pdf:
     build:
-      context: ..
+      context: {{ bind }}
       dockerfile: .stencil/Dockerfile.browser
     image: localhost/{{ package_id }}_browser:latest
     volumes:
-      - ..:/workspace:z
+      - {{ bind }}:/workspace:z
 {% if has_package_output_dir %}
       # Build products live outside the package directory, which the mount at
       # /workspace cannot reach: an output directory that is a sibling of the
       # sources is `..` away, and `..` escapes a bind mount. Mounted separately.
-      - ../{{ package_output_dir }}:/out:z
+      - {% if bind == '..' %}../{% endif %}{{ package_output_dir }}:/out:z
 {% endif %}
     working_dir: /workspace
     entrypoint:
@@ -131,12 +131,12 @@
   check-pdf:
     image: {{ verapdf_image }}
     volumes:
-      - ..:/workspace:z
+      - {{ bind }}:/workspace:z
 {% if has_package_output_dir %}
       # Build products live outside the package directory, which the mount at
       # /workspace cannot reach: an output directory that is a sibling of the
       # sources is `..` away, and `..` escapes a bind mount. Mounted separately.
-      - ../{{ package_output_dir }}:/out:z
+      - {% if bind == '..' %}../{% endif %}{{ package_output_dir }}:/out:z
 {% endif %}
     working_dir: /workspace
     entrypoint:
@@ -151,16 +151,16 @@
   # PDF/UA-1 (ISO 14289-1) that check-pdf measures.
   check-access:
     build:
-      context: ..
+      context: {{ bind }}
       dockerfile: .stencil/Dockerfile.browser
     image: localhost/{{ package_id }}_browser:latest
     volumes:
-      - ..:/workspace:z
+      - {{ bind }}:/workspace:z
 {% if has_package_output_dir %}
       # Build products live outside the package directory, which the mount at
       # /workspace cannot reach: an output directory that is a sibling of the
       # sources is `..` away, and `..` escapes a bind mount. Mounted separately.
-      - ../{{ package_output_dir }}:/out:z
+      - {% if bind == '..' %}../{% endif %}{{ package_output_dir }}:/out:z
 {% endif %}
     working_dir: /workspace
     # Every $ is doubled on the way in; compose substitutes $VAR in a service

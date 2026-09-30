@@ -1195,7 +1195,15 @@ def apply_capabilities(
                 break
     definitions.insert(0, {"src": "Makefile.j2", "dest": "Makefile"})
     definitions.append(
-        {"src": "docker-compose.yml.j2", "dest": _BASE_COMPOSE}
+        {
+            "src": "docker-compose.yml.j2",
+            "dest": _BASE_COMPOSE,
+            # This copy lives in .stencil/. Both compose tools resolve a
+            # relative bind from that directory, so the package root is `..`.
+            # A config that still lists the same template at the package root
+            # keeps the old `.` prefix.
+            "compose_up": "..",
+        }
     )
     definitions.append(dict(_FORMAT_LOCKFILE))
     context["capability_templates"] = definitions
@@ -3766,7 +3774,10 @@ def render_templates(
     for tdef, template_name, output_name in resolved_templates(template_defs, context):
         try:
             template = template_environment(env, tdef).get_template(template_name)
-            content = template.render(**context)
+            render_ctx = context
+            if tdef.get("compose_up"):
+                render_ctx = {**context, "compose_up": tdef["compose_up"]}
+            content = template.render(**render_ctx)
 
             output_path = output_dir / output_name
 

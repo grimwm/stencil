@@ -98,8 +98,8 @@ def test_the_output_directory_is_mounted(elsewhere):
         volumes = service.get("volumes")
         if not volumes:
             continue
-        assert "..:/workspace:z" in volumes, (name, volumes)
-        assert "../../../build/demo:/out:z" in volumes, (name, volumes)
+        assert ".:/workspace:z" in volumes, (name, volumes)
+        assert "../../build/demo:/out:z" in volumes, (name, volumes)
 
 
 def test_the_generated_compose_file_is_valid_yaml(elsewhere):
@@ -710,7 +710,7 @@ def test_a_nested_output_dir_reaches_the_makefile(nested):
     line = next(l for l in makefile(nested).splitlines() if l.startswith("OUT_HOST"))
     assert line == "OUT_HOST := ./build", line
     doc = yaml.safe_load(compose(nested))
-    assert ".././build:/out:z" in doc["services"]["format-md"]["volumes"]
+    assert "./build:/out:z" in doc["services"]["format-md"]["volumes"]
 
 
 def test_a_dotdot_output_dir_is_not_prefixed(demo_config):
