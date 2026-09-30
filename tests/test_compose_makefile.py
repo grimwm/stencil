@@ -700,6 +700,26 @@ def _run_make_on_rendered_partial(
     )
 
 
+def test_compose_project_names_stay_distinct_after_normalization(env):
+    """Compose drops '.', and lowercases. Those two ids must not share a project."""
+    dotted = get_template_context(
+        "hw.1", {"packages": {"hw.1": {"name": "A", "package_type": "none"}}}
+    )
+    plain = get_template_context(
+        "hw1", {"packages": {"hw1": {"name": "B", "package_type": "none"}}}
+    )
+    upper = get_template_context(
+        "Demo", {"packages": {"Demo": {"name": "C", "package_type": "none"}}}
+    )
+    lower = get_template_context(
+        "demo", {"packages": {"demo": {"name": "D", "package_type": "none"}}}
+    )
+    assert dotted["compose_project"] != plain["compose_project"]
+    assert upper["compose_project"] != lower["compose_project"]
+    rendered = env.get_template("docker-compose.yml.j2").render(dotted)
+    assert f'name: "{dotted["compose_project"]}"\n' in rendered
+
+
 def test_makefile_doc_guard_fires_without_makefile_base(require_make, env, tmp_path):
     """Makefile-doc.j2's own `STENCIL_COMPOSE` guard, run for real rather than
     merely existing in the source text. MEASURED by deleting the guard: this

@@ -14,6 +14,7 @@ Usage:
 
 import argparse
 import fnmatch
+import hashlib
 import json
 import os
 import re
@@ -654,6 +655,28 @@ def check_glob_vocabulary(package_id: str, where: str, entry: str) -> None:
         )
 
 
+def compose_project_name(package_id: str) -> str:
+    """Compose project name that stays unique after Compose's own normalization.
+
+    Compose lowercases a project name and drops every character outside
+    ``[a-z0-9_-]``. ``hw.1`` and ``hw1`` would otherwise share a project, and
+    so would ``Demo`` and ``demo``. The suffix is the start of the sha256 of
+    the id as written, so the readable stem can collide and the project
+    still cannot.
+    """
+    safe = []
+    for ch in package_id.lower():
+        if ch.isascii() and (ch.isalnum() or ch in "-_"):
+            safe.append(ch)
+        else:
+            safe.append("-")
+    stem = "".join(safe).strip("-_")
+    if not stem or not stem[0].isalnum():
+        stem = "pkg" if not stem else f"pkg-{stem}"
+    digest = hashlib.sha256(package_id.encode("utf-8")).hexdigest()[:8]
+    return f"{stem[:40]}-{digest}"
+
+
 def get_template_context(
     package_id: str, config: dict, config_dir: Path | None = None
 ) -> dict:
@@ -977,6 +1000,7 @@ def get_template_context(
         # this to ".." at render time, because that file's project directory
         # is .stencil/ and ".." is the package root from there.
         "compose_up": ".",
+        "compose_project": compose_project_name(package_id),
         "has_package_output_dir": bool(package_output_dir),
         "sql_imports": sql_imports,
         "pre_build": pre_build,
