@@ -461,6 +461,7 @@ def test_the_managed_entries_stay_unprefixed_when_output_dir_is_unset():
     expected = {
         f"demo/{MANIFEST_NAME}",
         "demo/Makefile",
+        "demo/.stencil/docker-compose.yml",
         "demo/.stencil/format-package-lock.json",
     }
 

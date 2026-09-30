@@ -1155,6 +1155,9 @@ def apply_capabilities(
             definitions.append(fragment)
             includes.append(fragment["dest"])
     definitions.insert(0, {"src": "Makefile.j2", "dest": "Makefile"})
+    definitions.append(
+        {"src": "docker-compose.yml.j2", "dest": ".stencil/docker-compose.yml"}
+    )
     definitions.append(dict(_FORMAT_LOCKFILE))
     context["capability_templates"] = definitions
     context["capability_includes"] = includes

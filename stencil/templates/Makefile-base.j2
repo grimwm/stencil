@@ -1,4 +1,7 @@
+{% set compose_files = ['.stencil/docker-compose.yml'] -%}
 # Makefile for course activities
+# Compose, from this directory: $(DC) --project-directory .{% for f in compose_files %} -f {{ f }}{% endfor %}
+
 # Override to use another Compose implementation, e.g. DC="podman compose"
 DC ?= docker compose
 
@@ -16,7 +19,7 @@ endif
 # A consumer who genuinely wants such a file merged in still can --
 # by naming it explicitly, e.g.
 # `make doc COMPOSE_FILES="docker-compose.yml docker-compose.override.yml"`.
-COMPOSE_FILES ?= docker-compose.yml
+COMPOSE_FILES ?= {{ compose_files | join(' ') }}
 
 ifeq ($(strip $(COMPOSE_FILES)),)
 $(error COMPOSE_FILES must name at least one compose file, e.g. COMPOSE_FILES=docker-compose.yml)
@@ -28,7 +31,7 @@ endif
 
 _stencil_pin_check = $(if $(strip $(DC)),,$(error DC must name a compose implementation -- e.g. DC="podman compose"))$(if $(strip $(COMPOSE_FILES)),,$(error COMPOSE_FILES must name at least one compose file -- e.g. COMPOSE_FILES=docker-compose.yml))$(if $(filter -%,$(DC)),$(error DC names a compose implementation only -- e.g. DC="podman compose" -- and compose files belong in COMPOSE_FILES))
 
-STENCIL_COMPOSE = $(_stencil_pin_check)$(DC) $(addprefix -f ,$(COMPOSE_FILES))
+STENCIL_COMPOSE = $(_stencil_pin_check)$(DC) --project-directory . $(addprefix -f ,$(COMPOSE_FILES))
 
 override STENCIL_CONTAINER = $(firstword $(subst -, ,$(DC)))
 
@@ -45,10 +48,12 @@ endif
 # Default target
 ifeq ($(OS),Windows_NT)
 help: ## Show this help message
+	@echo Compose, from this directory: $(STENCIL_COMPOSE)
 	@echo Available targets:
 	@powershell -NoProfile -Command "Get-Content $(MAKEFILE_LIST) | Select-String '^[a-zA-Z0-9_-]+:.*?## .*$$' | ForEach-Object { $$_ -match '^([a-zA-Z0-9_-]+):.*?## (.*)$$' | Out-Null; '  {0,-15} {1}' -f $$matches[1], $$matches[2] } | Select-Object -Unique"
 else
 help: ## Show this help message
+	@echo "Compose, from this directory: $(STENCIL_COMPOSE)"
 	@echo "Available targets:"
 	@grep -hE '^[a-zA-Z0-9_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-15s %s\n", $$1, $$2}' | uniq
 endif

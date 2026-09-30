@@ -215,6 +215,16 @@ def test_document_package_includes_only_documents(generate_package):
     assert not (package / "html-template.html").exists()
 
 
+def test_help_prints_the_compose_command_make_runs(generate_package):
+    package = generate_package(
+        {"packages": {"demo": {"package_type": "doc", "docs": ["Notes.md"]}}}
+    )
+    text = (package / "Makefile").read_text()
+    assert "--project-directory ." in text
+    assert "-f .stencil/docker-compose.yml" in text
+    assert text.count("--project-directory .") >= 2
+
+
 def test_stored_boolean_strings_evaluate_as_booleans():
     # A YAML `when: true` is stored by the loader as the string "True".
     assert when_matches("True", {}) is True

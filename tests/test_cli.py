@@ -787,10 +787,12 @@ def test_an_ascii_config_emits_exactly_one_line_per_entry():
     expected = {
         "demo/Makefile",
         "demo/docker-compose.yml",
+        "demo/.stencil/docker-compose.yml",
         "demo/.stencil/format-package-lock.json",
         f"demo/{generate.MANIFEST_NAME}",
         "other/Makefile",
         "other/docker-compose.yml",
+        "other/.stencil/docker-compose.yml",
         "other/.stencil/format-package-lock.json",
         f"other/{generate.MANIFEST_NAME}",
     }
