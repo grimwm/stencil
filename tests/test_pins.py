@@ -1909,7 +1909,10 @@ def test_the_built_image_holds_the_tree_the_lockfile_describes(installed):
     that matches the lockfile except for the packages it silently omitted is
     not the tree the lockfile describes.
     """
-    lock = json.loads((ASSETS / pipeline.BROWSER_LOCKFILE).read_text())
+    # `.name`, like every other ASSETS read here. The constant is the
+    # DESTINATION inside a generated package, which is under `.stencil/`;
+    # stencil's own copy is a flat file in the assets directory.
+    lock = json.loads((ASSETS / Path(pipeline.BROWSER_LOCKFILE).name).read_text())
     locked = {
         path: entry["version"]
         for path, entry in lock["packages"].items()
@@ -2005,6 +2008,7 @@ def _copy_rendered_page(pdf_workspace, dest):
     node_modules layout) is disturbed by whatever gets planted in ``dest``.
     """
     shutil.copy2(pdf_workspace / "document.html", dest / "document.html")
+    (dest / ".stencil").mkdir(exist_ok=True)
     shutil.copy2(pdf_workspace / ".stencil" / "html-to-pdf.js", dest / ".stencil" / "html-to-pdf.js")
 
 
@@ -2254,8 +2258,9 @@ def test_the_missing_tools_guard_names_the_pinned_dir(bare_tools_workdir):
         # `Cannot find module '/opt/tools/html-to-pdf.js'` and the assertions
         # below would be measuring the absence of a file rather than the guard
         # they are named for. bare_tools_workdir puts the real generated script
-        # in the mount for exactly this.
-        script="/workspace/html-to-pdf.js",
+        # in the mount for exactly this -- under `.stencil/`, which is where a
+        # generated package now carries it, so the mounted path says so too.
+        script=f"/workspace/.stencil/{pipeline.BROWSER_SCRIPT}",
         tag=pipeline.NODE_IMAGE,
         timeout=60,
     )

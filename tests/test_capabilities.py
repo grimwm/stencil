@@ -586,3 +586,79 @@ def test_install_does_not_check_that_a_brand_image_exists(tmp_path):
     result = run_cli("install", cwd=tmp_path)
     assert result.returncode == 0, result.stderr
     assert "not a file" not in result.stderr
+
+
+def test_a_broken_capability_file_does_not_let_clean_trust_the_manifest(tmp_path):
+    import json
+
+    import yaml
+
+    from tests.test_cli import run_cli
+
+    config = _extras_project(tmp_path, {"extras": True})
+    config["output_dir"] = "out"
+    (tmp_path / ".config.yaml").write_text(yaml.safe_dump(config))
+    generated = run_cli("gen", "demo", cwd=tmp_path)
+    assert generated.returncode == 0, generated.stderr
+    package = tmp_path / "out" / "demo"
+    manifest_path = package / ".stencil-manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["entries"].append("NOTES.md")
+    manifest_path.write_text(json.dumps(manifest))
+    (tmp_path / "caps" / "extras" / "capability.yaml").write_text("id: [")
+
+    result = run_cli("clean", "--all", "--dry-run", cwd=tmp_path)
+    combined = result.stdout + result.stderr
+    assert "NOTES.md" not in combined or "does not derive" in combined
+    assert "Would remove" not in combined or "NOTES.md" not in combined
+
+
+def test_a_fragment_whose_when_is_false_is_not_included(tmp_path):
+    config = _extras_project(tmp_path)
+    cap = tmp_path / "caps" / "extras" / "capability.yaml"
+    text = cap.read_text()
+    cap.write_text(
+        text
+        + "fragments:\n"
+        + "  - src: extras.txt.j2\n"
+        + "    dest: .stencil/extra.mk\n"
+        + "    when: has_slides\n"
+    )
+    package = _generate(tmp_path, config)
+    makefile = (package / "Makefile").read_text()
+    assert "include .stencil/extra.mk" not in makefile
+    assert not (package / ".stencil" / "extra.mk").exists()
+
+
+def test_a_hyphenated_when_name_is_still_a_key(tmp_path):
+    config = _extras_project(tmp_path, {"template_env": {"has-vscode": True}})
+    config["templates"] = [
+        {"src": "marker.txt.j2", "dest": "marker.txt", "when": "has-vscode"}
+    ]
+    (tmp_path / "marker.txt.j2").write_text("yes\n")
+    config["templates_dir"] = ["."]
+    package = _generate(tmp_path, config)
+    assert (package / "marker.txt").read_text() == "yes\n"
+
+
+def test_a_scalar_field_list_is_refused():
+    cap = _capability(fields={"engine": "chrome"})
+    problems = validate_capability(cap)
+    assert any("list" in problem for problem in problems)
+
+
+def test_a_zip_package_still_has_format_md(generate_package):
+    package = generate_package(
+        {
+            "packages": {
+                "demo": {
+                    "package_type": "zip",
+                    "package_name": "demo.zip",
+                    "package_sources": ["htdocs"],
+                }
+            }
+        }
+    )
+    text = (package / "Makefile").read_text()
+    assert "format-md:" in text
+    assert ".PHONY:" in text

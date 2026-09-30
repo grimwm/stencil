@@ -1178,11 +1178,18 @@ def apply_capabilities(
         for fragment in cap.fragments:
             fragment = {**fragment, CAPABILITY_DIR: str(cap.directory)}
             definitions.append(fragment)
-            # A compose fragment is YAML for docker compose, not Make.
-            if fragment["dest"] != compose_dest:
-                includes.append(fragment["dest"])
-        if any(item["dest"] == compose_dest for item in cap.templates + cap.fragments):
-            compose_files.append(compose_dest)
+            # A compose fragment is YAML for docker compose, not Make. A
+            # fragment whose when is false is not written, so it must not
+            # be named in an include either.
+            dest = fragment.get("dest") or template_dest(fragment.get("src", ""))
+            if not when_holds(fragment, context) or dest == compose_dest:
+                continue
+            includes.append(dest)
+        for item in cap.templates + cap.fragments:
+            dest = item.get("dest") or template_dest(item.get("src", ""))
+            if dest == compose_dest and when_holds(item, context):
+                compose_files.append(compose_dest)
+                break
     definitions.insert(0, {"src": "Makefile.j2", "dest": "Makefile"})
     definitions.append(
         {"src": "docker-compose.yml.j2", "dest": _BASE_COMPOSE}
@@ -2258,6 +2265,11 @@ def when_holds(tdef: dict, context: dict) -> bool:
     if when is None:
         return True
     if isinstance(when, str):
+        # A single key, including ones Jinja cannot use as a name (`has-vscode`).
+        # Anything with spaces or other expression punctuation is Jinja, which
+        # is how capability rules are written.
+        if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_-]*", when):
+            return bool(context.get(when))
         return when_matches(when, context)
     return all(context.get(key) for key in when)
 
@@ -4904,10 +4916,28 @@ def _config_derived_entries(
     """
     who = ", ".join(sorted(pids))
     config_templates = _config_template_defs(config, who, problems)
+    # A fault in the capability loader is one fact about the whole config, not
+    # a reason this directory's manifest can be trusted. Fall back to the
+    # built-in capabilities and keep the widen check armed. Putting the loader
+    # error in `problems` is what made a broken capability.yaml delete a file
+    # the config never derived.
+    derivation_root = config_dir
+    if config_dir is not None:
+        try:
+            loaded_capabilities(config, config_dir)
+        except ValueError as error:
+            print(
+                "Warning: capabilities could not be loaded "
+                f"({error}). clean will not trust the manifest; "
+                "files a capability would have written stay until that "
+                "file is fixed.",
+                file=sys.stderr,
+            )
+            derivation_root = None
     entries: set[str] = set()
     for pid in pids:
         try:
-            context = get_template_context(pid, config, config_dir)
+            context = get_template_context(pid, config, derivation_root)
             entries |= package_entries(
                 pid, config["packages"][pid], context, config_templates
             )
@@ -5608,7 +5638,7 @@ def _main():
         # the alternative is threading the list through a signature this
         # ticket deliberately left alone.
         try:
-            package_contexts(config)
+            package_contexts(config, capabilities_root=config_dir)
         except ValueError as e:
             print(f"Error: {e}", file=sys.stderr)
             sys.exit(1)

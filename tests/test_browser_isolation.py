@@ -121,6 +121,7 @@ def _mount(tmp_path, rendered_page, *, config=True, package_json=False):
     workdir = tmp_path / "mount"
     workdir.mkdir()
     shutil.copy2(rendered_page / "document.html", workdir / "document.html")
+    (workdir / ".stencil").mkdir(exist_ok=True)
     shutil.copy2(rendered_page / ".stencil" / "html-to-pdf.js", workdir / ".stencil" / "html-to-pdf.js")
     if config:
         (workdir / ".puppeteerrc.cjs").write_text(DECOY_CONFIG)

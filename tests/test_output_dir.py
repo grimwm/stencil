@@ -639,6 +639,7 @@ def test_make_pdf_reads_a_page_from_the_output_directory_mount(
     out = tmp_path / "build"
     out.mkdir()
     shutil.copy2(pdf_workspace / "document.html", out / "document.html")
+    (workspace / ".stencil").mkdir(exist_ok=True)
     shutil.copy2(pdf_workspace / ".stencil" / "html-to-pdf.js", workspace / ".stencil" / "html-to-pdf.js")
 
     result = pipeline.html_to_pdf(

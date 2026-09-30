@@ -15,7 +15,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import yaml
-from jinja2 import Environment, TemplateSyntaxError, meta
+from jinja2 import Environment, TemplateSyntaxError, UndefinedError, meta
 
 MANIFEST = "capability.yaml"
 _IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
@@ -174,6 +174,16 @@ def validate_capability(capability: Capability) -> list[str]:
         problems.append(
             f"{capability.id}: when does not mention its activates key {activates}"
         )
+    if not isinstance(capability.fields, dict):
+        problems.append(f"{capability.id}: fields must be a mapping of names to lists")
+    else:
+        for key, allowed in capability.fields.items():
+            if not isinstance(allowed, list):
+                problems.append(
+                    f"{capability.id}: fields.{key} must be a list of accepted values"
+                )
+    if not isinstance(capability.required_when, dict):
+        problems.append(f"{capability.id}: required_when must be a mapping")
     return problems
 
 
@@ -189,7 +199,7 @@ def check_fields(capability: Capability, block: dict) -> list[str]:
         if key not in block:
             continue
         value = block[key]
-        if value not in allowed:
+        if not isinstance(allowed, list) or value not in allowed:
             problems.append(
                 f"{capability.id}: {key} is {value!r}, not one of {list(allowed)}"
             )
@@ -255,5 +265,5 @@ def when_matches(expression: str, context: dict) -> bool:
         bound.setdefault(name, None)
     try:
         return bool(compiled(**bound))
-    except TypeError:
+    except (TypeError, UndefinedError, ZeroDivisionError):
         return False
