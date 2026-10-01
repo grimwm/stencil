@@ -70,7 +70,11 @@ import pytest
 import yaml
 
 from stencil import pipeline
-from stencil.generate import build_environment, get_template_context
+from stencil.generate import (
+    build_environment,
+    compose_project_name,
+    get_template_context,
+)
 
 integration = pytest.mark.integration
 
@@ -285,6 +289,29 @@ def test_every_compose_invocation_names_its_file(
         f"the sentinel never appeared in any target's expansion for OS={os_name} "
         "-- the sweep checked nothing, which proves nothing about the pin"
     )
+
+
+def test_a_one_shot_run_removes_its_own_project(require_make, pages_package):
+    """`compose run` leaves its network behind, and the default pools hold
+    about thirty of those. format-md and doc must each take a project other
+    than the name in the compose file, and down that project on the way out.
+    down of the file's own name would stop a stack that is up.
+    """
+    result = make_n(pages_package, "doc")
+    assert result.returncode == 0, outcome("make -n doc", result)
+    text = result.stdout
+    project = compose_project_name("demo")
+    compose = (pages_package / ".stencil" / "docker-compose.yml").read_text()
+    assert f'name: "{project}"' in compose
+
+    for service in ("format-md", "doc"):
+        once = f"{project}-{service}"
+        assert f"-p {once} run --rm {service}" in text, text
+        assert f"-p {once} down --remove-orphans" in text, text
+        assert f"-p {project} down" not in text
+        assert f"-p {project} run" not in text
+
+    assert "exit $rc" in text
 
 
 # --- (c): the empty-value guard ---------------------------------------------
