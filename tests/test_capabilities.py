@@ -1,5 +1,8 @@
 """Loading a capability directory: manifests are read, problems are reported together."""
 
+import subprocess
+import sys
+import zipfile
 from pathlib import Path
 
 import pytest
@@ -655,7 +658,28 @@ def test_a_scalar_field_list_is_refused():
     assert any("list" in problem for problem in problems)
 
 
-def test_a_zip_package_still_has_format_md(generate_package):
+def test_documents_brings_format_md_and_doc_together(generate_package):
+    """A package with instructions gets both targets from documents.mk."""
+    package = generate_package(
+        {
+            "packages": {
+                "demo": {
+                    "name": "Demo",
+                    "package_type": "none",
+                    "docs": ["README.md"],
+                }
+            }
+        }
+    )
+    makefile = (package / "Makefile").read_text()
+    fragment = (package / ".stencil" / "documents.mk").read_text()
+    assert "include .stencil/documents.mk" in makefile
+    assert "\nformat-md:" in fragment
+    assert "\ndoc:" in fragment
+
+
+def test_a_package_without_documents_has_neither_format_md_nor_doc(generate_package):
+    """format-md is not a target of its own. No documents, no format-md."""
     package = generate_package(
         {
             "packages": {
@@ -668,5 +692,40 @@ def test_a_zip_package_still_has_format_md(generate_package):
         }
     )
     text = (package / "Makefile").read_text()
-    assert "format-md:" in text
-    assert ".PHONY:" in text
+    assert "format-md:" not in text
+    assert "\ndoc:" not in text
+    assert not (package / ".stencil" / "documents.mk").exists()
+
+
+def test_the_wheel_ships_the_documents_capability(tmp_path):
+    """pip install must contain the capability, not only the templates it names.
+
+    package-data `templates/*` does not descend, so a wheel built that way
+    has Makefile-doc.j2 and no templates/capabilities/documents/capability.yaml.
+    builtin_capabilities then loads nothing, and a generated package gets
+    format-md with no doc.
+    """
+    repo = Path(__file__).resolve().parents[1]
+    wheelhouse = tmp_path / "wheels"
+    wheelhouse.mkdir()
+    built = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "pip",
+            "wheel",
+            "--no-deps",
+            "-w",
+            str(wheelhouse),
+            str(repo),
+        ],
+        capture_output=True,
+        text=True,
+    )
+    assert built.returncode == 0, built.stderr
+    wheels = list(wheelhouse.glob("stencil-*.whl"))
+    assert len(wheels) == 1, wheels
+    with zipfile.ZipFile(wheels[0]) as archive:
+        names = set(archive.namelist())
+    assert "stencil/templates/capabilities/documents/capability.yaml" in names
+    assert "stencil/templates/Makefile-doc.j2" in names

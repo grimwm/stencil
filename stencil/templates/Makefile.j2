@@ -1,9 +1,9 @@
 {% include 'Makefile-base.j2' %}
+{# format-md and doc are one pipeline. Both are written by the documents
+   capability (.stencil/documents.mk). A package that capability does not
+   match gets neither, rather than a format-md that has no doc beside it. #}
 {% if '.stencil/documents.mk' not in capability_includes %}
-.PHONY: help format-md clean clean-pkg pkg
-format-md: ## Format markdown files
-	$(call ensure_image,{{ node_image }},format-md)
-	$(STENCIL_COMPOSE) run --rm format-md
+.PHONY: help clean clean-pkg pkg
 {% endif %}
 {% for inc in capability_includes %}
 include {{ inc }}
