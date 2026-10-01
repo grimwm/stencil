@@ -6,10 +6,13 @@
 ifeq ($(strip $(STENCIL_COMPOSE)),)
 $(error Makefile-doc needs STENCIL_COMPOSE: include Makefile-base.j2 before this include, or define it yourself)
 endif
+ifeq ($(origin compose_once),undefined)
+$(error Makefile-doc needs compose_once: include Makefile-base.j2 before this include, or define it yourself)
+endif
 
 format-md: ## Format markdown files
 	$(call ensure_image,{{ node_image }},format-md)
-	$(STENCIL_COMPOSE) run --rm format-md
+	$(call compose_once,format-md)
 
 {% if has_pages %}
 # Helper to define comma (must be before its use -- which now includes the
@@ -214,7 +217,7 @@ doc: out-dir{% if has_pre_build %} pre-build{% endif %} format-md{% if has_slide
 {% if has_docs %}
 	$(_stencil_late_check)$(call ensure_image,{{ pandoc_image }},doc)
 {% for md in docs %}
-	$(STENCIL_COMPOSE) run --rm doc --metadata build-date="$(BUILD_DATE)" $(METADATA_FLAGS) {{ md }} -o $(OUT)/{{ md | replace('.md', '') }}$(OUTPUT_SUFFIX).html
+	$(call compose_once,doc) --metadata build-date="$(BUILD_DATE)" $(METADATA_FLAGS) {{ md }} -o $(OUT)/{{ md | replace('.md', '') }}$(OUTPUT_SUFFIX).html
 {% endfor %}
 	@echo "Generated docs$(if $(WITH), with features: $(WITH),)"
 {% endif %}
@@ -223,7 +226,7 @@ doc: out-dir{% if has_pre_build %} pre-build{% endif %} format-md{% if has_slide
 slide: out-dir{% if has_pre_build %} pre-build{% endif %} format-md ## Generate HTML slide decks (use with=hidden to include presenter-only sections)
 	$(_stencil_late_check)$(call ensure_image,{{ pandoc_image }},slide)
 {% for md in slides %}
-	$(STENCIL_COMPOSE) run --rm slide --metadata build-date="$(BUILD_DATE)" $(METADATA_FLAGS) {{ md }} -o $(OUT)/{{ md | replace('.md', '') }}$(OUTPUT_SUFFIX).html
+	$(call compose_once,slide) --metadata build-date="$(BUILD_DATE)" $(METADATA_FLAGS) {{ md }} -o $(OUT)/{{ md | replace('.md', '') }}$(OUTPUT_SUFFIX).html
 {% endfor %}
 	@echo "Generated slides$(if $(WITH), with features: $(WITH),)"
 
@@ -235,13 +238,13 @@ slide: out-dir{% if has_pre_build %} pre-build{% endif %} format-md ## Generate 
 pdf: doc ## Generate PDFs from the generated HTML (use with=hidden to include hidden sections)
 	$(_stencil_late_check)$(STENCIL_COMPOSE) build pdf
 {% for md in docs + slides %}
-	$(STENCIL_COMPOSE) run --rm pdf $(OUT)/{{ md | replace('.md', '') }}$(OUTPUT_SUFFIX).html $(OUT)/{{ md | replace('.md', '') }}$(OUTPUT_SUFFIX).pdf
+	$(call compose_once,pdf) $(OUT)/{{ md | replace('.md', '') }}$(OUTPUT_SUFFIX).html $(OUT)/{{ md | replace('.md', '') }}$(OUTPUT_SUFFIX).pdf
 {% endfor %}
 	@echo "Generated PDFs$(if $(WITH), with features: $(WITH),)"
 
 check-access: ## Check HTML accessibility (WCAG 2.1 AA)
 	$(STENCIL_COMPOSE) build check-access
-	$(STENCIL_COMPOSE) run --rm check-access
+	$(call compose_once,check-access)
 
 # Depends on pdf for the same reason check-access does not need to depend on
 # doc: there is a file it is meaningless without. veraPDF exits 0 on an empty
@@ -252,6 +255,6 @@ check-access: ## Check HTML accessibility (WCAG 2.1 AA)
 # build, which is a red nobody can act on. This target already knows exactly
 # what `pdf` above just wrote, suffix and all.
 check-pdf: pdf ## Check PDF/UA-1 conformance of the generated PDFs
-	$(STENCIL_COMPOSE) run --rm check-pdf{% for md in docs + slides %} $(OUT)/{{ md | replace('.md', '') }}$(OUTPUT_SUFFIX).pdf{% endfor %}
+	$(call compose_once,check-pdf){% for md in docs + slides %} $(OUT)/{{ md | replace('.md', '') }}$(OUTPUT_SUFFIX).pdf{% endfor %}
 
 {% endif %}

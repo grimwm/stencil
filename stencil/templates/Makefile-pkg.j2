@@ -91,6 +91,9 @@ endif
 ifeq ($(strip $(STENCIL_COMPOSE)),)
 $(error Makefile-pkg needs STENCIL_COMPOSE: include Makefile-base.j2 before this include, or define it yourself)
 endif
+ifeq ($(origin compose_once),undefined)
+$(error Makefile-pkg needs compose_once: include Makefile-base.j2 before this include, or define it yourself)
+endif
 
 PKG_HTML = {{ package_stem }}$(OUTPUT_SUFFIX).html
 PKG = {{ package_stem }}$(OUTPUT_SUFFIX).pdf
@@ -102,9 +105,9 @@ PKG = {{ package_stem }}$(OUTPUT_SUFFIX).pdf
 pkg: format-md ## Build {{ package_name }} from {{ package_sources | join(' ') }}
 	$(_stencil_late_check_with)$(if $(strip $(PKG_SOURCES)),,$(error package_sources matched nothing: $(PKG_SOURCE_SPECS)))
 	$(call ensure_image,{{ pandoc_image }},doc)
-	$(STENCIL_COMPOSE) run --rm doc --metadata course="{{ name }}" $(METADATA_FLAGS) $(PKG_SOURCES) -o $(PKG_HTML)
+	$(call compose_once,doc) --metadata course="{{ name }}" $(METADATA_FLAGS) $(PKG_SOURCES) -o $(PKG_HTML)
 	$(STENCIL_COMPOSE) build pdf
-	$(STENCIL_COMPOSE) run --rm pdf $(PKG_HTML) $(PKG)
+	$(call compose_once,pdf) $(PKG_HTML) $(PKG)
 	@echo "Created $(PKG)"
 	@echo "Upload $(PKG) to the course website."
 

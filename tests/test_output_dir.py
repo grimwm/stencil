@@ -57,7 +57,7 @@ def compose(package):
 
 def test_the_html_is_written_to_the_output_directory(elsewhere):
     text = makefile(elsewhere)
-    doc_lines = [l for l in text.splitlines() if "run --rm doc " in l]
+    doc_lines = [l for l in text.splitlines() if "compose_once,doc)" in l]
     assert doc_lines, "no doc rule"
     for line in doc_lines:
         assert "-o $(OUT)/" in line, line
@@ -65,7 +65,7 @@ def test_the_html_is_written_to_the_output_directory(elsewhere):
 
 def test_the_pdf_reads_and_writes_the_output_directory(elsewhere):
     text = makefile(elsewhere)
-    pdf_lines = [l for l in text.splitlines() if "run --rm pdf " in l]
+    pdf_lines = [l for l in text.splitlines() if "compose_once,pdf)" in l]
     assert pdf_lines, "no pdf rule"
     for line in pdf_lines:
         # Both the input HTML and the output PDF, or `make pdf` reads a file
@@ -74,7 +74,7 @@ def test_the_pdf_reads_and_writes_the_output_directory(elsewhere):
 
 
 def test_check_pdf_looks_in_the_output_directory(elsewhere):
-    line = next(l for l in makefile(elsewhere).splitlines() if "check-pdf" in l and "run --rm" in l)
+    line = next(l for l in makefile(elsewhere).splitlines() if "compose_once,check-pdf)" in l)
     names = [w for w in line.split() if w.endswith(".pdf")]
     assert names, line
     assert all(n.startswith("$(OUT)/") for n in names), line

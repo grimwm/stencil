@@ -383,11 +383,11 @@ def test_check_pdf_checks_the_same_files_the_pdf_target_wrote(doc_package):
     checked = set()
     for line in makefile.splitlines():
         stripped = line.strip()
-        if stripped.startswith("$(STENCIL_COMPOSE) run --rm pdf "):
+        if "compose_once,pdf)" in stripped:
             # `... pdf <stem>.html <stem>.pdf`
             written.add(stripped.split()[-1])
-        elif stripped.startswith("$(STENCIL_COMPOSE) run --rm check-pdf"):
-            checked.update(stripped.split()[4:])
+        elif "compose_once,check-pdf)" in stripped:
+            checked.update(w for w in stripped.split() if w.endswith(".pdf"))
 
     assert written, "the pdf target writes nothing; the fixture has no documents"
     assert checked == written, (
@@ -412,10 +412,10 @@ def test_every_checked_filename_carries_the_output_suffix(doc_package):
     line = next(
         stripped
         for stripped in (line.strip() for line in makefile.splitlines())
-        if stripped.startswith("$(STENCIL_COMPOSE) run --rm check-pdf")
+        if "compose_once,check-pdf)" in stripped
     )
 
-    names = line.split()[4:]
+    names = [w for w in line.split() if w.endswith(".pdf")]
     assert names, "check-pdf is passed no filenames at all"
     bare = [n for n in names if "$(OUTPUT_SUFFIX)" not in n]
     assert not bare, (
