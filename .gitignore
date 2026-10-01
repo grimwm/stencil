@@ -20,3 +20,8 @@ build/
 # blanket .claude/ ignore. Without it, a `git add -A` in the shared checkout
 # commits every worktree tree into the repository.
 .claude/worktrees/
+
+# Tracker exports live on the beads-export branch, published by foundry's
+# beads-checkin (foundry-tqd), never on main.
+.beads/issues.jsonl
+.beads/interactions.jsonl

@@ -1,6 +1,8 @@
-"""The committed issue export is published; keep a home directory out of it.
+"""The published issue export; keep a home directory out of it.
 
-`.beads/issues.jsonl` is committed and this repository is public -- AGENTS.md
+`.beads/issues.jsonl` is published on the `beads-export` branch -- foundry's
+beads-checkin pushes it there directly, with no pull request (foundry-tqd) --
+and this repository is public -- AGENTS.md
 says so, and the CI workflow is written around fork pull requests. Issue
 descriptions and notes are written by agents that routinely paste absolute
 paths, so the export accumulates strings like
@@ -32,11 +34,15 @@ from __future__ import annotations
 
 import json
 import re
+import subprocess
 from pathlib import Path
 
 import pytest
 
-EXPORT = Path(__file__).parent.parent / ".beads" / "issues.jsonl"
+REPO_ROOT = Path(__file__).parent.parent
+# Published, not committed to main: read the copy on the export branch. CI
+# fetches it before pytest; locally, `git fetch origin beads-export` first.
+EXPORT_REF = "origin/beads-export:.beads/issues.jsonl"
 
 # An absolute home path, which is a real leak -- and NOT the leak-detection
 # snippets the tracker also carries. Those journal commands like
@@ -80,12 +86,19 @@ SECRETS = [
 
 
 def records():
-    # A FAILURE, not a skip. The export is committed, so a checkout without
-    # it is broken rather than export-less -- and a guard that skips itself
-    # when its subject is missing is the shape AGENTS.md records for the
-    # drift hook: it reads as protection while doing nothing.
-    assert EXPORT.is_file(), f"{EXPORT} is committed and should be here"
-    for line in EXPORT.read_text().splitlines():
+    # A FAILURE, not a skip. The export is published, so a checkout that cannot
+    # read it is broken rather than export-less -- and a guard that skips itself
+    # when its subject is missing is the shape AGENTS.md records for the drift
+    # hook: it reads as protection while doing nothing. Since the export moved
+    # off main this scan runs after publication: it detects a leak, it no
+    # longer stops one.
+    shown = subprocess.run(
+        ["git", "show", EXPORT_REF], cwd=REPO_ROOT,
+        capture_output=True, text=True, encoding="utf-8")
+    assert shown.returncode == 0, (
+        f"cannot read {EXPORT_REF} -- run `git fetch origin beads-export`: "
+        f"{shown.stderr.strip()}")
+    for line in shown.stdout.splitlines():
         line = line.strip()
         if line:
             yield json.loads(line)
@@ -110,7 +123,7 @@ def test_no_absolute_home_path_reaches_the_public_export():
             offenders[record.get("id")] = ", ".join(found)
 
     assert not offenders, (
-        "the committed export carries home-directory leaks: "
+        "the published export carries home-directory leaks: "
         + "; ".join(f"{i} ({n})" for i, n in sorted(offenders.items()))
         + ". Fix the ISSUE and re-export -- `bd update <id> --notes ...`, or "
         "`bd import` for a field too large for argv -- never by editing "

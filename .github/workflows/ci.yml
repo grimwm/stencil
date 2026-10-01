@@ -32,6 +32,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # The tracker export lives on the beads-export branch (foundry-tqd), not
+      # main; tests/test_export_hygiene.py scans that copy.
+      - run: git fetch --no-tags --depth=1 origin +refs/heads/beads-export:refs/remotes/origin/beads-export
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
@@ -50,6 +53,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # The tracker export lives on the beads-export branch (foundry-tqd), not
+      # main; tests/test_export_hygiene.py scans that copy.
+      - run: git fetch --no-tags --depth=1 origin +refs/heads/beads-export:refs/remotes/origin/beads-export
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -117,6 +123,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      # The tracker export lives on the beads-export branch (foundry-tqd), not
+      # main; tests/test_export_hygiene.py scans that copy.
+      - run: git fetch --no-tags --depth=1 origin +refs/heads/beads-export:refs/remotes/origin/beads-export
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
