@@ -198,6 +198,10 @@ def test_export_auto_is_off_so_bd_writes_never_touch_the_main_checkout():
     assert config["export"]["auto"] is False
 
 
-def test_interactions_log_merges_as_a_union():
-    attributes = (REPO_ROOT / ".gitattributes").read_text()
-    assert ".beads/interactions.jsonl merge=union" in attributes.splitlines()
+def test_the_exports_live_off_main():
+    """beads-checkin publishes both exports to the beads-export branch
+    (foundry-tqd), so main ignores them; tracking either again would flip the
+    tool back to its pull-request mode."""
+    ignored = (REPO_ROOT / ".gitignore").read_text().splitlines()
+    assert ".beads/issues.jsonl" in ignored
+    assert ".beads/interactions.jsonl" in ignored
