@@ -306,8 +306,9 @@ def test_a_one_shot_run_removes_its_own_project(require_make, pages_package):
 
     for service in ("format-md", "doc"):
         once = f"{project}-{service}"
-        assert f"-p {once} run --rm {service}" in text, text
+        assert f"-p {once} run -T --rm {service}" in text, text
         assert f"-p {once} down --remove-orphans" in text, text
+        assert 'grep -v -e "no container with"' in text, text
         assert f"-p {project} down" not in text
         assert f"-p {project} run" not in text
 

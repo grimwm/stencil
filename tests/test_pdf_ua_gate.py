@@ -502,7 +502,7 @@ def test_with_hidden_actually_expands_to_the_hidden_pdfs(doc_package):
         return [
             line
             for line in result.stdout.splitlines()
-            if "run --rm check-pdf" in line
+            if "run -T --rm check-pdf" in line
         ]
 
     plain = recipe()

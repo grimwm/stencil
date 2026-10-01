@@ -9,6 +9,14 @@ and the closed epics in `.beads/issues.jsonl` are the readable index.
 How the version gets bumped is written down in
 [AGENTS.md](AGENTS.md#cutting-a-release), not here.
 
+## 1.3.0
+
+- **One-shot `make doc` no longer prints a container error per service.**
+  podman-compose's `down` stops every service in the file and writes
+  `Error: no container ...` for each one the one-shot never started. Those
+  lines are dropped. `run -T` also drops the warning that stdin is not a
+  terminal. Regenerate to pick it up.
+
 ## 1.2.0
 
 - **Windows `make` reads every included makefile.** The default target is
