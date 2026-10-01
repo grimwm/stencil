@@ -1236,6 +1236,12 @@ def apply_capabilities(
         }
     )
     definitions.append(dict(_FORMAT_LOCKFILE))
+    # Windows `make format-md` cannot run the POSIX EXIT trap. The script is
+    # the cleanup, and it is written for every package because every package
+    # has the one-shot targets.
+    definitions.append(
+        {"src": "compose-once.ps1.j2", "dest": ".stencil/compose-once.ps1"}
+    )
     context["capability_templates"] = definitions
     context["capability_includes"] = includes
     context["compose_files"] = compose_files

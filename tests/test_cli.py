@@ -789,11 +789,13 @@ def test_an_ascii_config_emits_exactly_one_line_per_entry():
         "demo/docker-compose.yml",
         "demo/.stencil/docker-compose.yml",
         "demo/.stencil/format-package-lock.json",
+        "demo/.stencil/compose-once.ps1",
         f"demo/{generate.MANIFEST_NAME}",
         "other/Makefile",
         "other/docker-compose.yml",
         "other/.stencil/docker-compose.yml",
         "other/.stencil/format-package-lock.json",
+        "other/.stencil/compose-once.ps1",
         f"other/{generate.MANIFEST_NAME}",
     }
     assert set(entries) == expected, (

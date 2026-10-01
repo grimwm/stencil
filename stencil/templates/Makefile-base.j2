@@ -63,8 +63,21 @@ override STENCIL_CONTAINER = $(firstword $(subst -, ,$(DC)))
 # first because a successful down would otherwise become the shell's status.
 # Arguments after the call are the service's own argv, which keeps a comma in
 # one of them from being read as another argument to `call`.
+# podman-compose's down stops every service named in the file, then prints
+# "Error: no container ..." for each one this one-shot never started. Those
+# lines are not a failed build (down still exits 0). Drop them, and a real
+# line from down still reaches the terminal. The saved status is unchanged.
+# -T: podman-compose otherwise warns that stdin is not a terminal.
+# On Windows, make starts the recipe with CreateProcess. trap is not a
+# program there, so `make format-md` dies with "The system cannot find the
+# file specified". PowerShell runs the same one-shot and downs the project
+# afterwards. Arguments after the call follow the literal --.
 STENCIL_ONCE_PROJECT = {{ compose_project }}
-compose_once = trap 'rc=$$?; $(STENCIL_COMPOSE) -p $(STENCIL_ONCE_PROJECT)-$(1) down --remove-orphans || rc=$$?; exit $$rc' EXIT; $(STENCIL_COMPOSE) -p $(STENCIL_ONCE_PROJECT)-$(1) run --rm $(1)
+ifeq ($(OS),Windows_NT)
+compose_once = powershell -NoProfile -ExecutionPolicy Bypass -File .stencil/compose-once.ps1 $(STENCIL_ONCE_PROJECT)-$(1) $(1) $(STENCIL_COMPOSE) --
+else
+compose_once = trap 'rc=$$?; out=$$($(STENCIL_COMPOSE) -p $(STENCIL_ONCE_PROJECT)-$(1) down --remove-orphans 2>&1) || rc=$$?; printf "%s\n" "$$out" | grep -v -e "no container with" -e "no such container" -e "no pod with" -e "no such pod" | grep -v "^$$" >&2 || true; exit $$rc' EXIT; $(STENCIL_COMPOSE) -p $(STENCIL_ONCE_PROJECT)-$(1) run -T --rm $(1)
+endif
 
 # Pull an image only when it is not already present. Four targets want this and
 # the two shells share no spelling of it, so it lives here rather than as four
