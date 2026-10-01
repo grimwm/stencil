@@ -156,6 +156,11 @@ def test_clean_removes_products_from_the_output_directory(elsewhere):
     products = [w for w in line.split() if w.endswith((".html", ".pdf", "*.html", "*.pdf"))]
     assert products, line
     assert all(p.startswith("$(OUT_HOST)/") for p in products), line
+    text = makefile(elsewhere)
+    assert "Remove-Item -Force -ErrorAction SilentlyContinue" in text
+    windows = next(l for l in text.splitlines() if "Remove-Item" in l)
+    assert "$(OUT_HOST)/" in windows, windows
+    assert "rm " not in windows, windows
 
 
 def test_the_output_directory_is_created_before_it_is_mounted(elsewhere):

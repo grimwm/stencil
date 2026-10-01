@@ -128,5 +128,10 @@ pkg: format-md ## Build {{ package_name }} from {{ package_sources | join(' ') }
 {% for md in docs + slides %}
 {% for suffix in ['.html', '-*.html', '.pdf', '-*.pdf'] %}{% do products.append('$(OUT_HOST)/' ~ (md | replace('.md', suffix))) %}{% endfor %}
 {% endfor %}
+ifeq ($(OS),Windows_NT)
+clean-pkg: ## Remove generated files
+	@powershell -NoProfile -Command "Remove-Item -Force -ErrorAction SilentlyContinue -Path @({{ "'" + (products | join("','")) + "'" if products else "" }})"
+else
 clean-pkg: ## Remove generated files
 	rm -f {{ products | join(' ') }}
+endif

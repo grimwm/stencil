@@ -17,6 +17,9 @@ How the version gets bumped is written down in
   runs `.stencil/compose-once.ps1`, which runs the service and then downs
   that project. Regenerate and copy the new `.stencil/compose-once.ps1`
   with the Makefile.
+- **`make clean` on Windows does not call `rm`.** `rm` is not a program
+  there, so the target died the same way `trap` did. The Windows recipe uses
+  `Remove-Item`.
 - **One-shot `make doc` no longer prints a container error per service.**
   podman-compose's `down` stops every service in the file and writes
   `Error: no container ...` for each one the one-shot never started. Those
