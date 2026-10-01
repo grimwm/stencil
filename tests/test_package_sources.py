@@ -295,8 +295,8 @@ def test_specs_keep_the_order_they_were_listed_in(makefile):
 def test_pkg_renders_the_sources_then_prints_that_html(doc_pkg_makefile):
     """html first, pdf from that html -- not two independent conversions."""
     body = recipe(doc_pkg_makefile, "pkg")
-    render = next(line for line in body if "run --rm doc" in line)
-    convert = next(line for line in body if "run --rm pdf" in line)
+    render = next(line for line in body if "compose_once,doc)" in line)
+    convert = next(line for line in body if "compose_once,pdf)" in line)
     assert render.endswith("-o $(PKG_HTML)")
     assert "$(PKG_SOURCES)" in render
     assert convert.endswith("$(PKG_HTML) $(PKG)")

@@ -74,7 +74,7 @@ def pages_makefile(makefile):
 def test_the_suffix_appears_on_both_sides_of_every_conversion(pages_makefile):
     """The one that turns a build into the wrong document, silently."""
     conversions = [
-        line for line in recipe(pages_makefile, "pdf") if "run --rm pdf" in line
+        line for line in recipe(pages_makefile, "pdf") if "compose_once,pdf)" in line
     ]
     assert conversions, "the pdf target converts nothing"
 

@@ -51,6 +51,21 @@ endif
 
 override STENCIL_CONTAINER = $(firstword $(subst -, ,$(DC)))
 
+# One-shot `compose run` creates a project network, and `run --rm` removes
+# only the container. Docker Desktop's default address pools hold about
+# thirty of those networks, so a tree of packages exhausts them and the next
+# run fails with "all predefined address pools have been fully subnetted".
+# Each one-shot therefore takes a project of its own. -p overrides the name
+# written into the compose file, so `down` of this project removes its
+# network and cannot see a stack that is up under the file's own name.
+# The service name is part of the project so two one-shots in one package do
+# not share a network. The EXIT trap covers a failed run. The status is saved
+# first because a successful down would otherwise become the shell's status.
+# Arguments after the call are the service's own argv, which keeps a comma in
+# one of them from being read as another argument to `call`.
+STENCIL_ONCE_PROJECT = {{ compose_project }}
+compose_once = trap 'rc=$$?; $(STENCIL_COMPOSE) -p $(STENCIL_ONCE_PROJECT)-$(1) down --remove-orphans || rc=$$?; exit $$rc' EXIT; $(STENCIL_COMPOSE) -p $(STENCIL_ONCE_PROJECT)-$(1) run --rm $(1)
+
 # Pull an image only when it is not already present. Four targets want this and
 # the two shells share no spelling of it, so it lives here rather than as four
 # copies of the same ifeq: cmd, which is what make runs recipes through on

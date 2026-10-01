@@ -34,7 +34,11 @@ from stencil.generate import (
 # Update deliberately: every entry here is something a consumer's overriding
 # composition template must keep providing.
 CONTRACT = {
-    "Makefile-base.j2": {"compose_files"},
+    # compose_project is the stem of the one-shot project name. A consumer
+    # whose own Makefile.j2 includes this partial gets the down-after-run
+    # behavior; one that copied the partial and dropped the key renders an
+    # empty project name, and StrictUndefined is what says so.
+    "Makefile-base.j2": {"compose_files", "compose_project"},
     # `name` left this set when the course metadata flag did: the package name
     # was being injected as a document's course, which it never was -- see
     # AUTHORING.md. It is a --list label again, and no template reads it.
@@ -175,6 +179,9 @@ MAKE_CONTRACT = {
         # missing MAKE variable the way it catches a missing context key.
         "STENCIL_COMPOSE",
         "ensure_image",
+        # compose_once is Makefile-base.j2's. One-shot runs go through it so
+        # the network they create is removed on the way out.
+        "compose_once",
         # `with` is never defined by any bundled partial -- it is the
         # command-line variable a user sets with `make with=hidden`, read
         # once into WITH ?= $(with). Recorded here with this comment rather
@@ -185,6 +192,9 @@ MAKE_CONTRACT = {
     "Makefile-pkg.j2": {
         "STENCIL_COMPOSE",
         "ensure_image",
+        # compose_once is Makefile-base.j2's, same as in Makefile-doc.j2. The
+        # doc-package `pkg` recipe's pandoc and pdf runs are one-shots.
+        "compose_once",
         # METADATA_FLAGS, OUTPUT_SUFFIX and OUT_HOST are Makefile-doc.j2's:
         # the has_package_sources arm's `pkg` recipe reads the first two, and
         # clean-pkg's product list reads OUT_HOST whenever docs or slides is
