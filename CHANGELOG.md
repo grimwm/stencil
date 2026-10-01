@@ -9,6 +9,18 @@ and the closed epics in `.beads/issues.jsonl` are the readable index.
 How the version gets bumped is written down in
 [AGENTS.md](AGENTS.md#cutting-a-release), not here.
 
+## 1.1.0
+
+- **The installed package includes the documents capability.** Package data
+  listed `templates/*`, which does not descend into directories, so the 1.0.0
+  wheel shipped the document templates and omitted
+  `templates/capabilities/documents/capability.yaml`. An installed stencil
+  never loaded `documents`: `make doc` was missing, and the managed
+  `.gitignore` dropped the files that capability writes.
+- **`format-md` and `doc` stay together.** Both targets come from
+  `.stencil/documents.mk`. A package that capability does not match gets
+  neither one.
+
 ## 1.0.0
 
 - **Capabilities select a package's files.** A capability is a directory with a
