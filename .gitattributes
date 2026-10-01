@@ -1,3 +1,0 @@
-# bd appends one event per line and never rewrites; two branches that both
-# appended must merge to the union, not to a conflict at the shared tail.
-.beads/interactions.jsonl merge=union
