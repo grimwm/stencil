@@ -1723,6 +1723,44 @@ def test_pkg_checks_what_it_interpolates_and_nothing_else(
     )
 
 
+# --- Windows help reads every included makefile ----------------------------
+
+
+def test_windows_help_passes_every_makefile_as_one_array(require_make, pages_package):
+    """Get-Content accepts one positional path, and the second fails the build.
+
+    The default target is help. A package includes at least documents.mk, so
+    MAKEFILE_LIST is several names. Windows PowerShell 5.1 then errors with
+    "A positional parameter cannot be found that accepts argument
+    '.stencil/documents.mk'" and `make` prints nothing useful. -LiteralPath
+    of one quoted, comma-separated array is what that host accepts.
+
+    Reads the expansion, not the template text: a `:=` at this partial's parse
+    point would freeze the list as the root Makefile alone, and a text scan
+    of STENCIL_HELP_FILES would still look right.
+    """
+    result = make_n(pages_package, "help", "OS=Windows_NT")
+    assert result.returncode == 0, outcome("make -n help OS=Windows_NT", result)
+    line = next(
+        (entry for entry in result.stdout.splitlines() if "Get-Content" in entry),
+        None,
+    )
+    assert line is not None, (
+        f"Windows help did not invoke Get-Content:\n{result.stdout}"
+    )
+    head, _, _tail = line.partition("|")
+    quoted = re.findall(r"'([^']*)'", head)
+    makefile = (pages_package / "Makefile").read_text()
+    includes = re.findall(r"^include (\S+)", makefile, re.MULTILINE)
+    assert includes, "the fixture package includes nothing -- the bug cannot show"
+    expected = ["Makefile", *includes]
+    assert quoted == expected, (
+        "Windows help did not pass every makefile as one quoted array "
+        f"(got {quoted!r}, want {expected!r}):\n{line}"
+    )
+    assert "-LiteralPath" in head
+
+
 # --- the date class and the frontmatter grammar cannot drift ---------------
 
 
