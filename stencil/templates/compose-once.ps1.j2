@@ -1,0 +1,33 @@
+# One-shot compose on Windows. GNU make starts the recipe with CreateProcess,
+# and cmd.exe has no EXIT trap, so the cleanup that follows `compose run` lives
+# here. Arguments: project, service, the compose command words, a literal --,
+# then the service's own argv.
+$ErrorActionPreference = 'Continue'
+if ($args.Count -lt 4) {
+    Write-Error 'compose-once needs a project, a service, a compose command, and --'
+    exit 2
+}
+$project = $args[0]
+$service = $args[1]
+$rest = @($args[2..($args.Count - 1)])
+$sep = [array]::IndexOf($rest, '--')
+if ($sep -lt 1) {
+    Write-Error 'compose-once needs the compose command before --'
+    exit 2
+}
+$compose = @($rest[0..($sep - 1)])
+$user = @()
+if ($sep -lt ($rest.Count - 1)) {
+    $user = @($rest[($sep + 1)..($rest.Count - 1)])
+}
+$exe = $compose[0]
+$prefix = @()
+if ($compose.Count -gt 1) {
+    $prefix = @($compose[1..($compose.Count - 1)])
+}
+$rc = 0
+& $exe @prefix -p $project run -T --rm $service @user
+if ($null -ne $LASTEXITCODE) { $rc = $LASTEXITCODE } else { $rc = 1 }
+& $exe @prefix -p $project down --remove-orphans
+if ($null -ne $LASTEXITCODE -and $LASTEXITCODE -ne 0) { $rc = $LASTEXITCODE }
+exit $rc

@@ -11,6 +11,12 @@ How the version gets bumped is written down in
 
 ## 1.3.0
 
+- **Windows `make format-md` runs compose.** GNU make starts the recipe
+  with CreateProcess, and `trap` is not a program, so the one-shot died
+  with "The system cannot find the file specified". The Windows recipe
+  runs `.stencil/compose-once.ps1`, which runs the service and then downs
+  that project. Regenerate and copy the new `.stencil/compose-once.ps1`
+  with the Makefile.
 - **One-shot `make doc` no longer prints a container error per service.**
   podman-compose's `down` stops every service in the file and writes
   `Error: no container ...` for each one the one-shot never started. Those

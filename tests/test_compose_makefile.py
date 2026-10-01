@@ -315,6 +315,25 @@ def test_a_one_shot_run_removes_its_own_project(require_make, pages_package):
     assert "exit $rc" in text
 
 
+def test_windows_one_shot_runs_through_powershell(require_make, pages_package):
+    """Windows make starts the recipe with CreateProcess. trap is not a program.
+
+    `make format-md` then dies with "The system cannot find the file
+    specified" before compose runs. The Windows recipe names powershell and
+    the script that downs the project after the run.
+    """
+    script = pages_package / ".stencil" / "compose-once.ps1"
+    assert script.is_file(), "Windows one-shots have no compose-once.ps1"
+    result = make_n(pages_package, "format-md", "OS=Windows_NT")
+    assert result.returncode == 0, outcome("make -n format-md OS=Windows_NT", result)
+    assert "powershell" in result.stdout
+    assert ".stencil/compose-once.ps1" in result.stdout
+    assert "trap '" not in result.stdout
+    project = compose_project_name("demo")
+    assert f"{project}-format-md" in result.stdout
+    assert " down --remove-orphans" not in result.stdout.split("powershell", 1)[-1]
+
+
 # --- (c): the empty-value guard ---------------------------------------------
 
 

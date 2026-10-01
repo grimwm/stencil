@@ -463,6 +463,7 @@ def test_the_managed_entries_stay_unprefixed_when_output_dir_is_unset():
         "demo/Makefile",
         "demo/.stencil/docker-compose.yml",
         "demo/.stencil/format-package-lock.json",
+        "demo/.stencil/compose-once.ps1",
     }
 
     no_output_dir = {"templates": templates, "packages": copy.deepcopy(packages)}
