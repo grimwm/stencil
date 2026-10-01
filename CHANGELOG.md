@@ -9,6 +9,15 @@ and the closed epics in `.beads/issues.jsonl` are the readable index.
 How the version gets bumped is written down in
 [AGENTS.md](AGENTS.md#cutting-a-release), not here.
 
+## 1.2.0
+
+- **Windows `make` reads every included makefile.** The default target is
+  `help`. On Windows that recipe passed each name in `MAKEFILE_LIST` to
+  `Get-Content` as its own argument. PowerShell 5.1 accepts one positional
+  path, so the second fragment (`.stencil/documents.mk`) aborted `make`
+  before any target list was printed. The names are now one quoted array
+  passed to `-LiteralPath`. Regenerate to pick it up.
+
 ## 1.1.0
 
 - **The installed package includes the documents capability.** Package data
