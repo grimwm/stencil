@@ -104,9 +104,9 @@ def test_the_slide_overlay_anchors_to_the_toggle_not_the_slide():
     body = next((r for r in rules if re.search(r"position:\s*absolute", r)), None)
     assert body, "no slide rule positions .revealable-body"
     assert re.search(r"bottom:\s*100%", body)
-    block = re.search(r"\.slide > \.revealable\s*\{([^}]*)\}", css)
+    block = re.search(r"\.slide \.revealable\s*\{([^}]*)\}", css)
     assert block and re.search(r"position:\s*relative", block.group(1)), (
-        "the block must be the overlay's containing block"
+        "every revealable on a slide must be its own overlay's containing block"
     )
 
 
@@ -296,6 +296,70 @@ def test_a_keyboard_gets_the_same_two_states(probe, kind, text):
 @pytest.mark.parametrize("kind,text", [("slide", deck()), ("doc", document())])
 def test_nothing_of_it_prints(probe, kind, text):
     assert probe(kind, text)["print"] == "none"
+
+
+DIAGRAM_PROBE = r"""
+const puppeteer = require("puppeteer");
+(async () => {
+  const browser = await puppeteer.launch({args: ["--no-sandbox"]});
+  const page = await browser.newPage();
+  await page.setViewport({width: 1280, height: 800});
+  await page.goto("file:///workspace/%(file)s", {waitUntil: "networkidle0"});
+  await page.evaluate(() => { if (document.activeElement) document.activeElement.blur(); });
+  for (let i = 0; i < 40; i++) {
+    await page.keyboard.press("Tab");
+    const onToggle = await page.evaluate(
+      () => document.activeElement === document.querySelector(".revealable-toggle")
+    );
+    if (onToggle) break;
+  }
+  // The redraw is asynchronous; give mermaid a moment.
+  await new Promise((r) => setTimeout(r, 1500));
+  const out = await page.evaluate(() => {
+    const body = document.querySelector(".revealable-body");
+    return {
+      bodyDisplay: getComputedStyle(body).display,
+      hasSvg: body.querySelector("svg") !== null,
+      stale: body.querySelector(".mermaid[data-mermaid-stale]") !== null,
+    };
+  });
+  console.log(JSON.stringify(out));
+  await browser.close();
+})();
+"""
+
+
+def deck_with_diagram() -> str:
+    return (
+        '---\ntitle: "Revealable"\nlang: en\nslide-level: 2\n---\n\n'
+        "## Slide\n\nBody text.\n\n"
+        "::: revealable\n\n"
+        '```{.mermaid caption="A tiny flow"}\nflowchart LR\n  a --> b\n```\n\n'
+        ":::\n"
+    )
+
+
+@pytest.mark.integration
+def test_a_diagram_inside_is_drawn_on_keyboard_preview(pdf_workspace):
+    """The body is display: none while the page renders, so mermaid skips
+    the diagram and marks it stale. A keyboard preview must redraw it,
+    the same as a hover or a click: a reader who tabbed there would
+    otherwise see the diagram's source text."""
+    (pdf_workspace / "revealable-diagram.md").write_text(deck_with_diagram())
+    built = pipeline.render(
+        "slide", "revealable-diagram.md", "revealable-diagram.html",
+        workdir=pdf_workspace,
+    )
+    assert built.returncode == 0, built.stderr
+    result = pipeline.run_in_browser(
+        DIAGRAM_PROBE % {"file": "revealable-diagram.html"},
+        workdir=pdf_workspace, timeout=180,
+    )
+    assert result.returncode == 0, result.stderr[-2000:]
+    out = json.loads(result.stdout.strip().splitlines()[-1])
+    assert out["bodyDisplay"] == "block"
+    assert out["hasSvg"], "the diagram is still source text on keyboard preview"
+    assert not out["stale"]
 
 
 @pytest.mark.integration

@@ -370,9 +370,13 @@
 
        The toggle sits at the right edge because present mode pins the deck
        toolbar to the bottom-left corner of the screen, which is exactly
-       where a left-aligned toggle on the last line of a slide lands. */
+       where a left-aligned toggle on the last line of a slide lands.
+
+       Every revealable on a slide is its own containing block, not only a
+       direct child: one inside a column would otherwise anchor to the
+       slide and rise from the slide's top edge instead of its own. */
+    .slide .revealable { position: relative; }
     .slide > .revealable {
-      position: relative;
       margin: 0.5rem 0 0;
       text-align: right;
     }

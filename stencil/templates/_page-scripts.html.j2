@@ -274,10 +274,13 @@ $endif$
         }
       });
 
-      // Hover previews the body too, so a diagram inside has to be drawn
-      // on the first hover, not only on the first click.
+      // Hover and keyboard focus preview the body too, so a diagram inside
+      // has to be drawn on the first of either, not only on the first click.
       block.addEventListener('mouseenter', function (event) {
         event.currentTarget.dispatchEvent(new Event('revealable-open', { bubbles: true }));
+      });
+      toggle.addEventListener('focus', function (event) {
+        event.currentTarget.parentNode.dispatchEvent(new Event('revealable-open', { bubbles: true }));
       });
 
       block.appendChild(toggle);
