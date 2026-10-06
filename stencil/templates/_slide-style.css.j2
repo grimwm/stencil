@@ -357,6 +357,49 @@
     .takeaway > :last-child { margin-bottom: 0; }
     .takeaway strong { color: var(--accent); }
 
+    /* ::: revealable on a slide  ->  the body floats above its toggle.
+
+       A slide has no room to give: opening notes in flow would push the
+       takeaway and the slide number off the bottom, and in present mode
+       off the screen. So the toggle stays where the author put it and the
+       body is laid over the slide, anchored to the toggle's top edge rather
+       than the slide's bottom -- anchored to the bottom it covered the
+       toggle the moment it opened, and the click that pins it could not
+       land. Present mode keeps this working unchanged: the block is the
+       containing block, and it moves with its slide.
+
+       The toggle sits at the right edge because present mode pins the deck
+       toolbar to the bottom-left corner of the screen, which is exactly
+       where a left-aligned toggle on the last line of a slide lands.
+
+       Every revealable on a slide is its own containing block, not only a
+       direct child: one inside a column would otherwise anchor to the
+       slide and rise from the slide's top edge instead of its own. */
+    .slide .revealable { position: relative; }
+    .slide > .revealable {
+      margin: 0.5rem 0 0;
+      text-align: right;
+    }
+    .slide .revealable-body { text-align: left; }
+    .slide > .revealable:last-child { margin-top: auto; }
+    .slide > .takeaway + .revealable { margin-top: 0.5rem; }
+    .slide .revealable-body {
+      position: absolute;
+      left: 0;
+      right: 0;
+      bottom: 100%;
+      z-index: 5;
+      max-height: min(60vh, 24rem);
+      overflow: auto;
+      margin: 0 0 0.4rem;
+      background: var(--deck-quote-bg);
+      border: 1px solid var(--deck-quote-border);
+      border-radius: 8px;
+      box-shadow: 0 6px 24px var(--deck-shadow);
+      font-family: var(--font-sans);
+      font-size: 0.95rem;
+    }
+
     .center { text-align: center; }
 
     /* --- Media sizing: never let one figure push a slide off the page --- */

@@ -152,6 +152,15 @@ $endif$
       }
     });
 
+    // A revealable block that opens redraws the same way: its body was
+    // display: none while the page rendered, so a diagram inside it was
+    // skipped above and is still source text.
+    document.addEventListener('revealable-open', function (event) {
+      if (event.target.querySelector('.mermaid[data-mermaid-stale]')) {
+        renderMermaid(event.target);
+      }
+    });
+
     // Re-applied after every render: mermaid numbers ids from scratch each
     // time, so a second diagram would duplicate the first's (WCAG 4.1.1).
     function prefixSvgIds() {
@@ -229,6 +238,54 @@ $endif$
         pending = pending.then(function () { return renderMermaid(); })
                          .catch(function () {});
       });
+    }
+  })();
+  </script>
+
+  <!-- ::: revealable -> a disclosure: a toggle button, and a body it opens.
+       Runs now rather than after Mermaid: it only wraps each block's own
+       children, so a diagram inside is rendered in place either way, and
+       waiting would leave the raw div hidden by _page-style for the whole
+       render (several seconds on a diagram-heavy page). -->
+  <script>
+  (function() {
+    var blocks = document.querySelectorAll('.revealable');
+    for (var i = 0; i < blocks.length; i++) {
+      var block = blocks[i];
+      var body = document.createElement('div');
+      body.className = 'revealable-body';
+      body.id = block.id ? block.id + '-body' : 'revealable-' + (i + 1) + '-body';
+      while (block.firstChild) body.appendChild(block.firstChild);
+
+      var toggle = document.createElement('button');
+      toggle.type = 'button';
+      toggle.className = 'revealable-toggle';
+      toggle.setAttribute('aria-expanded', 'false');
+      toggle.setAttribute('aria-controls', body.id);
+      // `label="..."` on the fence reaches the page as data-label; pandoc
+      // prefixes the attribute names it does not know.
+      toggle.textContent = block.getAttribute('data-label') || 'Notes';
+      toggle.addEventListener('click', function (event) {
+        var button = event.currentTarget;
+        var open = button.parentNode.classList.toggle('is-open');
+        button.setAttribute('aria-expanded', open ? 'true' : 'false');
+        if (open) {
+          button.parentNode.dispatchEvent(new Event('revealable-open', { bubbles: true }));
+        }
+      });
+
+      // Hover and keyboard focus preview the body too, so a diagram inside
+      // has to be drawn on the first of either, not only on the first click.
+      block.addEventListener('mouseenter', function (event) {
+        event.currentTarget.dispatchEvent(new Event('revealable-open', { bubbles: true }));
+      });
+      toggle.addEventListener('focus', function (event) {
+        event.currentTarget.parentNode.dispatchEvent(new Event('revealable-open', { bubbles: true }));
+      });
+
+      block.appendChild(toggle);
+      block.appendChild(body);
+      block.classList.add('revealable--ready');
     }
   })();
   </script>

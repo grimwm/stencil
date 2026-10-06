@@ -441,6 +441,58 @@
       color: var(--accent);
     }
 
+    /* ::: revealable  ->  content folded behind a toggle.
+
+       Presenter notes, worked answers, a hint: on the page but not in the
+       reader's way. The toggle is a real <button> carrying aria-expanded, so
+       a keyboard or a screen reader opens it the way it opens any disclosure;
+       hovering the block previews it for a mouse, and :has() on the focused
+       toggle gives a keyboard the same preview on Tab. The two are kept
+       separate from .is-open on purpose: hover is a glance, the click pins.
+
+       The toggle and the body are made by _page-scripts, so the raw div is
+       kept off the page until that script has run -- otherwise the notes
+       would flash in full between parse and script, and a page whose script
+       never ran (or print, below) would show them to everyone. */
+    .revealable:not(.revealable--ready) { display: none; }
+
+    .revealable { margin: 0.75rem 0; }
+
+    .revealable-toggle {
+      font-family: var(--font-sans);
+      font-size: 0.85rem;
+      font-weight: 600;
+      color: var(--accent);
+      background: transparent;
+      border: 1px solid var(--accent);
+      border-radius: 999px;
+      padding: 0.15rem 0.75rem 0.15rem 0.6rem;
+      cursor: pointer;
+    }
+    .revealable-toggle::before {
+      content: "\25B8";
+      display: inline-block;
+      margin-right: 0.35rem;
+      transition: transform 120ms ease;
+    }
+    .revealable-toggle[aria-expanded="true"]::before { transform: rotate(90deg); }
+
+    .revealable-body {
+      display: none;
+      margin-top: 0.5rem;
+      padding: 0.85rem 1.15rem;
+      background: var(--card-bg);
+      border: 1px solid var(--card-border);
+      border-radius: 6px;
+    }
+    .revealable-body > :last-child { margin-bottom: 0; }
+
+    .revealable.is-open > .revealable-body,
+    .revealable:hover > .revealable-body,
+    .revealable:has(> .revealable-toggle:focus-visible) > .revealable-body {
+      display: block;
+    }
+
     /* Task lists: pandoc wraps each item as <li><label><input type=checkbox>text</label>.
        Drop the disc so the checkbox is the only marker, and hang the text off it
        so wrapped lines align with the first character instead of the box. */
@@ -767,6 +819,14 @@
       li input[type="checkbox"] {
         -webkit-print-color-adjust: exact;
         print-color-adjust: exact;
+      }
+
+      /* A revealable block never prints. Paper cannot be hovered or clicked,
+         so the only two things print could do are show the notes to every
+         reader of the handout or print a toggle that opens nothing. Neither
+         is what the author folded them away for. */
+      .revealable {
+        display: none !important;
       }
 
       /* Show all tab panes and hide nav tabs when printing */
