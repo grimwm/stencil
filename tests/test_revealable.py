@@ -184,12 +184,19 @@ const puppeteer = require("puppeteer");
   await page.mouse.move(2, 2);
   out.clickedAgain = await read();
 
-  // Keyboard: Tab onto the toggle previews it; Enter pins it. Focus is
-  // moved off and back with the keyboard so :focus-visible applies, as it
-  // would for a reader who tabbed there.
-  await page.focus(".revealable-toggle");
-  await page.keyboard.down("Shift"); await page.keyboard.press("Tab"); await page.keyboard.up("Shift");
-  await page.keyboard.press("Tab");
+  // Keyboard: Tab onto the toggle previews it; Enter pins it. The toggle
+  // is reached by tabbing from the top of the page, the way a keyboard
+  // reader reaches it, so :focus-visible applies -- page.focus() is a
+  // programmatic focus and does not count, and tabbing off and back
+  // depends on which element happens to precede the toggle.
+  await page.evaluate(() => { if (document.activeElement) document.activeElement.blur(); });
+  for (let i = 0; i < 40; i++) {
+    await page.keyboard.press("Tab");
+    const onToggle = await page.evaluate(
+      () => document.activeElement === document.querySelector(".revealable-toggle")
+    );
+    if (onToggle) break;
+  }
   out.focused = await read();
   await page.keyboard.press("Enter");
   out.entered = await read();
