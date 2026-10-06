@@ -109,24 +109,25 @@ on a `<div>`, since `cols` is only a real attribute on `<textarea>` and `<colgro
 
 ## What works where
 
-| Construct                                                  | Document                | Deck                                                      |
-| ---------------------------------------------------------- | ----------------------- | --------------------------------------------------------- |
-| Headings, lists, tables, code, footnotes, definition lists | yes                     | yes — a slide-level heading also breaks                   |
-| `$math$` and `$$math$$`, rendered as MathML                | yes                     | yes                                                       |
-| Mermaid blocks with `caption=`                             | yes                     | yes, with figure height capped                            |
-| Local images inlined as base64                             | yes                     | yes                                                       |
-| Blockquotes as callout cards                               | yes                     | yes                                                       |
-| Citations and a generated reference list                   | yes                     | yes, but give `#refs` its own slide                       |
-| `::: {.hidden}` with `WITH=hidden`                         | yes                     | yes — see [Presenter-only slides](#presenter-only-slides) |
-| `::: {.side-by-side}`                                      | yes                     | yes                                                       |
-| `<nav class="nav-tabs">` tabbed sections                   | yes                     | no — a deck already paginates                             |
-| `---` horizontal rule                                      | renders as a rule       | starts a new slide                                        |
-| `::: columns` (with `.wide-left` / `.wide-right`)          | no — plain unstyled div | yes                                                       |
-| `::: lead-in`, `::: takeaway`, `::: center`                | no — plain unstyled div | yes                                                       |
-| `slide-level:` front matter                                | ignored                 | sets the breaking level                                   |
-| `author:` / `date:` front matter                           | byline in the header    | byline on the title slide                                 |
-| `program:` / `section:` / `term:` front matter             | top right of the header | above the title on the title slide                        |
-| Present mode, one-slide-per-page printing                  | no                      | yes                                                       |
+| Construct                                                  | Document                | Deck                                                                       |
+| ---------------------------------------------------------- | ----------------------- | -------------------------------------------------------------------------- |
+| Headings, lists, tables, code, footnotes, definition lists | yes                     | yes — a slide-level heading also breaks                                    |
+| `$math$` and `$$math$$`, rendered as MathML                | yes                     | yes                                                                        |
+| Mermaid blocks with `caption=`                             | yes                     | yes, with figure height capped                                             |
+| Local images inlined as base64                             | yes                     | yes                                                                        |
+| Blockquotes as callout cards                               | yes                     | yes                                                                        |
+| Citations and a generated reference list                   | yes                     | yes, but give `#refs` its own slide                                        |
+| `::: {.hidden}` with `WITH=hidden`                         | yes                     | yes — see [Presenter-only slides](#presenter-only-slides)                  |
+| `::: revealable`                                           | yes — opens in flow     | yes — floats over the slide; see [Revealable content](#revealable-content) |
+| `::: {.side-by-side}`                                      | yes                     | yes                                                                        |
+| `<nav class="nav-tabs">` tabbed sections                   | yes                     | no — a deck already paginates                                              |
+| `---` horizontal rule                                      | renders as a rule       | starts a new slide                                                         |
+| `::: columns` (with `.wide-left` / `.wide-right`)          | no — plain unstyled div | yes                                                                        |
+| `::: lead-in`, `::: takeaway`, `::: center`                | no — plain unstyled div | yes                                                                        |
+| `slide-level:` front matter                                | ignored                 | sets the breaking level                                                    |
+| `author:` / `date:` front matter                           | byline in the header    | byline on the title slide                                                  |
+| `program:` / `section:` / `term:` front matter             | top right of the header | above the title on the title slide                                         |
+| Present mode, one-slide-per-page printing                  | no                      | yes                                                                        |
 
 The "no — plain unstyled div" rows are the trap worth remembering: the fences still *parse* in a
 document, they just come out as a bare `<div>` with no styling attached, so the text lands on the page
@@ -551,8 +552,47 @@ Because the name reaches both a pandoc command line and a filename, it may conta
 digits, `-` and `_`, with commas between features. A name with anything else in it stops the build
 rather than being passed along.
 
-This is the mechanism for answer keys, grading rubrics, solutions, and presenter notes. It applies
-only to fenced divs — you cannot hide a single word or list item this way.
+This is the mechanism for answer keys, grading rubrics, and solutions — anything that must not reach
+the student build at all. It applies only to fenced divs — you cannot hide a single word or list
+item this way.
+
+### Revealable content
+
+`hidden` drops content from the build. `revealable` keeps it in the page, folded behind a toggle:
+
+```markdown
+::: {.revealable label="Presenter notes"}
+
+Ask what the class expects before showing the next slide.
+
+:::
+```
+
+The block renders as a small button carrying the label (`Notes` when none is given). The content
+behind it opens three ways: **hovering** the block previews it, **clicking** the button pins it
+open until clicked again, and a keyboard reader gets the same preview on Tab and pins with Enter.
+The button is a real disclosure — `aria-expanded`, `aria-controls` — so a screen reader announces
+it as one.
+
+This is the mechanism for presenter notes, hints, and worked answers the reader may look at but
+should not be shown. Use it when the presenter and the audience read the same page; use `hidden`
+when the audience must not have the content at all.
+
+Three things to know:
+
+- **It never prints.** Paper cannot be hovered, so `make pdf` and a browser print both leave the
+  block out entirely — no toggle, no content. A handout built from a page with revealable blocks
+  is the page without them.
+- **On a slide, the content floats.** A slide has no vertical room to spare, so the opened body is
+  laid over the slide, rising from the button, rather than pushing the takeaway and the slide number
+  off the bottom. Put the block last on the slide and the button sits at the bottom-right corner,
+  clear of the present-mode toolbar. In a document the body opens in flow, like a callout.
+- **It composes with `hidden`.** `::: {.revealable .hidden}` is a revealable block that exists only
+  in the `WITH=hidden` build — notes a presenter can glance at from the presenter copy and that the
+  student copy does not carry.
+
+A heading inside the block does not start a new slide; the splitter sees only top-level blocks, the
+same as for `hidden`.
 
 ### Math
 
@@ -755,15 +795,15 @@ in the pipeline. Pandoc writes ordinary HTML; `slide-sections.lua` then groups t
 Following it produces markdown that quietly does nothing — or, in the case of speaker notes, prints
 the thing you meant to keep to yourself.
 
-| If pandoc's slide docs tell you to…                           | Here                                                                                                         |
-| ------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
-| pass `--slide-level=N`                                        | Not passed. Put `slide-level:` in the front matter instead.                                                  |
-| write `::: notes` for speaker notes                           | Worse than nothing: the note renders visibly on the slide. Use `::: {.hidden}` and build with `WITH=hidden`. |
-| write `. . .` to pause                                        | Nothing — it renders as literal text. A deck has no incremental reveal.                                      |
-| write `::: incremental`                                       | Nothing.                                                                                                     |
-| nest `::: {.column width="40%"}` inside `::: {.columns}`      | Don't nest. `::: columns` splits its own children; bias it with `.wide-left` / `.wide-right`, not `width=`.  |
-| expect a content-free slide-level heading to be a title slide | It becomes an ordinary slide. The title slide is generated from the front matter instead.                    |
-| expect `---` to break slides only at slide level 0            | `---` always starts a new slide, whatever `slide-level` is.                                                  |
+| If pandoc's slide docs tell you to…                           | Here                                                                                                                                                                                              |
+| ------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| pass `--slide-level=N`                                        | Not passed. Put `slide-level:` in the front matter instead.                                                                                                                                       |
+| write `::: notes` for speaker notes                           | Worse than nothing: the note renders visibly on the slide. Use `::: revealable` for notes the presenter opens on the slide, or `::: {.hidden}` with `WITH=hidden` for a separate presenter build. |
+| write `. . .` to pause                                        | Nothing — it renders as literal text. A deck has no incremental reveal.                                                                                                                           |
+| write `::: incremental`                                       | Nothing.                                                                                                                                                                                          |
+| nest `::: {.column width="40%"}` inside `::: {.columns}`      | Don't nest. `::: columns` splits its own children; bias it with `.wide-left` / `.wide-right`, not `width=`.                                                                                       |
+| expect a content-free slide-level heading to be a title slide | It becomes an ordinary slide. The title slide is generated from the front matter instead.                                                                                                         |
+| expect `---` to break slides only at slide level 0            | `---` always starts a new slide, whatever `slide-level` is.                                                                                                                                       |
 
 What you get in exchange is that a deck is one self-contained HTML file — no reveal.js to download,
 no separate embedding step — with the same math, diagrams, code highlighting and callouts a document
@@ -931,6 +971,10 @@ it enlarges the first character of each card's opening bold run and leaves the r
 nothing on a card whose first block is not bold, so it is safe to put on the fence and forget.
 
 ### Presenter-only slides
+
+For notes read while presenting, from the same deck the audience sees, use
+[`::: revealable`](#revealable-content): it stays on the page and opens on hover or a click. The
+mechanism below is for content that must not be in the audience's copy at all.
 
 A hidden fenced div works in a deck exactly as it does in a document, with one wrinkle worth knowing:
 **a heading inside a fenced div does not start a new slide.** The splitter only sees top-level

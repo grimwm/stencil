@@ -30,6 +30,13 @@ exists to catch.
 
 :::
 
+::: {.revealable label="Hint"}
+
+Start from the definition of $W$ and ask what happens to it as $L$ grows
+with $\lambda$ held fixed.
+
+:::
+
 ## Fields on the flow record
 
 The header row is backticked on purpose. Inline code in a `thead` cell lands on

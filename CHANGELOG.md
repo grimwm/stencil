@@ -9,6 +9,19 @@ and the closed epics in `.beads/issues.jsonl` are the readable index.
 How the version gets bumped is written down in
 [AGENTS.md](AGENTS.md#cutting-a-release), not here.
 
+## 1.4.0
+
+- **`::: revealable` folds content behind a toggle.** Presenter notes,
+  hints and worked answers stay in the page and out of the way: hovering
+  the block previews the content, clicking the button pins it open, and a
+  keyboard gets the same two states on Tab and Enter. The button is a real
+  disclosure (`aria-expanded`, `aria-controls`). On a slide the opened
+  body floats over the slide so nothing is pushed off the bottom; in a
+  document it opens in flow. `label="..."` on the fence names the button;
+  it says `Notes` otherwise. A revealable block never prints. Regenerate
+  to pick it up: the behaviour lives in the shared page style and script,
+  so every rendered page gets it from the next `make doc`.
+
 ## 1.3.0
 
 - **Windows `make format-md` runs compose.** GNU make starts the recipe

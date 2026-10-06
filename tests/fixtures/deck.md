@@ -27,6 +27,15 @@ Queues are the hidden cost of high utilization.
 
 Little's Law relates the three [@little1961].
 
+::: {.revealable label="Presenter notes"}
+
+Ask what the class expects $W$ to do as utilization approaches one before
+showing the next slide. The toggle is on the page for everyone, so
+check-access measures it in both themes; the body it opens is built from the
+tokens the takeaway above already proves.
+
+:::
+
 ## Flow
 
 ::: {.columns .wide-right}
