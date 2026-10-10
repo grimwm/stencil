@@ -31,6 +31,7 @@ templates and `.gitignore` are all rewritten by `stencil gen`. Change the config
 ```bash
 stencil gen <package>    # after any .config.yaml change; regenerates the package's Makefile
 make doc                 # student build
+make doc D=Guide.md      # that one file (path or stem); pdf and check-pdf honor it too
 make doc WITH=hidden     # presenter build -> <name>-hidden.html
 make check-access        # pa11y, WCAG 2.1 AA
 make pdf                 # PDF/UA-1: headless Chromium + pdf-lib repairs

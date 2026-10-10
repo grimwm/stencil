@@ -1444,11 +1444,11 @@ def marker_script(tmp_path):
     return script, marker
 
 
-@pytest.mark.parametrize("name", ["WITH", "with", "BUILD_DATE"])
+@pytest.mark.parametrize("name", ["WITH", "with", "BUILD_DATE", "D"])
 def test_a_shell_metacharacter_never_reaches_the_shell(
     require_make, pages_package, marker_script, name
 ):
-    """A `;`-separated command smuggled through any of the three names.
+    """A `;`-separated command smuggled through WITH, with, BUILD_DATE or D.
 
     A REAL `make` RUN, NOT `make -n`, AND THAT IS NOT INTERCHANGEABLE.
     MEASURED against the unfixed template: under `-n` this payload never
@@ -1473,7 +1473,7 @@ def test_a_shell_metacharacter_never_reaches_the_shell(
     )
 
 
-@pytest.mark.parametrize("name", ["WITH", "with", "BUILD_DATE"])
+@pytest.mark.parametrize("name", ["WITH", "with", "BUILD_DATE", "D"])
 def test_a_make_level_expansion_never_fires(
     require_make, pages_package, marker_script, name
 ):
@@ -1578,6 +1578,153 @@ def test_the_legitimate_values_still_render_what_they_always_rendered(
     assert "Guide-hidden.html" in suffixed.stdout, (
         f"the WITH suffix stopped reaching the output filename:\n{suffixed.stdout}"
     )
+
+
+def _sources(result: subprocess.CompletedProcess) -> str:
+    return result.stdout + result.stderr
+
+
+def test_d_builds_one_document_and_leaves_the_deck(require_make, pages_package):
+    """`make doc D=Guide.md` renders Guide and does not rebuild Deck.
+
+    Goes red against a D that is accepted and then ignored -- every source
+    still in the dry run -- and against a D that drops the named file too.
+    The stem form is the same selection. Empty D is the unset case.
+    """
+    everything = make_n(pages_package, "doc", "D=")
+    assert everything.returncode == 0, outcome("make -n doc D=", everything)
+    assert "Guide.md" in everything.stdout and "Deck.md" in everything.stdout
+
+    for selection in ("D=Guide.md", "D=Guide"):
+        one = make_n(pages_package, "doc", selection)
+        assert one.returncode == 0, outcome(f"make -n doc {selection}", one)
+        assert "Guide.md" in one.stdout, one.stdout
+        assert "Deck.md" not in one.stdout, (
+            f"{selection} still built the deck:\n{one.stdout}"
+        )
+
+    deck = make_n(pages_package, "doc", "D=Deck.md")
+    assert deck.returncode == 0, outcome("make -n doc D=Deck.md", deck)
+    assert "Deck.md" in deck.stdout and "Guide.md" not in deck.stdout, deck.stdout
+
+    only_deck = make_n(pages_package, "slide", "D=Deck.md")
+    assert only_deck.returncode == 0, outcome("make -n slide D=Deck.md", only_deck)
+    assert "Deck.md" in only_deck.stdout and "Guide.md" not in only_deck.stdout, (
+        only_deck.stdout
+    )
+
+
+def test_d_on_pdf_prints_only_the_named_file(require_make, pages_package):
+    """pdf depends on doc, so the selection has to survive that edge.
+
+    A document selection must not print the deck, and a deck selection must
+    not print the document. check-pdf reads the same list: a PDF that was
+    not built is not a file it may demand.
+    """
+    guide = make_n(pages_package, "pdf", "D=Guide.md")
+    assert guide.returncode == 0, outcome("make -n pdf D=Guide.md", guide)
+    assert "Guide.md" in guide.stdout and "./Guide.pdf" in guide.stdout
+    assert "Deck.md" not in guide.stdout and "Deck.pdf" not in guide.stdout, (
+        guide.stdout
+    )
+
+    deck = make_n(pages_package, "check-pdf", "D=Deck")
+    assert deck.returncode == 0, outcome("make -n check-pdf D=Deck", deck)
+    assert "Deck.md" in deck.stdout and "./Deck.pdf" in deck.stdout
+    assert "Guide.md" not in deck.stdout and "Guide.pdf" not in deck.stdout, (
+        deck.stdout
+    )
+
+
+def test_d_rejects_a_name_this_package_does_not_have(require_make, pages_package):
+    """An unknown D must fail. Succeeding having built nothing is the bug."""
+    result = make_n(pages_package, "doc", "D=missing.md")
+    combined = _sources(result)
+    assert result.returncode != 0, outcome("make -n doc D=missing.md", result)
+    assert "D" in combined and "missing.md" in combined, combined
+
+
+def test_d_on_slide_rejects_a_document(require_make, pages_package):
+    """`make slide D=Guide.md` has no deck by that name. Building nothing
+    and exiting 0 would look like a successful deck build."""
+    result = make_n(pages_package, "slide", "D=Guide.md")
+    combined = _sources(result)
+    assert result.returncode != 0, outcome("make -n slide D=Guide.md", result)
+    assert "slide" in combined, combined
+
+
+def test_d_accepts_a_subdirectory_path_and_its_stem(require_make, generate_package):
+    package = generate_package(
+        {
+            "output_dir": "out",
+            "templates": MAKEFILE_TEMPLATES,
+            "packages": {
+                "demo": {
+                    "name": "Demo",
+                    "package_type": "none",
+                    "docs": ["notes/intro.md", "Guide.md"],
+                }
+            },
+        }
+    )
+    for selection in ("D=notes/intro.md", "D=notes/intro"):
+        one = make_n(package, "pdf", selection)
+        assert one.returncode == 0, outcome(f"make -n pdf {selection}", one)
+        assert "notes/intro.md" in one.stdout, one.stdout
+        assert "Guide.md" not in one.stdout, one.stdout
+
+
+def test_d_keeps_the_with_suffix_on_the_one_file(require_make, pages_package):
+    """The two selectors compose: one file, and the hidden variant of it."""
+    one = make_n(pages_package, "doc", "D=Guide.md", "WITH=hidden")
+    assert one.returncode == 0, outcome("make -n doc D=Guide.md WITH=hidden", one)
+    assert "Guide-hidden.html" in one.stdout, one.stdout
+    assert "Deck" not in one.stdout, one.stdout
+
+
+def test_a_pattern_specific_d_is_caught_at_the_point_of_use(
+    require_make, pages_package, marker_script, tmp_path
+):
+    """MAKEFILES can plant D after the parse-time check has already chosen
+    every source. The recipe check has to refuse the illegal value anyway.
+
+    A legal value delivered the same way must not be refused. Selection
+    itself happens while the makefile is read, which is where a command-line
+    D is visible; this control only proves the late value was not rejected.
+    """
+    script, marker = marker_script
+    evil = tmp_path / "evil-d.mk"
+    evil.write_text(f"%: D = $(shell {script})\n")
+    env_vars = clean_env()
+    env_vars["MAKEFILES"] = str(evil)
+    result = subprocess.run(
+        ["make", "--no-print-directory", "-n", "doc", "DC=true"],
+        cwd=pages_package,
+        capture_output=True,
+        text=True,
+        env=env_vars,
+    )
+    combined = _sources(result)
+    assert not marker.exists(), (
+        f"a pattern-specific D was expanded by make:\n{combined}"
+    )
+    assert result.returncode != 0, outcome("the MAKEFILES D payload did not fail", result)
+    assert "D" in combined, combined
+
+    benign = tmp_path / "ok-d.mk"
+    benign.write_text("%: D = Guide.md\n")
+    env_vars["MAKEFILES"] = str(benign)
+    control = subprocess.run(
+        ["make", "--no-print-directory", "-n", "doc", "DC=true"],
+        cwd=pages_package,
+        capture_output=True,
+        text=True,
+        env=env_vars,
+    )
+    assert control.returncode == 0, outcome(
+        "an in-class pattern-specific D was refused", control
+    )
+    assert "Guide.md" in control.stdout, control.stdout
 
 
 def test_a_pattern_specific_assignment_is_caught_at_the_point_of_use(
