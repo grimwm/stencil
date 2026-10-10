@@ -1,7 +1,7 @@
 """A package can declare a step that runs before its documents build.
 
 stn-gln. cs425 generates sixteen SVGs from a matplotlib script that nothing in
-the build knew about, so `make docs` built documents from stale figures and
+the build knew about, so `make doc` built documents from stale figures and
 never said so. The operator hit it while restructuring and had to ask how the
 images were produced at all, because nothing in the build said.
 
@@ -148,11 +148,11 @@ def test_a_step_that_produces_nothing_is_an_error_and_leaves_no_stamp(hooked):
 
 
 def test_doc_and_slide_depend_on_the_hook(hooked):
-    """The edge that was missing. `make docs` has to pull the step in."""
+    """The edge that was missing. `make doc` has to pull the step in."""
     makefile = (hooked / "Makefile").read_text() + (
         hooked / ".stencil" / "documents.mk"
     ).read_text()
-    doc = next(l for l in makefile.splitlines() if l.startswith("docs:"))
+    doc = next(l for l in makefile.splitlines() if l.startswith("doc:"))
     slide = next(l for l in makefile.splitlines() if l.startswith("slide:"))
     assert "pre-build" in doc, doc
     assert "pre-build" in slide, slide

@@ -51,7 +51,7 @@ def test_a_document_with_no_diagram_does_not_carry_the_bundle(render):
     assert BUNDLE not in page
     assert DRIVER in page, (
         "the driver was gated along with the bundle; nothing will set "
-        "__mermaidReady and make pdfs will wait out its timeout"
+        "__mermaidReady and make pdf will wait out its timeout"
     )
 
 

@@ -126,7 +126,7 @@ for f in "$@"; do
 done
 if [ "$expected" -eq 0 ]; then
   echo "check-pdf was given no file to check." >&2
-  echo "Run 'make pdfs' first. veraPDF exits 0 on an empty file list, so this" >&2
+  echo "Run 'make pdf' first. veraPDF exits 0 on an empty file list, so this" >&2
   echo "would otherwise have reported success having checked nothing." >&2
   exit 1
 fi
@@ -180,7 +180,7 @@ done
 # look is precisely how it would happen.
 if [ "$checked" -eq 0 ]; then
   echo "check-access found no HTML to check." >&2
-  echo "Run 'make docs' first. A glob that matches nothing exits 0, so this" >&2
+  echo "Run 'make doc' first. A glob that matches nothing exits 0, so this" >&2
   echo "would otherwise have reported success having checked nothing at all." >&2
   exit 1
 fi
@@ -221,8 +221,8 @@ _CODE_BUNDLE_AFTER_HIDDEN = (
     "Must follow hidden-filter, which is the only ordering constraint it has.\n"
     "The flag decides whether the 141 KB highlighter rides along, and a code\n"
     "block inside a `::: {.hidden}` div is not on the page unless the build\n"
-    "asked for it -- run this first and `make docs` carries the bundle for a\n"
-    "listing only `make docs WITH=hidden` ever shows.\n"
+    "asked for it -- run this first and `make doc` carries the bundle for a\n"
+    "listing only `make doc WITH=hidden` ever shows.\n"
     "\n"
     "It does NOT need to follow mermaid-figure-filter. That filter wraps a\n"
     "mermaid CodeBlock in a Figure rather than consuming it, so the block is\n"

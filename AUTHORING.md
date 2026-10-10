@@ -31,18 +31,18 @@ packages:
 Then, in the package directory:
 
 ```bash
-make docs         # builds everything the package declares
+make doc          # builds everything the package declares
 make slide        # builds only the decks
-make pdfs         # prints the built HTML to PDF
+make pdf          # prints the built HTML to PDF
 make format-md    # runs prettier over the markdown
 make check-access # pa11y accessibility check over the built HTML
 ```
 
-`make docs` depends on `make slide`, so the one command always produces everything. Both targets run
+`make doc` depends on `make slide`, so the one command always produces everything. Both targets run
 `format-md` first, which matters — see [Fenced divs and prettier](#fenced-divs-and-prettier). It is
 the only formatter to point at these files; [mdformat breaks
 them](#do-not-run-mdformat-over-this-markdown).
-`make pdfs` depends on `make docs`, so it always prints the build you just made.
+`make pdf` depends on `make doc`, so it always prints the build you just made.
 
 ## The dialect
 
@@ -245,10 +245,10 @@ A value is a picture when it starts with `file://` or ends in an image extension
 The picture is **inlined** as a `data:` URI like any other image, so the page stays one
 self-contained file. `file://img/logo.svg` and `img/logo.svg` behave identically — the scheme is
 stripped before the image is resolved, because `embed-images.lua` treats any `scheme://` as remote
-and skips it, which would leave the page carrying a path instead of the logo and fail `make pdfs`.
+and skips it, which would leave the page carrying a path instead of the logo and fail `make pdf`.
 
 A genuinely remote `https://` logo stays a reference and is **not** downloaded, which is the same
-position `embed-images.lua` takes on remote figures — it will fail `make pdfs`, which does not reach
+position `embed-images.lua` takes on remote figures — it will fail `make pdf`, which does not reach
 the network.
 
 A logo is capped on both axes and **never distorted**: whichever dimension hits its cap first, the
@@ -413,7 +413,7 @@ What it downloads is a faithful copy of the page as it was built — not the fil
 browser's own serializer rewrites some markup on the way out (`&#160;` becomes `&nbsp;`, `<path/>`
 becomes `<path></path>`), so the saved bytes are not identical to what `stencil gen` wrote, but they
 are semantically the same page and stay so on a second save from the downloaded copy. It never
-appears in a PDF — the print stylesheet hides it, and `make pdfs` never runs a browser session a
+appears in a PDF — the print stylesheet hides it, and `make pdf` never runs a browser session a
 reader could click in.
 
 The button exposes nothing that the reader's own Ctrl+S does not: `hidden-filter.lua` deletes
@@ -462,7 +462,7 @@ key two meanings is how the package name ended up being a document's course.
 
 #### `ai_prompt`
 
-Text the HTML file carries and the page does not show. A select-all of the rendered page copies it, and so does a paste of the file. On a document with tabbed sections, the same text is copied into every tab, so a copy of one tab still carries it. A screen reader does not speak it, and print does not show it. `make pdfs` still writes the words into the PDF's text stream, unpainted, so a tool that reads the text of the file finds them.
+Text the HTML file carries and the page does not show. A select-all of the rendered page copies it, and so does a paste of the file. On a document with tabbed sections, the same text is copied into every tab, so a copy of one tab still carries it. A screen reader does not speak it, and print does not show it. `make pdf` still writes the words into the PDF's text stream, unpainted, so a tool that reads the text of the file finds them.
 
 ```markdown
 ---
@@ -517,7 +517,7 @@ folder over HTTP rather than relying on it.
 
 **PDFs are always light.** Not by a setting that could be got wrong — by construction. Every
 dark declaration lives inside an `@media screen` block, and print does not match `@media screen`, so the light values are the only ones a printer or a PDF ever sees. That holds for
-`make pdfs` and for your browser's own Ctrl+P alike, whatever the page looked like on screen
+`make pdf` and for your browser's own Ctrl+P alike, whatever the page looked like on screen
 when you pressed it.
 
 Two consequences worth knowing:
@@ -540,9 +540,9 @@ Answer: the WIP limit forces the queue to drain before new work enters.
 ```
 
 ```bash
-make docs                    # answer omitted        -> assignment.html
-make docs WITH=hidden        # answer included       -> assignment-hidden.html
-make docs WITH=hidden,draft  # multiple features     -> assignment-hidden-draft.html
+make doc                    # answer omitted        -> assignment.html
+make doc WITH=hidden        # answer included       -> assignment-hidden.html
+make doc WITH=hidden,draft  # multiple features     -> assignment-hidden-draft.html
 ```
 
 The feature name lands in the output filename, so the student build and the answer-key build sit
@@ -580,7 +580,7 @@ when the audience must not have the content at all.
 
 Three things to know:
 
-- **It never prints.** Paper cannot be hovered, so `make pdfs` and a browser print both leave the
+- **It never prints.** Paper cannot be hovered, so `make pdf` and a browser print both leave the
   block out entirely — no toggle, no content. A handout built from a page with revealable blocks
   is the page without them.
 - **On a slide, the content floats.** A slide has no vertical room to spare, so the opened body is
@@ -691,7 +691,7 @@ subdirectory next to it.
 **Local images are inlined into the HTML as base64.** Stylesheets, scripts and webfonts are inlined
 the same way at `stencil gen` time. The generated page is one self-contained file: mail it, upload
 it to the LMS, or drop it on a flash drive and every figure, font and diagram renderer travels with
-it. Nothing breaks when the `images/` directory is left behind, and `make pdfs` does not reach the
+it. Nothing breaks when the `images/` directory is left behind, and `make pdf` does not reach the
 network. Readers keep the normal image context menu — right-click still offers Save Image As and
 Copy Image — because each figure is a real `<img>` element, not inlined `<svg>` markup. The one
 thing a `data:` URI cannot carry is a filename, so the save dialog proposes a generic one rather
@@ -1030,15 +1030,15 @@ does not also advance the slide.
 
 ### Printing a deck
 
-Run `make pdfs`. The page is set up for letter landscape, one slide per page, with the toolbar
+Run `make pdf`. The page is set up for letter landscape, one slide per page, with the toolbar
 suppressed. There is no separate deck build and no extra flag: the deck you present is the deck that
 prints.
 
 Your browser's own Ctrl+P lays the pages out identically and is fine for a quick look, but **it does
-not produce the same file**. `make pdfs` drives headless Chromium and then repairs the result to
+not produce the same file**. `make pdf` drives headless Chromium and then repairs the result to
 PDF/UA-1 — it adds the role map, the XMP metadata and the list-body tags Chromium omits, and marks
 the decoration Chromium paints untagged. A browser print skips all of that and hands you an untagged
-PDF that no accessibility checker will pass. Use `make pdfs` for anything you hand out or submit.
+PDF that no accessibility checker will pass. Use `make pdf` for anything you hand out or submit.
 
 ## Fenced divs and prettier
 
@@ -1060,7 +1060,7 @@ Batch size is the real variable.
 :::
 ```
 
-`make docs` and `make slide` both run `format-md` first, and prettier does not know what a fenced div
+`make doc` and `make slide` both run `format-md` first, and prettier does not know what a fenced div
 is. With the fence glued to its content it folds the whole block into a single paragraph, and pandoc
 then emits a literal `:::` into the page instead of a styled box. The blank lines cost nothing and
 survive formatting.
@@ -1088,7 +1088,7 @@ exclude this directory from it; otherwise the two take turns rewriting each othe
 
 ## Your package's JavaScript files do not configure the build
 
-The same rule as `--no-config` above, in the two services that drive a browser. **`make pdfs` and
+The same rule as `--no-config` above, in the two services that drive a browser. **`make pdf` and
 `make check-access` ignore your package's own `package.json`, its `.puppeteerrc` and the twelve
 other names puppeteer reads (`.puppeteerrc.cjs`, `puppeteer.config.js`, `.config/puppeteerrc` and
 so on), and its `node_modules`.** Keep any of them for your own tooling; none of them reaches these
@@ -1098,14 +1098,14 @@ That is not tidiness. Both services run as root over a read-write mount of your 
 puppeteer *executes* the JavaScript forms of its config file — so a `.puppeteerrc.cjs` sitting in a
 package used to be the package choosing what code the build runs, exactly as a `.prettierrc` was
 above. They are ignored now because the two services run from a working directory inside the image
-rather than from your package, and because the script driving `make pdfs` is built into that image
+rather than from your package, and because the script driving `make pdf` is built into that image
 instead of being read out of your directory. The second half also fixes a `package.json` declaring
-`"type": "module"`, which used to stop `make pdfs` running at all.
+`"type": "module"`, which used to stop `make pdf` running at all.
 
 Two things this does **not** say, because they would be the wrong lesson:
 
 - It is about what these targets *read while they run*, not about what goes into the image they run
-  in. `make pdfs` builds that image from your package directory, so `Dockerfile.browser` and
+  in. `make pdf` builds that image from your package directory, so `Dockerfile.browser` and
   `browser-package-lock.json` — both files stencil generates — still decide what gets installed
   into it. Leave them to `stencil gen`.
 - It says nothing about your markdown. A document is still parsed with raw HTML enabled, so a
@@ -1155,7 +1155,7 @@ other two changes have already broken.
 ## Before you hand it out
 
 ```bash
-make docs           # or make slide
+make doc            # or make slide
 make check-access   # the HTML, at WCAG 2.1 AA
 make check-pdf      # the PDF, at PDF/UA-1  (builds it first)
 ```
@@ -1166,7 +1166,7 @@ because a colour that only fails in dark is still a failure. It catches a missin
 contrast problem, or a heading level skipped on the way down.
 
 `make check-pdf` runs veraPDF against the PDFs at PDF/UA-1 (ISO 14289-1), and it depends on
-`make pdfs`, so it builds what it is about to check. The two standards disagree about figures: an
+`make pdf`, so it builds what it is about to check. The two standards disagree about figures: an
 HTML page can be perfectly accessible and still produce a PDF whose `<figure>` wrappers carry no
 accessible name, because HTML has no `alt` on `<figure>` and WCAG has no rule requiring one. So
 `check-access` passing tells you nothing about the PDF, and this is the target that does.
@@ -1177,7 +1177,7 @@ and treats zero as an error — otherwise a run in a cleaned directory would rep
 looked at nothing.
 
 **Your link text becomes the PDF's description of the link.** PDF/UA requires every link
-annotation to carry an alternate description, and Chromium writes none, so `make pdfs` adds one
+annotation to carry an alternate description, and Chromium writes none, so `make pdf` adds one
 after printing — taken from the anchor's `aria-label`, then its text, then the accessible name of a
 picture inside it, then its `title`, and only when all of those are empty, the URL itself.
 

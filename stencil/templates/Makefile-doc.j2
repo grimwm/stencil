@@ -105,17 +105,17 @@ BUILD_DATE := $(BUILD_DATE)
 #
 # It expands to nothing when both values are in class, so it costs a generated
 # package only the check. A consumer's own in-class target-specific value --
-# `docs: BUILD_DATE = 2026-09-01` -- still passes.
+# `doc: BUILD_DATE = 2026-09-01` -- still passes.
 _stencil_late_check_with = $(call _stencil_check_class,WITH,$(_stencil_chars_with),letters digits - _ and commas)
 _stencil_late_check = $(call _stencil_check_class,BUILD_DATE,$(_stencil_chars_date),digits and - T :)$(_stencil_late_check_with)
 
 # TWO OF THEM, because a target must not be stopped by a value it never uses,
 # and that is the same rule that put the BUILD_DATE class here instead of at
-# the top of the file. Only `docs` and `slide` interpolate
-# `--metadata build-date=`; `pdfs` and `check-pdf` reach them through their
-# prerequisites (`pdfs: docs`, `check-pdf: pdfs`), so all four are targets that
+# the top of the file. Only `doc` and `slide` interpolate
+# `--metadata build-date=`; `pdf` and `check-pdf` reach them through their
+# prerequisites (`pdf: doc`, `check-pdf: pdf`), so all four are targets that
 # stamp a date and all four want the full check. Makefile-pkg.j2's `pkg` is
-# `pkg: format-md` -- it never reaches `docs`, and its recipe interpolates
+# `pkg: format-md` -- it never reaches `doc`, and its recipe interpolates
 # METADATA_FLAGS and OUTPUT_SUFFIX but no date at all -- so it takes the
 # WITH-only check. MEASURED: with the full check on `pkg`, an ordinary
 # `BUILD_DATE=2026-09-12T14:30:00Z` from a CI environment stopped `make pkg`
@@ -162,7 +162,7 @@ OUTPUT_SUFFIX := $(if $(WITH),$(addprefix -,$(subst $(comma),-,$(WITH))),)
 # rather than as a prelude.
 #
 # WHY NOT JUST RUN THE COMMAND. cs425 generates sixteen SVGs from a matplotlib
-# script; running it unconditionally on every `make docs` rewrites all sixteen
+# script; running it unconditionally on every `make doc` rewrites all sixteen
 # even when nothing changed, because matplotlib output is not stable across
 # versions. The real change then arrives buried in thousands of lines of diff.
 # So the step is stale-checked, and "stale" has to include "gone".
@@ -213,7 +213,7 @@ $({{ step.name | upper | replace('-', '_') }}_STAMP):{% for dep in step.inputs %
 pre-build:{% for step in pre_build %} {{ step.name }}{% endfor %}
 
 {% endif %}
-docs: out-dir{% if has_pre_build %} pre-build{% endif %} format-md{% if has_slides %} slide{% endif %} ## Generate HTML{% if has_docs and has_slides %} (documents and slide decks){% elif has_slides %} (slide decks){% endif %} (use with=hidden to include hidden sections)
+doc: out-dir{% if has_pre_build %} pre-build{% endif %} format-md{% if has_slides %} slide{% endif %} ## Generate HTML{% if has_docs and has_slides %} (documents and slide decks){% elif has_slides %} (slide decks){% endif %} (use with=hidden to include hidden sections)
 {% if has_docs %}
 	$(_stencil_late_check)$(call ensure_image,{{ pandoc_image }},doc)
 {% for md in docs %}
@@ -231,11 +231,11 @@ slide: out-dir{% if has_pre_build %} pre-build{% endif %} format-md ## Generate 
 	@echo "Generated slides$(if $(WITH), with features: $(WITH),)"
 
 {% endif %}
-# Depends on docs, which already depends on slide, so `make pdfs` always prints
+# Depends on doc, which already depends on slide, so `make pdf` always prints
 # from HTML this run produced rather than whatever was left over from the last
-# one. $(OUTPUT_SUFFIX) has to appear on both sides: `make pdfs with=hidden`
+# one. $(OUTPUT_SUFFIX) has to appear on both sides: `make pdf with=hidden`
 # must print the -hidden HTML into the -hidden PDF, not pair one with the other.
-pdfs: docs ## Generate PDFs from the generated HTML (use with=hidden to include hidden sections)
+pdf: doc ## Generate PDFs from the generated HTML (use with=hidden to include hidden sections)
 	$(_stencil_late_check)$(STENCIL_COMPOSE) build pdf
 {% for md in docs + slides %}
 	$(call compose_once,pdf) $(OUT)/{{ md | replace('.md', '') }}$(OUTPUT_SUFFIX).html $(OUT)/{{ md | replace('.md', '') }}$(OUTPUT_SUFFIX).pdf
@@ -246,15 +246,15 @@ check-access: ## Check HTML accessibility (WCAG 2.1 AA)
 	$(STENCIL_COMPOSE) build check-access
 	$(call compose_once,check-access)
 
-# Depends on pdfs for the same reason check-access does not need to depend on
-# docs: there is a file it is meaningless without. veraPDF exits 0 on an empty
-# file list, so a check-pdf that ran before pdfs would pass having checked
+# Depends on pdf for the same reason check-access does not need to depend on
+# doc: there is a file it is meaningless without. veraPDF exits 0 on an empty
+# file list, so a check-pdf that ran before pdf would pass having checked
 # nothing; the service refuses to, and this edge means it never has to.
 # The filenames are passed rather than globbed. A package directory holds
 # whatever anyone puts in it -- a third-party PDF in there used to fail the
 # build, which is a red nobody can act on. This target already knows exactly
-# what `pdfs` above just wrote, suffix and all.
-check-pdf: pdfs ## Check PDF/UA-1 conformance of the generated PDFs
+# what `pdf` above just wrote, suffix and all.
+check-pdf: pdf ## Check PDF/UA-1 conformance of the generated PDFs
 	$(call compose_once,check-pdf){% for md in docs + slides %} $(OUT)/{{ md | replace('.md', '') }}$(OUTPUT_SUFFIX).pdf{% endfor %}
 
 {% endif %}
