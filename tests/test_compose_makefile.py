@@ -117,6 +117,10 @@ _SCRUBBED_ENV_VARS = (
     "BUILD_DATE",
     "WITH",
     "with",
+    # D selects one source. Inherited, a dry run builds that file only, and
+    # an unknown name fails the parse-time check before a test can deliver
+    # its own value. Tests that select a file pass D on the command line.
+    "D",
 )
 
 # What every generated compose invocation must expand to, immediately after
