@@ -1288,7 +1288,7 @@ def test_the_rendered_browser_digest_is_the_digest_of_the_lockfile_in_the_packag
     emitted = (doc_package / pipeline.BROWSER_LOCKFILE).read_bytes()
     assert digests == {hashlib.sha256(emitted).hexdigest()}, (
         "the digest rendered into the guard is not the digest of the lockfile "
-        "rendered beside it, so `make pdf` refuses a package stencil itself "
+        "rendered beside it, so `make pdfs` refuses a package stencil itself "
         "generated"
     )
     assert digests == {pipeline.lockfile_digest(pipeline.BROWSER_LOCKFILE)}
@@ -1681,7 +1681,7 @@ def test_the_set_of_packages_with_install_scripts_is_the_frozen_one(filename):
 def test_the_browser_lockfile_holds_exactly_one_puppeteer():
     """pa11y depends on puppeteer, and npm dedupes the two onto one copy only
     while the pinned puppeteer satisfies pa11y's declared range. Two copies mean
-    `make check-access` drives a different browser than `make pdf` -- quietly,
+    `make check-access` drives a different browser than `make pdfs` -- quietly,
     with every other test still passing.
 
     Until the lockfile existed this could only be measured by building the image
@@ -2080,7 +2080,7 @@ def test_html_to_pdf_ignores_a_decoy_in_the_workspace(decoy_tools_workdir):
     node_modules/{puppeteer,pdf-lib}, planted above.
 
     A decoy /workspace/node_modules/puppeteer with a wrong version must not
-    be used by make pdf: exit 0, a PDF actually written, and neither decoy's
+    be used by make pdfs: exit 0, a PDF actually written, and neither decoy's
     marker anywhere in stderr.
 
     WHAT THIS STOPPED BEING ABLE TO PROVE, said plainly rather than left for a

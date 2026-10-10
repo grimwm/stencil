@@ -9,6 +9,12 @@ and the closed epics in `.beads/issues.jsonl` are the readable index.
 How the version gets bumped is written down in
 [AGENTS.md](AGENTS.md#cutting-a-release), not here.
 
+## 1.5.0
+
+- **`make doc` is `make docs`, and `make pdf` is `make pdfs`.** Regenerate
+  to pick the new target names up. `check-pdf` still depends on the PDF
+  target, and the compose services stay `doc` and `pdf`.
+
 ## 1.4.0
 
 - **`::: revealable` folds content behind a toggle.** Presenter notes,

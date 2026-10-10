@@ -625,7 +625,7 @@ missing-figure notice, which goes to stderr rather than through pandoc's warning
 
 ### The print stylesheet is the PDF page geometry, not decoration
 
-`make pdf` prints the generated HTML through headless Chromium with `preferCSSPageSize`
+`make pdfs` prints the generated HTML through headless Chromium with `preferCSSPageSize`
 and `printBackground` enabled, so the `@page` and `@media print` blocks in
 `_page-style.css.j2` and `_slide-style.css.j2` are the only thing deciding page size,
 margins, and where every page break lands. Documents are letter portrait at 1in; decks are
@@ -763,8 +763,8 @@ Pinning by digest broke the pull guard every *generated* package runs, so the fi
 the generated Makefile, not only `pipeline.py`. Measured: `docker images -q <ref>` prints
 nothing for a reference that carries a digest, even when that exact image is present
 locally under it, while the bare-tag form of the same probe prints the id — so the old
-`ensure_image` guard could never succeed once a digest was pinned, and every `make doc`,
-`make pdf` and `make format-md` would have pulled again on every build. The guard runs
+`ensure_image` guard could never succeed once a digest was pinned, and every `make docs`,
+`make pdfs` and `make format-md` would have pulled again on every build. The guard runs
 `docker image inspect <ref>` now (through `$(STENCIL_CONTAINER)`, derived from `$(DC)` so a
 podman-only host probes with `podman` rather than a hardcoded `docker`), which checks the
 reference actually named, digest included — stricter than the old probe was ever able to

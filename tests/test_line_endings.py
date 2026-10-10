@@ -16,7 +16,7 @@ property that gets reverted by the next refactor with nobody noticing.
 WHY IT MATTERS, since the symptom is invisible on POSIX: stn-qge's format-md
 entrypoint and stn-egv's browser image both refuse a lockfile whose sha256 is
 not the one stencil rendered, and an LF digest cannot match CRLF bytes. A
-package generated on Windows would have `make format-md`, `make pdf` and
+package generated on Windows would have `make format-md`, `make pdfs` and
 `make check-access` refuse their own untampered lockfiles, with a message
 telling the reader to run `stencil gen` -- the step that produced them. That is
 the worst shape a guard can fail in: it accuses the honest user and tells them

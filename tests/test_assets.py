@@ -1,7 +1,7 @@
 """The page assets are inlined, not fetched.
 
 stn-r81. Before this, Bootstrap, highlight.js, Mermaid and the Google webfonts
-were loaded from CDNs at page open, so `make pdf` was network-bound and the
+were loaded from CDNs at page open, so `make pdfs` was network-bound and the
 suite retried around net::ERR_NETWORK_CHANGED. AUTHORING.md also promised
 "one self-contained file", which was only true of the images.
 """
@@ -40,7 +40,7 @@ def test_the_generated_page_does_not_fetch_from_a_cdn(page_html):
     for host in CDN_HOSTS:
         assert host not in page_html, (
             f"the generated page still reaches {host}; "
-            f"make pdf is network-bound again"
+            f"make pdfs is network-bound again"
         )
 
 
@@ -63,7 +63,7 @@ def test_mermaid_uses_the_umd_global_not_an_esm_import(page_html):
 
 
 def test_a_rendered_document_stays_offline(render_soup):
-    """The pandoc output, not just the template: what make doc actually writes."""
+    """The pandoc output, not just the template: what make docs actually writes."""
     soup = render_soup("doc", "document.md")
     html = str(soup)
     for host in CDN_HOSTS:

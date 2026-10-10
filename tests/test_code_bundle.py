@@ -64,7 +64,7 @@ def test_inline_code_alone_does_not_pull_the_bundle(render):
     """`hljs.highlightAll()` highlights `pre code`, and pandoc writes inline
     code as a bare <code> outside any <pre>. Keying on it would set the flag
     for nearly every document ever written and gate nothing."""
-    page = html_of(render, "Prose mentioning `a_variable` and `make doc`.")
+    page = html_of(render, "Prose mentioning `a_variable` and `make docs`.")
     assert BUNDLE not in page
 
 
@@ -132,8 +132,8 @@ def test_a_highlighter_free_page_still_converts_to_pdf(to_pdf):
     file is an integration test rather than a markup assertion.
 
     If `hljs.highlightAll()` ever outlives the bundle, the page throws on load.
-    html-to-pdf.js listens for pageerror and refuses to write, so `make pdf`
-    fails -- but `make doc` does not, and it would ship the broken page. The
+    html-to-pdf.js listens for pageerror and refuses to write, so `make pdfs`
+    fails -- but `make docs` does not, and it would ship the broken page. The
     only check that runs the script rather than reading it is to convert one.
     """
     result, pdf = to_pdf(

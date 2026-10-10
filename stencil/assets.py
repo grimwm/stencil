@@ -2,7 +2,7 @@
 
 Fetched once by ``scripts/vendor_page_assets.py`` and committed under
 ``stencil/assets/``. ``load()`` is what ``stencil gen`` puts into the template
-context, so a handout is one self-contained file and ``make pdf`` does not
+context, so a handout is one self-contained file and ``make pdfs`` does not
 reach the network.
 """
 

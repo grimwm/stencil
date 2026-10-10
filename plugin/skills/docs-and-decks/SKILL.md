@@ -1,6 +1,6 @@
 ---
 name: docs-and-decks
-description: Build, verify and troubleshoot stencil-generated documents and slide decks. Use when wiring a new deck or handout into a package, when `make doc`, `make pdf` or `make check-access` fails, or when working from a Cowork sandbox where Docker and a host-built venv are unavailable.
+description: Build, verify and troubleshoot stencil-generated documents and slide decks. Use when wiring a new deck or handout into a package, when `make docs`, `make pdfs` or `make check-access` fails, or when working from a Cowork sandbox where Docker and a host-built venv are unavailable.
 ---
 
 # Stencil documents and decks
@@ -30,10 +30,10 @@ templates and `.gitignore` are all rewritten by `stencil gen`. Change the config
 
 ```bash
 stencil gen <package>    # after any .config.yaml change; regenerates the package's Makefile
-make doc                 # student build
-make doc WITH=hidden     # presenter build -> <name>-hidden.html
+make docs                # student build
+make docs WITH=hidden    # presenter build -> <name>-hidden.html
 make check-access        # pa11y, WCAG 2.1 AA
-make pdf                 # PDF/UA-1: headless Chromium + pdf-lib repairs
+make pdfs                # PDF/UA-1: headless Chromium + pdf-lib repairs
 make check-pdf           # veraPDF, PDF/UA-1 conformance
 ```
 
@@ -47,14 +47,14 @@ pandoc service is emitted automatically under `has_slides`. A markdown file belo
 `slides:`, never both.
 
 **Never use the browser's print dialog for anything handed out.** The layout is identical but the
-PDF is untagged — no structure tree, no role map, no accessible names. Only `make pdf` produces a
+PDF is untagged — no structure tree, no role map, no accessible names. Only `make pdfs` produces a
 conformant file, and PDF/UA-1 is a different standard from the WCAG 2.1 AA that pa11y measures.
 
 ## Working from a Cowork sandbox
 
 Three constraints usually apply, and none of them are stencil bugs:
 
-1. **No Docker in the Cowork Linux VM**, so `make doc`, `make pdf` and `make check-access` cannot
+1. **No Docker in the Cowork Linux VM**, so `make docs`, `make pdfs` and `make check-access` cannot
    run there.
 2. **A venv created on the host is host-bound.** Its console scripts carry the host interpreter's
    absolute path in their shebang — `#!/Users/…/python3.14`, say, pointing into `/opt/homebrew` —
@@ -126,7 +126,7 @@ documents. A deck PDF runs one page longer than its slide count; that is the cov
 
 **Disclose this when you do it.** The container's Chromium differs from the one in
 `Dockerfile.browser`, and Chromium's tag vocabulary is exactly what most of those repair passes
-react to. Faithful for review; the user's own `make pdf` remains the authority for a shipped
+react to. Faithful for review; the user's own `make pdfs` remains the authority for a shipped
 artifact.
 
 ## Git on a Cowork mount

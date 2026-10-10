@@ -59,7 +59,7 @@ def test_the_raw_div_is_hidden_until_the_script_has_shaped_it():
 
 
 def test_a_revealable_block_never_prints():
-    """Inside the print block, so it holds for make pdf and for Ctrl+P alike."""
+    """Inside the print block, so it holds for make pdfs and for Ctrl+P alike."""
     printed = _print_block(_css("_page-style.css.j2"))
     assert re.search(r"\.revealable\s*\{\s*display:\s*none\s*!important;", printed)
 

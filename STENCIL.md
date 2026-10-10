@@ -9,8 +9,8 @@ This document describes the bundled templates, features, and conventions.
 ### Basic Usage
 
 ```bash
-make doc              # Generate HTML documents from markdown files
-make pdf              # Print the generated HTML to PDF
+make docs             # Generate HTML documents from markdown files
+make pdfs             # Print the generated HTML to PDF
 make format-md        # Format markdown files with prettier
 ```
 
@@ -19,16 +19,16 @@ make format-md        # Format markdown files with prettier
 Use the `WITH` variable to include optional content sections in your documents:
 
 ```bash
-make doc WITH=hidden              # Include hidden sections
-make doc WITH=hidden,draft        # Include multiple features (comma-separated)
-make doc with=hidden              # Lowercase also works
+make docs WITH=hidden              # Include hidden sections
+make docs WITH=hidden,draft        # Include multiple features (comma-separated)
+make docs with=hidden              # Lowercase also works
 ```
 
 **Output filenames** reflect the features used:
 
-- `make doc` → `Document.html`
-- `make doc WITH=hidden` → `Document-hidden.html`
-- `make doc WITH=hidden,draft` → `Document-hidden-draft.html`
+- `make docs` → `Document.html`
+- `make docs WITH=hidden` → `Document-hidden.html`
+- `make docs WITH=hidden,draft` → `Document-hidden-draft.html`
 
 ### Available Features
 
@@ -115,10 +115,10 @@ into hidden tabs mid-render).
 There are two ways to reach a PDF, and they produce the same document because both render through
 the same print stylesheet:
 
-- `make pdf` prints every generated HTML file to a PDF beside it (`Document.html` →
-  `Document.pdf`), using headless Chromium in a container. It depends on `doc`, so it always prints
+- `make pdfs` prints every generated HTML file to a PDF beside it (`Document.html` →
+  `Document.pdf`), using headless Chromium in a container. It depends on `docs`, so it always prints
   the HTML from the current build rather than whatever was left over from the last one. Feature
-  variants pair up: `make pdf with=hidden` produces `Document-hidden.pdf` from
+  variants pair up: `make pdfs with=hidden` produces `Document-hidden.pdf` from
   `Document-hidden.html`.
 - Your browser's print function (Ctrl+P / Cmd+P) on any built HTML file.
 
@@ -130,7 +130,7 @@ Either way you get:
 - Colored backgrounds preserved for headers and callouts
 - Tabbed sections expanded, so nothing is hidden behind a tab nobody can click on paper
 
-`make pdf` fails instead of writing a file when an asset does not load or the page's client-side
+`make pdfs` fails instead of writing a file when an asset does not load or the page's client-side
 rendering never finishes. Bootstrap, highlight.js, Mermaid and the webfonts are inlined into the
 HTML at generate time, so a typical handout never makes a network request; the refusal still
 catches a page that has been edited to fetch something that is not there.
@@ -140,14 +140,14 @@ catches a page that has been edited to fetch something that is not there.
 Stencil generates files based on your `.config.yaml` template list. For document packages, the
 bundled templates produce:
 
-| File                 | Purpose                                           |
-| -------------------- | ------------------------------------------------- |
-| `Makefile`           | Build targets (doc, pdf, format-md, clean, etc.)  |
-| `docker-compose.yml` | Container definitions for doc and PDF generation  |
-| `html-template.html` | HTML template with Bootstrap 5 styling            |
-| `hidden-filter.lua`  | Pandoc filter for conditional content             |
-| `html-to-pdf.js`     | Headless-Chromium driver behind `make pdf`        |
-| `Dockerfile.browser` | Chromium image shared by `pdf` and `check-access` |
+| File                 | Purpose                                            |
+| -------------------- | -------------------------------------------------- |
+| `Makefile`           | Build targets (docs, pdfs, format-md, clean, etc.) |
+| `docker-compose.yml` | Container definitions for doc and PDF generation   |
+| `html-template.html` | HTML template with Bootstrap 5 styling             |
+| `hidden-filter.lua`  | Pandoc filter for conditional content              |
+| `html-to-pdf.js`     | Headless-Chromium driver behind `make pdfs`        |
+| `Dockerfile.browser` | Chromium image shared by `pdf` and `check-access`  |
 
 Two of them are npm lockfiles, and they are generated output like everything else
 here — `stencil clean` removes them and the managed `.gitignore` section covers
@@ -502,7 +502,7 @@ packages:
     slides: [kanban-deck.md]
 ```
 
-`make doc` builds everything the package declares; `make slide` builds only the decks. Stencil
+`make docs` builds everything the package declares; `make slide` builds only the decks. Stencil
 injects the pandoc template and Lua filters each kind needs, so the `templates:` list never has to
 mention them.
 
@@ -535,7 +535,7 @@ accessed in your templates.
 
 ## Makefile Targets
 
-These are the targets stencil writes into a generated package's `Makefile`. `doc`, `slide`, `pdf`,
+These are the targets stencil writes into a generated package's `Makefile`. `docs`, `slide`, `pdfs`,
 `check-access` and `check-pdf` exist only for a package with `docs:`, `slides:` or
 `package_sources`, and `slide` only when there are `slides:`. The generator itself is
 `stencil gen <package>`; the generated `Makefile` carries no target for it. A consuming
@@ -545,9 +545,9 @@ convention rather than stencil's.
 | Target         | Description                                                                                                       |
 | -------------- | ----------------------------------------------------------------------------------------------------------------- |
 | `help`         | Show available targets                                                                                            |
-| `doc`          | Generate all HTML (add `WITH=hidden` for extras)                                                                  |
+| `docs`         | Generate all HTML (add `WITH=hidden` for extras)                                                                  |
 | `slide`        | Generate HTML slide decks only                                                                                    |
-| `pdf`          | Print the generated HTML to PDF/UA-1 files                                                                        |
+| `pdfs`         | Print the generated HTML to PDF/UA-1 files                                                                        |
 | `check-access` | Check the generated HTML against WCAG 2.1 AA (pa11y)                                                              |
 | `check-pdf`    | Check the generated PDFs for PDF/UA-1 conformance (veraPDF)                                                       |
 | `format-md`    | Format markdown files with prettier                                                                               |
@@ -589,12 +589,12 @@ markdown — or a `.env` setting `COMPOSE_FILE` — is **ignored**, not auto-dis
 the way plain `docker compose` would. To merge one back in, name it explicitly:
 
 ```
-make doc COMPOSE_FILES="docker-compose.yml docker-compose.override.yml"
+make docs COMPOSE_FILES="docker-compose.yml docker-compose.override.yml"
 ```
 
 - **`DC` names an implementation, and nothing else.** A flag inside it is refused —
   `DC="docker compose -f other.yml"` fails with *DC names a compose implementation only* —
-  and so is an **empty** one: `DC= make doc` fails with *DC must name a compose
+  and so is an **empty** one: `DC= make docs` fails with *DC must name a compose
   implementation*. `?=` only asks whether `DC` is *defined*, so an empty value used to sail
   through and produce a build that exited 0 having written nothing, while running whatever
   `image` it found on your `PATH` (`stn-mbq`).
@@ -612,7 +612,7 @@ make doc COMPOSE_FILES="docker-compose.yml docker-compose.override.yml"
   written `override STENCIL_CONTAINER = ...`, which means an exported or command-line
   `CONTAINER` or `STENCIL_CONTAINER` is **ignored**. That is deliberate: the probe's result is
   run as a command, so a value exported once for something unrelated would otherwise change
-  what every generated package executes (`stn-3y8`). The trade is that `make doc CONTAINER=podman` no longer does anything, and make issues no warning for an unused
+  what every generated package executes (`stn-3y8`). The trade is that `make docs CONTAINER=podman` no longer does anything, and make issues no warning for an unused
   command-line variable, so there is no signal — set `DC` instead, and the probe follows it.
 
   If your `DC` is not a bare implementation name, the derivation reads its first word and gets
@@ -644,24 +644,24 @@ make doc COMPOSE_FILES="docker-compose.yml docker-compose.override.yml"
   are in `Makefile-base.j2`'s own comment.
 
 - **`BUILD_DATE` may contain only digits, `-`, `T` and `:`.** It is how the build host's day
-  reaches a document carrying `show_date:` — `make doc BUILD_DATE=2026-09-01` — and the
+  reaches a document carrying `show_date:` — `make docs BUILD_DATE=2026-09-01` — and the
   accepted characters are exactly those of the date shapes the frontmatter filter honours,
   `yyyy-mm-dd` and `yyyy-mm-ddThh:mm`. It is a *character* class and not a date check:
   `2026-13-45` passes here and is refused later, by the filter, with a message about months.
 
-  The check runs on the targets that actually stamp a date — `doc` and `slide`, and `pdf` and
+  The check runs on the targets that actually stamp a date — `docs` and `slide`, and `pdfs` and
   `check-pdf`, which reach them as prerequisites — and nowhere else. `pkg` is deliberately not
-  among them: it never reaches `doc`, so it reads `WITH` but no date, and it is checked for
+  among them: it never reaches `docs`, so it reads `WITH` but no date, and it is checked for
   `WITH` alone. So an unrelated `BUILD_DATE` in your environment (the OCI
   `org.opencontainers.image.created` convention uses that name, and its `Z` is out of class)
   leaves `make help`, `make clean` and `make format-md` working. On a stamping target it is a
-  hard error naming the variable; `make doc BUILD_DATE=` builds with the container's own date
+  hard error naming the variable; `make docs BUILD_DATE=` builds with the container's own date
   instead.
 
   **This costs you a vendored template, and that is the real price of the change.** `Makefile.j2`
   is four `{% include %}`s with no extension point, and `stencil gen` overwrites the generated
   `Makefile`, so "your own composition" means overriding `Makefile.j2` through `templates_dir`.
-  If you have not done that, there is now **no** way to set the probe's runtime — `make doc STENCIL_CONTAINER=docker` is ignored by design. The old `CONTAINER ?=` was a working
+  If you have not done that, there is now **no** way to set the probe's runtime — `make docs STENCIL_CONTAINER=docker` is ignored by design. The old `CONTAINER ?=` was a working
   one-liner for exactly the `sudo docker compose` case above, and it is gone; that is the
   deliberate trade for a probe that cannot be repointed by a stray export. Do not reach for a
   `GNUmakefile` beside the generated `Makefile` as a cheaper workaround: that it silently
@@ -740,7 +740,7 @@ Two consequences worth knowing before you override either file:
   digest in it — or drop the lockfile override and pin what you need through `pipeline.py` instead.
   Both refusal messages say so too, so nobody has to find this page first.
 - `docker compose run --rm pdf …` on its own now runs whichever script was baked the last time the
-  image was built. `make pdf` runs `docker compose build pdf` first and is unaffected; if you
+  image was built. `make pdfs` runs `docker compose build pdf` first and is unaffected; if you
   invoke the service by hand while editing the script, build first. The `check-access` service does
   not have this property — its script is inlined into `docker-compose.yml`, so an edit there takes
   effect immediately.
