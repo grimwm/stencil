@@ -343,9 +343,9 @@ Stencil includes a minimal set of templates for document generation:
 
 | Template                       | Description                                        |
 | ------------------------------ | -------------------------------------------------- |
-| `Makefile.j2`                  | Build targets (clean, format, doc, pdf, pkg)       |
+| `Makefile.j2`                  | Build targets (clean, format, docs, pdfs, pkg)     |
 | `Makefile-base.j2`             | Common Makefile variables and help target          |
-| `Makefile-doc.j2`              | HTML generation via Pandoc, plus the `pdf` target  |
+| `Makefile-doc.j2`              | HTML generation via Pandoc, plus the `pdfs` target |
 | `Makefile-pkg.j2`              | Submission packaging (zip)                         |
 | `docker-compose.yml.j2`        | HTML generation service (Pandoc)                   |
 | `docker-compose-html.yml.j2`   | Services for HTML, PDF, WCAG and PDF/UA checks     |

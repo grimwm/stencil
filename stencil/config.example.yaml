@@ -99,7 +99,7 @@ templates:
 #                   A markdown file belongs to docs or slides, never both.
 #
 #                   PDFs need no configuration. Any package with docs or slides
-#                   also gets a `make pdf` target that prints the HTML it just
+#                   also gets a `make pdfs` target that prints the HTML it just
 #                   built to a PDF of the same name; it simply goes unused if
 #                   you never call it.
 #   name:           Display name shown by 'stencil list' (defaults to package ID)

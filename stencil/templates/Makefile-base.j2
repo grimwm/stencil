@@ -17,7 +17,7 @@ endif
 # directory is never auto-discovered and merged by compose's own resolution.
 # A consumer who genuinely wants such a file merged in still can --
 # by naming it explicitly, e.g.
-# `make doc COMPOSE_FILES="docker-compose.yml docker-compose.override.yml"`.
+# `make docs COMPOSE_FILES="docker-compose.yml docker-compose.override.yml"`.
 COMPOSE_FILES ?= {{ compose_files | join(' ') }}
 
 ifeq ($(strip $(COMPOSE_FILES)),)

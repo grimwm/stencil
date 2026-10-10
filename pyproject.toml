@@ -122,7 +122,7 @@ stencil = [
     "config.example.yaml",
     # `templates/*` does not descend. The documents capability lives under
     # templates/capabilities/, and a wheel that omits it generates packages
-    # with no `doc` target.
+    # with no `docs` target.
     "templates/*",
     "templates/.*",
     "templates/**/*",

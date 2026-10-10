@@ -68,8 +68,8 @@ def test_the_pdf_reads_and_writes_the_output_directory(elsewhere):
     pdf_lines = [l for l in text.splitlines() if "compose_once,pdf)" in l]
     assert pdf_lines, "no pdf rule"
     for line in pdf_lines:
-        # Both the input HTML and the output PDF, or `make pdf` reads a file
-        # `make doc` did not write.
+        # Both the input HTML and the output PDF, or `make pdfs` reads a file
+        # `make docs` did not write.
         assert line.count("$(OUT)/") == 2, line
 
 
@@ -168,14 +168,14 @@ def test_the_output_directory_is_created_before_it_is_mounted(elsewhere):
     owned by root, after which nothing on the host can write to it."""
     text = makefile(elsewhere)
     assert "mkdir -p $(OUT_HOST)" in text
-    doc = next(l for l in text.splitlines() if l.startswith("doc:"))
+    doc = next(l for l in text.splitlines() if l.startswith("docs:"))
     assert "out-dir" in doc, doc
 
 
 def test_windows_out_dir_does_not_call_cmd_mkdir_p(elsewhere):
     """cmd's `mkdir` treats `-p` as a directory name and fails on `.`.
 
-    Measured on Windows: `make doc` printed
+    Measured on Windows: `make docs` printed
     `A subdirectory or file -p already exists` / `Error occurred while
     processing: .` and stopped at out-dir. The Windows arm must create the
     directory with PowerShell's New-Item -Force; the POSIX arm keeps mkdir -p.
@@ -254,7 +254,7 @@ def test_the_path_climbs_out_of_the_top_level_output_dir_too():
     to a config-relative output directory has to climb BOTH. Computing it
     against `dir` alone resolved `build/demo` to `out/build/demo` -- the
     Makefile still said `$(OUT)/Guide.html`, the compose file still had a
-    second mount, every string assertion still passed, and `make doc` put the
+    second mount, every string assertion still passed, and `make docs` put the
     products in the wrong directory.
     """
     from stencil.generate import get_template_context
@@ -354,7 +354,7 @@ def test_the_tickets_value_never_reaches_the_generated_makefile(tmp_path):
     unrelated reason after already writing the file. This reads the
     artifact stn-1a4 quotes verbatim: today `stencil gen demo` writes
     `out/demo/Makefile` with `OUT_HOST := .../tmp/pwn; echo OWNED`, and
-    `make doc` runs `mkdir -p .../tmp/pwn` and then `echo OWNED` as a
+    `make docs` runs `mkdir -p .../tmp/pwn` and then `echo OWNED` as a
     second shell command. Once the fix lands nothing is written at all, so
     a missing Makefile satisfies this the same way a clean one would.
     """
@@ -485,7 +485,7 @@ def test_a_package_output_dir_with_a_compose_separator_is_refused():
 def test_a_package_output_dir_with_a_quote_is_refused(value):
     """A quote cannot chain a command here -- `;`, `$` and backtick are all
     refused -- but it truncates one. Measured: `output_dir: "a'b"` generated
-    at exit 0 and `make doc` died with `unexpected EOF while looking for
+    at exit 0 and `make docs` died with `unexpected EOF while looking for
     matching '`. Still a filename quietly doing something other than naming
     a file, which is the class this check exists for."""
     with pytest.raises(ValueError, match="output_dir") as exc:
@@ -609,7 +609,7 @@ def test_a_list_valued_output_dir_is_refused_by_the_cli_without_a_traceback(tmp_
 # Makefile's TEXT and asserts the rule hands /out paths to the pdf service. That
 # is worth asserting and it is not enough, because it says nothing about what
 # html-to-pdf.js then DOES with them -- and what it did was join the argument
-# onto a hard-coded /workspace, so `make pdf` asked Chromium for
+# onto a hard-coded /workspace, so `make pdfs` asked Chromium for
 # file:///workspace//out/document.html and could not build at all for a package
 # with an output_dir:
 #

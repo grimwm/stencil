@@ -1,7 +1,7 @@
 {% include 'Makefile-base.j2' %}
-{# format-md and doc are one pipeline. Both are written by the documents
+{# format-md and docs are one pipeline. Both are written by the documents
    capability (.stencil/documents.mk). A package that capability does not
-   match gets neither, rather than a format-md that has no doc beside it. #}
+   match gets neither, rather than a format-md that has no docs beside it. #}
 {% if '.stencil/documents.mk' not in capability_includes %}
 .PHONY: help clean clean-pkg pkg
 {% endif %}

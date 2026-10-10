@@ -9,7 +9,7 @@ The interesting assertion here is not that a conformant PDF passes. It is that
 an EMPTY DIRECTORY FAILS. Measured against verapdf/cli:v1.30.2, veraPDF invoked
 with no file arguments exits 0 and prints nothing, so the obvious gate --
 `verapdf --flavour ua1 *.pdf` -- reports success having opened no file. Run
-before `make pdf`, or after a clean, that gate is decoration.
+before `make pdfs`, or after a clean, that gate is decoration.
 """
 
 from __future__ import annotations
@@ -118,7 +118,7 @@ Pinned to the bottom of the slide regardless of what is above it.
 
 @pytest.fixture(scope="module")
 def conformant_deck(to_pdf, pdf_workspace):
-    """A deck built the way `make pdf` builds one, alone in a directory."""
+    """A deck built the way `make pdfs` builds one, alone in a directory."""
     result, path = to_pdf(
         "slide", "gate-deck.md", text=GATE_DECK, stem="gate-deck", timeout=300
     )
@@ -134,7 +134,7 @@ def conformant_deck(to_pdf, pdf_workspace):
 
 @pytest.fixture(scope="module")
 def conformant_pdf(to_pdf, pdf_workspace):
-    """One PDF, built the way `make pdf` builds one, alone in a directory.
+    """One PDF, built the way `make pdfs` builds one, alone in a directory.
 
     Alone matters: the session workspace accumulates PDFs from other modules,
     and a gate that checks every *.pdf in it would be reporting on files this
@@ -237,7 +237,7 @@ def test_a_file_that_was_never_written_is_named(pdf_workspace):
 
     A glob cannot tell "you gave me nothing" from "one of the six you promised
     is missing" -- it just checks five and reports success. The list is what
-    `make pdf` just wrote, so a gap in it is a build failure worth a name.
+    `make pdfs` just wrote, so a gap in it is a build failure worth a name.
     """
     here = scratch(pdf_workspace, "gate-missing")
     (here / "there.pdf").write_bytes(

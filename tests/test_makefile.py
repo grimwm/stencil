@@ -4,7 +4,7 @@ stn-rxn.8. The Docker-free counterpart to the argv tests: assert on the rendered
 Makefile text rather than on a build.
 
 The contract that matters is $(OUTPUT_SUFFIX) appearing on *both* sides of each
-conversion. Drop it from one side and `make pdf with=hidden` prints the plain
+conversion. Drop it from one side and `make pdfs with=hidden` prints the plain
 HTML into the -hidden PDF, or the -hidden HTML into the plain one. Nothing
 errors, the file looks fine, and it is the wrong document -- which for an
 answer-key build is the worst failure available.
@@ -74,7 +74,7 @@ def pages_makefile(makefile):
 def test_the_suffix_appears_on_both_sides_of_every_conversion(pages_makefile):
     """The one that turns a build into the wrong document, silently."""
     conversions = [
-        line for line in recipe(pages_makefile, "pdf") if "compose_once,pdf)" in line
+        line for line in recipe(pages_makefile, "pdfs") if "compose_once,pdf)" in line
     ]
     assert conversions, "the pdf target converts nothing"
 
@@ -93,19 +93,19 @@ def test_the_suffix_appears_on_both_sides_of_every_conversion(pages_makefile):
 
 def test_every_page_gets_a_conversion(pages_makefile):
     """Both the document and the deck, not just whichever the loop reached."""
-    conversions = "\n".join(recipe(pages_makefile, "pdf"))
+    conversions = "\n".join(recipe(pages_makefile, "pdfs"))
     assert "Guide$(OUTPUT_SUFFIX).pdf" in conversions
     assert "Deck$(OUTPUT_SUFFIX).pdf" in conversions
 
 
-def test_pdf_depends_on_doc(pages_makefile):
+def test_pdfs_depends_on_docs(pages_makefile):
     """Otherwise a PDF can be printed from HTML left over from a previous run."""
-    assert "doc" in dependencies(pages_makefile, "pdf")
+    assert "docs" in dependencies(pages_makefile, "pdfs")
 
 
-def test_doc_depends_on_slide_so_pdf_covers_the_deck(pages_makefile):
-    """pdf converts decks too, and reaches them only through doc."""
-    assert "slide" in dependencies(pages_makefile, "doc")
+def test_docs_depends_on_slide_so_pdfs_covers_the_deck(pages_makefile):
+    """pdfs converts decks too, and reaches them only through docs."""
+    assert "slide" in dependencies(pages_makefile, "docs")
 
 
 def test_clean_removes_the_pdf_globs(pages_makefile):
@@ -122,14 +122,14 @@ def test_clean_removes_the_pdf_globs(pages_makefile):
         assert pattern in removed, f"clean-pkg leaves {pattern} behind"
 
 
-def test_pdf_is_declared_phony(pages_makefile):
+def test_pdfs_is_declared_phony(pages_makefile):
     """It produces files named after the target's dependencies, not itself."""
     phony = re.search(r"^\.PHONY:(.*)$", pages_makefile, re.MULTILINE)
-    assert phony and "pdf" in phony.group(1).split()
+    assert phony and "pdfs" in phony.group(1).split()
 
 
 def test_a_slides_only_package_does_not_claim_to_generate_docs(makefile):
-    """stn-4t0. `doc` exists for a slides-only package only to reach `slide`.
+    """stn-4t0. `docs` exists for a slides-only package only to reach `slide`.
 
     The closing echo used to sit outside the has_docs guard, so building a
     deck-only package printed "Generated docs" after generating no documents.
@@ -144,7 +144,7 @@ def test_a_slides_only_package_does_not_claim_to_generate_docs(makefile):
 
 def test_a_slides_only_package_describes_itself_as_decks(makefile):
     """The same mistake in the help text, which `make help` prints verbatim."""
-    summary = re.search(r"^doc\s*:.*?##(.*)$", makefile(slides=["Deck.md"]), re.M)
+    summary = re.search(r"^docs\s*:.*?##(.*)$", makefile(slides=["Deck.md"]), re.M)
     assert summary and "documents" not in summary.group(1)
 
 
@@ -166,7 +166,7 @@ def test_a_package_with_both_still_reports_both(makefile):
     ],
     ids=["docs and slides", "docs only", "slides only", "neither"],
 )
-def test_pdf_is_gated_on_having_pages(makefile, package, expected):
+def test_pdfs_is_gated_on_having_pages(makefile, package, expected):
     """It is gated on has_pages with no config key, so the gate needs a test."""
     text = makefile(**package)
-    assert bool(re.search(r"^pdf\s*:", text, re.MULTILINE)) is expected
+    assert bool(re.search(r"^pdfs\s*:", text, re.MULTILINE)) is expected

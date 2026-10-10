@@ -658,7 +658,7 @@ def test_a_scalar_field_list_is_refused():
     assert any("list" in problem for problem in problems)
 
 
-def test_documents_brings_format_md_and_doc_together(generate_package):
+def test_documents_brings_format_md_and_docs_together(generate_package):
     """A package with instructions gets both targets from documents.mk."""
     package = generate_package(
         {
@@ -675,10 +675,10 @@ def test_documents_brings_format_md_and_doc_together(generate_package):
     fragment = (package / ".stencil" / "documents.mk").read_text()
     assert "include .stencil/documents.mk" in makefile
     assert "\nformat-md:" in fragment
-    assert "\ndoc:" in fragment
+    assert "\ndocs:" in fragment
 
 
-def test_a_package_without_documents_has_neither_format_md_nor_doc(generate_package):
+def test_a_package_without_documents_has_neither_format_md_nor_docs(generate_package):
     """format-md is not a target of its own. No documents, no format-md."""
     package = generate_package(
         {
@@ -693,7 +693,7 @@ def test_a_package_without_documents_has_neither_format_md_nor_doc(generate_pack
     )
     text = (package / "Makefile").read_text()
     assert "format-md:" not in text
-    assert "\ndoc:" not in text
+    assert "\ndocs:" not in text
     assert not (package / ".stencil" / "documents.mk").exists()
 
 
@@ -703,7 +703,7 @@ def test_the_wheel_ships_the_documents_capability(tmp_path):
     package-data `templates/*` does not descend, so a wheel built that way
     has Makefile-doc.j2 and no templates/capabilities/documents/capability.yaml.
     builtin_capabilities then loads nothing, and a generated package gets
-    format-md with no doc.
+    format-md with no docs.
     """
     repo = Path(__file__).resolve().parents[1]
     wheelhouse = tmp_path / "wheels"

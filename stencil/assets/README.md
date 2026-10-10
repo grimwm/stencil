@@ -8,7 +8,7 @@ network; the third is stencil's own build metadata and never leaves this reposit
 
 The CSS, JavaScript and webfonts every generated HTML file carries inline.
 `stencil gen` reads these files and embeds them into the pandoc templates, so a
-handout is one self-contained file and `make pdf` does not touch the network.
+handout is one self-contained file and `make pdfs` does not touch the network.
 
 Refresh with:
 

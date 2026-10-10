@@ -210,7 +210,7 @@ def test_the_makefile_checks_for_the_image_compose_actually_runs(doc_package):
     # rather than a bare tag that some other image could satisfy.
     for os_name in ("Darwin", "Windows_NT"):
         printed = subprocess.run(
-            ["make", "-n", "doc", f"OS={os_name}"],
+            ["make", "-n", "docs", f"OS={os_name}"],
             cwd=doc_package,
             capture_output=True,
             text=True,
