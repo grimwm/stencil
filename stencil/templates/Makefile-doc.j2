@@ -55,6 +55,13 @@ _stencil_check_class = $(if $(call _stencil_in_class,$(1),$(2)),,$(error $(1) ma
 $(call _stencil_check_class,WITH,$(_stencil_chars_with),letters digits - _ and commas)
 $(call _stencil_check_class,with,$(_stencil_chars_with),letters digits - _ and commas)
 
+# D names one markdown file. Empty means every file. Letters, digits, and
+# - _ . / are what a selection may contain. A space, a shell metacharacter,
+# or a Make wildcard is refused. The value is read with the value function,
+# so a function call planted in it stays text.
+_stencil_chars_d := a b c d e f g h i j k l m n o p q r s t u v w x y z A B C D E F G H I J K L M N O P Q R S T U V W X Y Z 0 1 2 3 4 5 6 7 8 9 - _ . /
+$(call _stencil_check_class,D,$(_stencil_chars_d),letters digits - _ . /)
+
 # with: Comma-separated features to include (e.g., with=hidden or with=hidden,draft)
 WITH ?= $(with)
 
@@ -213,32 +220,78 @@ $({{ step.name | upper | replace('-', '_') }}_STAMP):{% for dep in step.inputs %
 pre-build:{% for step in pre_build %} {{ step.name }}{% endfor %}
 
 {% endif %}
-doc: out-dir{% if has_pre_build %} pre-build{% endif %} format-md{% if has_slides %} slide{% endif %} ## Generate HTML{% if has_docs and has_slides %} (documents and slide decks){% elif has_slides %} (slide decks){% endif %} (use with=hidden to include hidden sections)
+{# The {{ '' }} keeps the newline. trim_blocks strips the one after a block
+   tag, and without it this assignment is glued to the next line. #}
+# Each source contributes its configured path and that path without .md, so
+# D=Guide.md and D=Guide name the same file.
+_stencil_doc_select := {% for md in docs %}{{ md }} {{ md | replace('.md', '') }} {% endfor %}{{ '' }}
+_stencil_slide_select := {% for md in slides %}{{ md }} {{ md | replace('.md', '') }} {% endfor %}{{ '' }}
+_stencil_page_select := $(_stencil_doc_select) $(_stencil_slide_select)
+
+# Non-empty when $(1) includes the selection, or when nothing is selected.
+_stencil_wanted = $(if $(value D),$(filter $(value D),$(1)),yes)
+
+# THE POINT-OF-USE CHECK. The parse-time checks above see only what was set
+# before them. A pattern-specific assignment (MAKEFILES, or --eval) is
+# invisible then and live when a recipe expands. Same shape as
+# _stencil_late_check, for the same reason.
+_stencil_d_check = $(call _stencil_check_class,D,$(_stencil_chars_d),letters digits - _ . /)$(if $(value D),$(if $(filter $(value D),$(_stencil_page_select)),,$(error D must name a markdown file in this package (the filename or its stem) -- got: $(value D))),)
+
+ifneq ($(value D),)
+ifeq ($(filter $(value D),$(_stencil_page_select)),)
+$(error D must name a markdown file in this package (the filename or its stem) -- got: $(value D))
+endif
+endif
+
+doc: out-dir{% if has_pre_build %} pre-build{% endif %} format-md{% if has_slides %} $(if $(call _stencil_wanted,$(_stencil_slide_select)),slide){% endif %} ## Generate HTML{% if has_docs and has_slides %} (documents and slide decks){% elif has_slides %} (slide decks){% endif %} (use with=hidden to include hidden sections; D=file.md builds one file)
 {% if has_docs %}
-	$(_stencil_late_check)$(call ensure_image,{{ pandoc_image }},doc)
+ifeq ($(call _stencil_wanted,$(_stencil_doc_select)),)
+else
+	$(_stencil_late_check)$(_stencil_d_check)$(call ensure_image,{{ pandoc_image }},doc)
+endif
 {% for md in docs %}
-	$(call compose_once,doc) --metadata build-date="$(BUILD_DATE)" $(METADATA_FLAGS) {{ md }} -o $(OUT)/{{ md | replace('.md', '') }}$(OUTPUT_SUFFIX).html
+ifeq ($(call _stencil_wanted,{{ md }} {{ md | replace('.md', '') }}),)
+else
+	$(_stencil_d_check)$(call compose_once,doc) --metadata build-date="$(BUILD_DATE)" $(METADATA_FLAGS) {{ md }} -o $(OUT)/{{ md | replace('.md', '') }}$(OUTPUT_SUFFIX).html
+endif
 {% endfor %}
+ifeq ($(call _stencil_wanted,$(_stencil_doc_select)),)
+else
 	@echo "Generated docs$(if $(WITH), with features: $(WITH),)"
+endif
 {% endif %}
 
 {% if has_slides %}
-slide: out-dir{% if has_pre_build %} pre-build{% endif %} format-md ## Generate HTML slide decks (use with=hidden to include presenter-only sections)
-	$(_stencil_late_check)$(call ensure_image,{{ pandoc_image }},slide)
+slide: out-dir{% if has_pre_build %} pre-build{% endif %} format-md ## Generate HTML slide decks (use with=hidden to include presenter-only sections; D=file.md builds one deck)
+	$(_stencil_late_check)$(_stencil_d_check)$(if $(filter slide,$(MAKECMDGOALS)),$(if $(value D),$(if $(filter $(value D),$(_stencil_slide_select)),,$(error D must name a slide in this package (the filename or its stem) -- got: $(value D))),),)
+ifeq ($(call _stencil_wanted,$(_stencil_slide_select)),)
+else
+	$(call ensure_image,{{ pandoc_image }},slide)
+endif
 {% for md in slides %}
-	$(call compose_once,slide) --metadata build-date="$(BUILD_DATE)" $(METADATA_FLAGS) {{ md }} -o $(OUT)/{{ md | replace('.md', '') }}$(OUTPUT_SUFFIX).html
+ifeq ($(call _stencil_wanted,{{ md }} {{ md | replace('.md', '') }}),)
+else
+	$(_stencil_d_check)$(call compose_once,slide) --metadata build-date="$(BUILD_DATE)" $(METADATA_FLAGS) {{ md }} -o $(OUT)/{{ md | replace('.md', '') }}$(OUTPUT_SUFFIX).html
+endif
 {% endfor %}
+ifeq ($(call _stencil_wanted,$(_stencil_slide_select)),)
+else
 	@echo "Generated slides$(if $(WITH), with features: $(WITH),)"
+endif
 
 {% endif %}
-# Depends on doc, which already depends on slide, so `make pdf` always prints
-# from HTML this run produced rather than whatever was left over from the last
-# one. $(OUTPUT_SUFFIX) has to appear on both sides: `make pdf with=hidden`
-# must print the -hidden HTML into the -hidden PDF, not pair one with the other.
-pdf: doc ## Generate PDFs from the generated HTML (use with=hidden to include hidden sections)
-	$(_stencil_late_check)$(STENCIL_COMPOSE) build pdf
+# Depends on doc. doc depends on slide when the build includes a deck (no D,
+# or D names a slide), so `make pdf` prints HTML this run produced rather
+# than whatever was left over from the last one. $(OUTPUT_SUFFIX) has to
+# appear on both sides: `make pdf with=hidden` must print the -hidden HTML
+# into the -hidden PDF, not pair one with the other.
+pdf: doc ## Generate PDFs from the generated HTML (use with=hidden to include hidden sections; D=file.md builds one file)
+	$(_stencil_late_check)$(_stencil_d_check)$(STENCIL_COMPOSE) build pdf
 {% for md in docs + slides %}
+ifeq ($(call _stencil_wanted,{{ md }} {{ md | replace('.md', '') }}),)
+else
 	$(call compose_once,pdf) $(OUT)/{{ md | replace('.md', '') }}$(OUTPUT_SUFFIX).html $(OUT)/{{ md | replace('.md', '') }}$(OUTPUT_SUFFIX).pdf
+endif
 {% endfor %}
 	@echo "Generated PDFs$(if $(WITH), with features: $(WITH),)"
 
@@ -255,6 +308,6 @@ check-access: ## Check HTML accessibility (WCAG 2.1 AA)
 # build, which is a red nobody can act on. This target already knows exactly
 # what `pdf` above just wrote, suffix and all.
 check-pdf: pdf ## Check PDF/UA-1 conformance of the generated PDFs
-	$(call compose_once,check-pdf){% for md in docs + slides %} $(OUT)/{{ md | replace('.md', '') }}$(OUTPUT_SUFFIX).pdf{% endfor %}
+	$(_stencil_d_check)$(call compose_once,check-pdf){% for md in docs + slides %} $(if $(call _stencil_wanted,{{ md }} {{ md | replace('.md', '') }}), $(OUT)/{{ md | replace('.md', '') }}$(OUTPUT_SUFFIX).pdf ){% endfor %}
 
 {% endif %}

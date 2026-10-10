@@ -11,6 +11,7 @@ This document describes the bundled templates, features, and conventions.
 ```bash
 make doc              # Generate HTML documents from markdown files
 make pdf              # Print the generated HTML to PDF
+make doc D=Guide.md   # Build that one file (the path, or the path without .md)
 make format-md        # Format markdown files with prettier
 ```
 
@@ -502,9 +503,15 @@ packages:
     slides: [kanban-deck.md]
 ```
 
-`make doc` builds everything the package declares; `make slide` builds only the decks. Stencil
-injects the pandoc template and Lua filters each kind needs, so the `templates:` list never has to
-mention them.
+`make doc` builds everything the package declares; `make slide` builds only the decks.
+`D=notes/intro.md` or `D=notes/intro` builds that one file instead: `doc` and `pdf` both
+honor it, a document selection does not rebuild the decks, and `check-pdf` checks the PDF
+that selection produced. `format-md` and `check-access` still cover the whole package.
+`D` may contain letters, digits, and `-` `_` `.` `/`. A name that is not one of the
+package's markdown files is an error.
+
+Stencil injects the pandoc template and Lua filters each kind needs, so the `templates:` list never
+has to mention them.
 
 Both kinds parse as the same dialect -- pandoc's `markdown`, inferred from the `.md` extension, with
 its full default extension set; no `--from` is passed. Only the template and filter set differ.
@@ -545,11 +552,11 @@ convention rather than stencil's.
 | Target         | Description                                                                                                       |
 | -------------- | ----------------------------------------------------------------------------------------------------------------- |
 | `help`         | Show available targets                                                                                            |
-| `doc`          | Generate all HTML (add `WITH=hidden` for extras)                                                                  |
-| `slide`        | Generate HTML slide decks only                                                                                    |
-| `pdf`          | Print the generated HTML to PDF/UA-1 files                                                                        |
+| `doc`          | Generate all HTML (add `WITH=hidden` for extras; `D=file.md` builds one file)                                     |
+| `slide`        | Generate HTML slide decks only (`D=file.md` builds one deck)                                                      |
+| `pdf`          | Print the generated HTML to PDF/UA-1 files (`D=file.md` prints one file)                                          |
 | `check-access` | Check the generated HTML against WCAG 2.1 AA (pa11y)                                                              |
-| `check-pdf`    | Check the generated PDFs for PDF/UA-1 conformance (veraPDF)                                                       |
+| `check-pdf`    | Check the generated PDFs for PDF/UA-1 conformance (veraPDF); `D=` checks the file it names                        |
 | `format-md`    | Format markdown files with prettier                                                                               |
 | `pkg`          | `zip` packages: the submission archive; `doc` packages with `package_sources`: the combined PDF. Absent otherwise |
 | `clean`        | Remove generated files                                                                                            |

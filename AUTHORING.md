@@ -31,18 +31,21 @@ packages:
 Then, in the package directory:
 
 ```bash
-make doc          # builds everything the package declares
-make slide        # builds only the decks
-make pdf          # prints the built HTML to PDF
-make format-md    # runs prettier over the markdown
-make check-access # pa11y accessibility check over the built HTML
+make doc                 # builds everything the package declares
+make doc D=lab-setup.md  # builds that one file (D=lab-setup also works)
+make slide               # builds only the decks
+make pdf                 # prints the built HTML to PDF
+make format-md           # runs prettier over the markdown
+make check-access        # pa11y accessibility check over the built HTML
 ```
 
-`make doc` depends on `make slide`, so the one command always produces everything. Both targets run
-`format-md` first, which matters — see [Fenced divs and prettier](#fenced-divs-and-prettier). It is
-the only formatter to point at these files; [mdformat breaks
+`make doc` depends on `make slide` when the build includes a deck, so with no `D` the one command
+produces everything. `D=` names one markdown file — the path from the config, or that path without
+`.md` — and a document selection does not rebuild the decks. Both targets run `format-md` first,
+over the whole package, which matters — see [Fenced divs and prettier](#fenced-divs-and-prettier).
+It is the only formatter to point at these files; [mdformat breaks
 them](#do-not-run-mdformat-over-this-markdown).
-`make pdf` depends on `make doc`, so it always prints the build you just made.
+`make pdf` depends on `make doc` and honors the same `D=`, so it prints the build this run made.
 
 ## The dialect
 

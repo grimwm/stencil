@@ -30,6 +30,11 @@ def recipe(makefile: str, target: str) -> list[str]:
                     body.append(following.strip())
                 elif following.strip() == "" or following.startswith("#"):
                     continue
+                elif re.match(r"^(?:ifeq|ifneq|else|endif)\b", following.strip()):
+                    # D= puts each source's recipe in ifeq/else/endif. Those
+                    # directives sit between recipe lines; they are not the
+                    # recipe, and they do not end it.
+                    continue
                 else:
                     break
             return body
@@ -104,8 +109,14 @@ def test_pdf_depends_on_doc(pages_makefile):
 
 
 def test_doc_depends_on_slide_so_pdf_covers_the_deck(pages_makefile):
-    """pdf converts decks too, and reaches them only through doc."""
-    assert "slide" in dependencies(pages_makefile, "doc")
+    """pdf converts decks too, and reaches them only through doc.
+
+    The prerequisite is conditional. With no D it expands to slide; with D
+    naming a document it expands to nothing, so one document does not
+    rebuild every deck. The unexpanded token is what this can see.
+    """
+    deps = dependencies(pages_makefile, "doc")
+    assert any(dep.endswith(",slide)") for dep in deps), deps
 
 
 def test_clean_removes_the_pdf_globs(pages_makefile):

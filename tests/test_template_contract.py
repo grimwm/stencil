@@ -504,7 +504,18 @@ MAKE_BUILTIN_FUNCTIONS = {
     "origin", "flavor", "value", "eval", "file", "guile", "info", "or", "and",
     "intcmp",
 }
-MAKE_SPECIALS = {"OS", "MAKEFILE_LIST", "MAKE", "CURDIR", "SHELL", "MAKEFLAGS"}
+MAKE_SPECIALS = {
+    "OS",
+    "MAKEFILE_LIST",
+    "MAKE",
+    "CURDIR",
+    "SHELL",
+    "MAKEFLAGS",
+    # `make slide D=Guide.md` is an error only when slide is the goal. doc
+    # pulls slide in as a prerequisite, and a document selection must not
+    # trip the deck-only check on the way past.
+    "MAKECMDGOALS",
+}
 
 # make with=hidden: read by Makefile-doc.j2 but defined by no bundled
 # partial -- it is the caller's, not a cross-partial requirement, so a name
