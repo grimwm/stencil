@@ -297,8 +297,8 @@ def test_a_one_shot_run_removes_its_own_project(require_make, pages_package):
     than the name in the compose file, and down that project on the way out.
     down of the file's own name would stop a stack that is up.
     """
-    result = make_n(pages_package, "docs")
-    assert result.returncode == 0, outcome("make -n docs", result)
+    result = make_n(pages_package, "doc")
+    assert result.returncode == 0, outcome("make -n doc", result)
     text = result.stdout
     project = compose_project_name("demo")
     compose = (pages_package / ".stencil" / "docker-compose.yml").read_text()
@@ -905,7 +905,7 @@ def _deliver(
     `dc=None` omits the `DC=` command-line argument entirely, and that mode is
     REQUIRED whenever DC is itself the variable under test. MEASURED on GNU
     Make 3.81: a command-line assignment beats the environment, `make -e` and
-    `MAKEFLAGS=VAR=value` alike, so `DC= make -n docs DC=sentinel-compose`
+    `MAKEFLAGS=VAR=value` alike, so `DC= make -n doc DC=sentinel-compose`
     leaves DC non-empty and any emptiness guard silent -- three of the five
     routes below could never go green while this helper always appended one.
     Only `command_line` would have passed, and for the wrong reason (the last
@@ -1257,9 +1257,9 @@ def test_a_target_specific_assignment_still_wins(require_make, tmp_path):
 # is non-empty -- the same fact Makefile-base.j2 spells out for COMPOSE_FILES,
 # which has an `ifeq ($(strip ...),)` guard for exactly this and which DC had
 # none of. REPRODUCED against a real generated package before the fix:
-# `DC= make docs` exited 0, wrote no HTML, and ran a planted `image` from PATH
+# `DC= make doc` exited 0, wrote no HTML, and ran a planted `image` from PATH
 # three times. Both guards are asserted below because they catch different
-# things: the parse-time `ifeq` fails early for the ordinary `DC= make docs`,
+# things: the parse-time `ifeq` fails early for the ordinary `DC= make doc`,
 # and `_stencil_pin_check` catches the include-then-set composition AGENTS.md
 # documents, which walks straight past a parse-time snapshot.
 
@@ -1285,18 +1285,18 @@ def test_an_empty_dc_is_a_hard_error(require_make, pages_package, route, os_name
     _skip_if_gnumakeflags_dead(route)
 
     empty = _deliver(
-        pages_package, route, "docs", "DC", "", dc=None, os_name=os_name
+        pages_package, route, "doc", "DC", "", dc=None, os_name=os_name
     )
     combined = empty.stdout + empty.stderr
     assert empty.returncode != 0, outcome(
-        f"make -n docs (DC= via {route}, OS={os_name}) did not fail", empty
+        f"make -n doc (DC= via {route}, OS={os_name}) did not fail", empty
     )
     assert "DC" in combined, (
         f"the failure does not name DC, so a consumer cannot act on it:\n{combined}"
     )
 
     control = _deliver(
-        pages_package, route, "docs", "DC", "podman-compose", dc=None, os_name=os_name
+        pages_package, route, "doc", "DC", "podman-compose", dc=None, os_name=os_name
     )
     assert control.returncode == 0, outcome(
         f"POSITIVE CONTROL: a legitimate DC via {route} (OS={os_name}) failed, "
@@ -1373,14 +1373,14 @@ def test_an_empty_dc_neither_runs_a_planted_probe_nor_reports_success(
     env_vars["DC"] = ""
 
     result = subprocess.run(
-        ["make", "--no-print-directory", "docs"],
+        ["make", "--no-print-directory", "doc"],
         cwd=pages_package,
         capture_output=True,
         text=True,
         env=env_vars,
     )
     assert result.returncode != 0, outcome(
-        "DC= make docs exited 0 -- the build reported success having built nothing",
+        "DC= make doc exited 0 -- the build reported success having built nothing",
         result,
     )
     assert "DC" in result.stdout + result.stderr, (
@@ -1401,7 +1401,7 @@ def test_an_empty_dc_neither_runs_a_planted_probe_nor_reports_success(
 #
 # stn-cb8. All three interpolate into a recipe, and before the fix nothing sat
 # between the caller's value and /bin/sh. REPRODUCED against a real generated
-# package: `make docs DC=true 'BUILD_DATE=2026-01-01";touch /tmp/PWN;"'` created
+# package: `make doc DC=true 'BUILD_DATE=2026-01-01";touch /tmp/PWN;"'` created
 # the file, and `WITH=a;/tmp/mark.sh;b` ran the script.
 #
 # `DC=true` throughout: it passes both DC guards (non-empty, no leading dash),
@@ -1415,7 +1415,7 @@ def test_an_empty_dc_neither_runs_a_planted_probe_nor_reports_success(
 _INJECTED = "INJECTED"
 
 
-def _hostile(package: Path, marker: Path, name: str, payload: str, target="docs", n=False):
+def _hostile(package: Path, marker: Path, name: str, payload: str, target="doc", n=False):
     """`make [-n] <target> DC=true` with `<name>=<payload>` exported."""
     env_vars = clean_env()
     env_vars[name] = payload
@@ -1568,13 +1568,13 @@ def test_the_legitimate_values_still_render_what_they_always_rendered(
         ),
     ]
     for extra, expected in cases:
-        result = make_n(pages_package, "docs", *extra, dc="true")
-        assert result.returncode == 0, outcome(f"make -n docs {extra}", result)
+        result = make_n(pages_package, "doc", *extra, dc="true")
+        assert result.returncode == 0, outcome(f"make -n doc {extra}", result)
         assert expected in result.stdout, (
-            f"make -n docs {extra} did not render {expected!r}:\n{result.stdout}"
+            f"make -n doc {extra} did not render {expected!r}:\n{result.stdout}"
         )
 
-    suffixed = make_n(pages_package, "docs", "WITH=hidden", dc="true")
+    suffixed = make_n(pages_package, "doc", "WITH=hidden", dc="true")
     assert "Guide-hidden.html" in suffixed.stdout, (
         f"the WITH suffix stopped reaching the output filename:\n{suffixed.stdout}"
     )
@@ -1602,7 +1602,7 @@ def test_a_pattern_specific_assignment_is_caught_at_the_point_of_use(
     env_vars = clean_env()
     env_vars["MAKEFILES"] = str(evil)
     result = subprocess.run(
-        ["make", "--no-print-directory", "docs", "DC=true"],
+        ["make", "--no-print-directory", "doc", "DC=true"],
         cwd=pages_package, capture_output=True, text=True, env=env_vars,
     )
     combined = result.stdout + result.stderr
@@ -1616,7 +1616,7 @@ def test_a_pattern_specific_assignment_is_caught_at_the_point_of_use(
     benign.write_text("%: BUILD_DATE = 2026-09-01\n")
     env_vars["MAKEFILES"] = str(benign)
     control = subprocess.run(
-        ["make", "--no-print-directory", "-n", "docs", "DC=true"],
+        ["make", "--no-print-directory", "-n", "doc", "DC=true"],
         cwd=pages_package, capture_output=True, text=True, env=env_vars,
     )
     assert control.returncode == 0, outcome(
@@ -1655,15 +1655,15 @@ def test_an_unrelated_build_date_export_does_not_break_an_unrelated_target(
     )
 
 
-@pytest.mark.parametrize("target", ["docs", "slide", "pdfs", "check-pdf"])
+@pytest.mark.parametrize("target", ["doc", "slide", "pdf", "check-pdf"])
 def test_an_out_of_class_build_date_is_refused_by_every_target_that_stamps_it(
     require_make, pages_package, target
 ):
     """The other side of the trade above: confining the check to the point of
     use must not leave a stamping target unguarded.
 
-    `check-pdf` carries no check of its own -- it depends on `pdfs`, which
-    depends on `docs`, and all three are .PHONY so the check has already run.
+    `check-pdf` carries no check of its own -- it depends on `pdf`, which
+    depends on `doc`, and all three are .PHONY so the check has already run.
     That is the assertion, not an assumption: adding the prefix to check-pdf's
     own recipe instead breaks test_pdf_ua_gate.py's parse of that line.
     """
@@ -1695,7 +1695,7 @@ def test_pkg_checks_what_it_interpolates_and_nothing_else(
     EACH. First `pkg` carried no check at all while the docs said it did.
     Then it carried the FULL check, which stopped `make pkg` on an ordinary
     `BUILD_DATE=2026-09-12T14:30:00Z` from a CI environment -- a value that
-    target never reads, since `pkg: format-md` never reaches `docs` and its
+    target never reads, since `pkg: format-md` never reaches `doc` and its
     recipe interpolates no date. That is the same mistake as putting the
     BUILD_DATE class at the top of the file, one target down.
 
@@ -1891,7 +1891,7 @@ def test_every_accepted_date_shape_passes_the_make_level_check(
     drives the real generated Makefile with each value.
     """
     for value in _accepted_date_shapes():
-        result = make_n(pages_package, "docs", f"BUILD_DATE={value}", dc="true")
+        result = make_n(pages_package, "doc", f"BUILD_DATE={value}", dc="true")
         assert result.returncode == 0, outcome(
             f"BUILD_DATE={value} is accepted by the frontmatter grammar but "
             "refused by the generated Makefile",

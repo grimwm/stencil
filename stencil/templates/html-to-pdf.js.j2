@@ -1,4 +1,4 @@
-{# Driver behind `make pdfs`. Prints an already-generated HTML file to PDF
+{# Driver behind `make pdf`. Prints an already-generated HTML file to PDF
    through headless Chromium. Rendered into the package directory next to the
    Lua filters, so a project can override it from its own templates_dir. #}
 "use strict";
@@ -29,7 +29,7 @@ if (!input || !output) {
 // with no output_dir -- so both arguments are relative and only mean anything
 // from /workspace. BOTH have to be resolved, not just the input: page.pdf()'s
 // `path` and the read/write inside addPdfUaStructure() are cwd-relative too,
-// and resolving only the input would leave `make pdfs` writing its PDF into the
+// and resolving only the input would leave `make pdf` writing its PDF into the
 // container's throwaway layer and reporting success.
 //
 // AND IT REPLACES A HARD-CODED PREFIX, which is the second bug here (stn-ao5).
@@ -41,7 +41,7 @@ if (!input || !output) {
 //
 //     net::ERR_FILE_NOT_FOUND at file:///workspace//out/document.html
 //
-// and `make pdfs` could not run at all for such a package. This is the identical
+// and `make pdf` could not run at all for such a package. This is the identical
 // defect CHECK_ACCESS_SCRIPT's comment in stencil/pipeline.py records for the
 // sibling service, and the identical repair: one path, built from the argument,
 // rather than two that have to agree.
@@ -202,7 +202,7 @@ for (const name of ["puppeteer", "pdf-lib"]) {
 // and nine more, and `require`s the JavaScript ones. With cwd at /workspace that
 // is the consumer's own package directory, and in a course repository its
 // contents arrive in pull requests: a one-line .puppeteerrc.cjs ran as uid 0,
-// over the read-write mount, with the network up, on every `make pdfs` -- and
+// over the read-write mount, with the network up, on every `make pdf` -- and
 // the build printed its usual success output afterwards.
 //
 // THERE IS NO SWITCH FOR THIS. Measured against the pinned puppeteer, not
@@ -406,7 +406,7 @@ function wrapListBodies(structTreeRoot, context) {
 // Characters the page uses that no inlined font can draw.
 //
 // stencil inlines its webfonts so a generated page is self-contained and
-// `make pdfs` reaches the network for nothing. The cost of that is a closed
+// `make pdf` reaches the network for nothing. The cost of that is a closed
 // set of glyphs: Noto Serif has no emoji coverage and there is nothing behind
 // it to fall back to, so Chromium draws .notdef -- an empty box -- and writes
 // a glyph with no Unicode mapping. Measured on cs425's job-search deck: six

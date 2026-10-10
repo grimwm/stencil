@@ -1,6 +1,6 @@
 {# Shared client-side behavior: Bootstrap, highlight.js, Mermaid, tabbed sections.
    Libraries are inlined from stencil/assets/ rather than loaded from a CDN, so a
-   generated page works offline and make pdfs does not depend on the network.
+   generated page works offline and make pdf does not depend on the network.
    Mermaid uses the UMD build (globalThis.mermaid) rather than the ESM one: the
    ESM build lazily imports diagram chunks, which would reintroduce a fetch. #}
   <!-- Bootstrap JS Bundle -->
@@ -14,7 +14,7 @@
      of the mermaid bundle one block down. Gating the library while leaving
      `hljs.highlightAll()` behind leaves a ReferenceError in a page that
      otherwise looks finished. html-to-pdf.js listens for pageerror and refuses
-     to write the PDF, so `make pdfs` fails -- but `make docs` does not, and it
+     to write the PDF, so `make pdf` fails -- but `make doc` does not, and it
      would ship the broken page. tests/test_code_bundle.py converts a
      code-free document to PDF for exactly that reason: it is the only check
      that runs the script rather than reading it. #}
@@ -125,7 +125,7 @@ $endif$
       // Reached only if a .mermaid element got past the filter's detection --
       // raw HTML shaped in some way the substring test misses. Bail out with a
       // message instead of throwing: an uncaught throw here escapes the async
-      // IIFE, __mermaidReady below is never set, and make pdfs waits out its
+      // IIFE, __mermaidReady below is never set, and make pdf waits out its
       // full timeout. A missing diagram is a bug; a hung build is worse.
       if (!mermaid) {
         console.error('stencil: this page has a mermaid diagram but no mermaid '

@@ -211,7 +211,7 @@ MAKE_CONTRACT = {
         # shape of requirement as the three above: the has_package_sources
         # arm's `pkg` recipe expands it to re-check WITH against its character
         # class at the point of use (stn-cb8). The WITH-ONLY spelling, not the
-        # full `_stencil_late_check`: `pkg: format-md` never reaches `docs` and
+        # full `_stencil_late_check`: `pkg: format-md` never reaches `doc` and
         # its recipe interpolates no date, so checking BUILD_DATE here would
         # stop the target over a value it does not read. An undefined make
         # variable expands to nothing rather than failing, so a composition

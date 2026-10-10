@@ -124,7 +124,7 @@ def test_a_blank_brand_renders_nothing(render_soup):
 @pytest.mark.integration
 def test_a_logo_renders_as_an_inlined_image(render_soup, with_logo, value):
     """And is inlined. A src still pointing at the file would mean the page is
-    not self-contained and `make pdfs` cannot fetch it."""
+    not self-contained and `make pdf` cannot fetch it."""
     soup = render_soup(
         "doc",
         "b.md",

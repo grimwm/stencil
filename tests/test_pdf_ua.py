@@ -1116,7 +1116,7 @@ def test_the_repair_replaces_rather_than_deletes(math_pdf):
 # stn-yhk: a character no inlined font can draw fails the build.
 #
 # stencil inlines a closed set of faces so a page is self-contained and
-# `make pdfs` reaches the network for nothing. Noto Serif has no emoji
+# `make pdf` reaches the network for nothing. Noto Serif has no emoji
 # coverage and there is nothing behind it, so Chromium drew .notdef -- an
 # empty box -- and wrote a glyph with no Unicode mapping. Measured on cs425's
 # job-search deck: six emoji, four checks of 7.21.7 t1 and four of 7.21.8 t1.

@@ -444,7 +444,7 @@ def check_package_output_dir(package_id: str, value) -> str | None:
 
     ``OUT_HOST := <value>`` is expanded by four recipes, so a metacharacter
     here is a second command rather than a bad filename: the ticket's
-    ``"../../../../../../tmp/pwn; echo OWNED"`` made ``make docs`` run
+    ``"../../../../../../tmp/pwn; echo OWNED"`` made ``make doc`` run
     ``mkdir -p .../tmp/pwn`` and then ``echo OWNED``.
 
     ``..`` IS PERMITTED, deliberately and by operator ruling. STENCIL.md
@@ -524,7 +524,7 @@ def check_package_output_dir(package_id: str, value) -> str | None:
         )
     # A quote cannot chain a command here -- `;`, `$` and backtick are all
     # refused above -- but it truncates one. Measured: `output_dir: "a'b"`
-    # generates at exit 0 and `make docs` dies with `unexpected EOF while
+    # generates at exit 0 and `make doc` dies with `unexpected EOF while
     # looking for matching '`. Still a filename quietly doing something
     # other than naming a file, which is the whole class.
     if "'" in text or '"' in text:
@@ -814,7 +814,7 @@ def get_template_context(
     #
     # A hook is a DEPENDENCY, not a prelude. It exists because cs425 generates
     # sixteen SVGs from a matplotlib script that nothing in the build knew
-    # about, so `make docs` built documents from stale figures and never said
+    # about, so `make doc` built documents from stale figures and never said
     # so. A hook that ran unconditionally would be worse than none: matplotlib
     # output is not stable across versions, and rewriting sixteen files on
     # every build buries the real change in thousands of lines of diff.
@@ -1054,7 +1054,7 @@ def get_template_context(
         # And the same for the browser image, which COPYs its lockfile out of
         # that directory and runs `npm ci` from it at BUILD time -- so without
         # this, a consumer-editable file chose which bytes became the puppeteer,
-        # pa11y and pdf-lib that `make pdfs` and `make check-access` then run as
+        # pa11y and pdf-lib that `make pdf` and `make check-access` then run as
         # uid 0 (stn-egv). Derived from the same call the file is rendered from,
         # never written down, so a re-vendor moves both at once.
         "browser_lockfile_digest": pipeline.lockfile_digest(pipeline.BROWSER_LOCKFILE),
@@ -1068,7 +1068,7 @@ def get_template_context(
         "format_tools_dir": pipeline.FORMAT_TOOLS_DIR,
         # CSS, JS and webfonts inlined into the pandoc templates. Loaded here
         # rather than fetched at page load, so a handout is self-contained and
-        # make pdfs does not depend on the network.
+        # make pdf does not depend on the network.
         "assets": assets.load(),
     }
 
@@ -2255,7 +2255,7 @@ SHARED_PAGE_TEMPLATES = [
     # _CODE_BUNDLE_AFTER_HIDDEN in pipeline.py for why it runs last.
     "code-bundle-filter.lua.j2",
     # Drives the `pdf` compose service. Emitted for every package that renders
-    # markdown, so `make pdfs` needs no configuration to exist.
+    # markdown, so `make pdf` needs no configuration to exist.
     "html-to-pdf.js.j2",
     # Shared image the pdf and check-access services build from, and the
     # lockfile its `npm ci` resolves through. The two travel together: the
@@ -4061,7 +4061,7 @@ def package_entries(
         if brand_image:
             entries.add(Path(brand_image).name)
 
-    # docs and slides generate .html files from .md files, and `make pdfs`
+    # docs and slides generate .html files from .md files, and `make pdf`
     # prints each of those to a .pdf beside it (glob for feature variants)
     for md in list(package.get("docs", [])) + list(package.get("slides", [])):
         if md.endswith(".md"):

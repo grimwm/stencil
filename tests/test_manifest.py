@@ -650,7 +650,7 @@ def test_a_top_level_output_dir_that_is_a_pattern_is_refused(value):
 
 
 def test_manifest_records_doc_and_slide_build_glob_patterns(generate_package):
-    """`make pdfs`/`make html` print files gen never writes itself; the
+    """`make pdf`/`make html` print files gen never writes itself; the
     manifest has to record them as the glob patterns they are (mirroring
     get_generated_files) or a manifest-driven clean would never remove a
     built .html/.pdf standing next to its source markdown."""
@@ -789,7 +789,7 @@ def test_a_dropped_docs_entry_is_refused_as_a_widened_manifest_not_silently_hono
     }
     generated = generate_package(config)
 
-    # Simulate a `make html`/`make pdfs` run: gen itself only writes the
+    # Simulate a `make html`/`make pdf` run: gen itself only writes the
     # scaffolding, never these build artifacts.
     for name in ("Guide.html", "Guide.pdf", "Extra.html", "Extra.pdf"):
         (generated / name).write_text("built")
