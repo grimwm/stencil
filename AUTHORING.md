@@ -686,16 +686,23 @@ page cannot scroll, so a line that only scrolled would be cut off at the box's e
 for a line with no spaces in it too, such as a pasted URL. A ```` ```text ```` fence is therefore
 safe to use as an answer box: however long the answer typed into it, the PDF carries all of it.
 
-A printed listing, quote, table, or figure stays in one piece. One taller than the room left on
-the page moves to the next page rather than splitting. Add `page-split` when that block should
-start where it is and continue:
+A printed quote, table, or figure stays in one piece. A listing does not: it stays with the text
+above it and continues onto the next page, so a long one does not jump ahead of its heading.
+
+`.page-split` starts a new page. Put it on a heading or on the fence. It replaces
+`style="break-before: page"`.
+
+```markdown
+# Part 2 {.page-split}
+```
 
 ````markdown
 ```{.html .page-split}
 ```
 ````
 
-The same class works on a quote, a table, or a figure.
+A wrapping `::: {.page-split}` also starts a new page, and a code listing does not need one. The
+same class works on a quote, a table, or a figure.
 
 ### Diagrams
 

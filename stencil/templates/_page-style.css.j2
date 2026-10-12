@@ -824,24 +824,28 @@
         page-break-after: avoid;
       }
 
-      pre, blockquote, table, figure {
+      blockquote, table, figure {
         page-break-inside: avoid;
       }
 
-      /* The rule above keeps a listing, quote, table, or figure in one piece,
-         and a block taller than the room left on the page moves to the next
-         sheet rather than splitting. `.page-split` is the opt-in: that one
-         block starts where it falls and continues. */
-      pre.page-split,
-      blockquote.page-split,
-      table.page-split,
-      figure.page-split {
-        page-break-inside: auto;
-        break-inside: auto;
-      }
-
+      /* A listing stays with the text above it and continues if it runs past
+         the bottom. Keeping it in one piece pushes a long one onto the next
+         sheet, away from its heading. */
       pre {
         font-size: 0.92rem;
+        break-before: avoid;
+        page-break-before: avoid;
+        break-inside: auto;
+        page-break-inside: auto;
+      }
+
+      /* The on-demand page break. A heading, a code fence, a quote, a table,
+         or a figure takes the class; the author does not write a style
+         attribute. On a fence the class lands on the pre, which is enough:
+         a wrapping div is not required. */
+      .page-split {
+        break-before: page;
+        page-break-before: always;
       }
 
       table {

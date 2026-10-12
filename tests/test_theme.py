@@ -423,33 +423,35 @@ def test_the_glyph_is_hidden_and_the_label_carries_the_name():
     )
 
 
-def test_a_printed_block_stays_intact_unless_the_author_opts_in():
-    """Listings, quotes, tables, and figures do not split across a printed page.
+def test_page_split_starts_a_new_page_and_a_listing_may_continue():
+    """`.page-split` is the page break an author writes instead of a style attribute.
 
-    A block taller than the room left on the page would otherwise start where
-    it falls and continue, which is what an author wants for one long listing
-    and not for every listing. `.page-split` is that opt-in, and it has to
-    beat the element rule or the class does nothing.
+    Quotes, tables, and figures still stay in one piece. A listing does not:
+    keeping a long one intact pushes it onto the next sheet, away from the
+    heading it belongs with. The class has to beat `pre`'s own `break-before:
+    avoid`, or a fence marked `.page-split` never starts a new page.
     """
     css = strip_comments(source("_page-style.css.j2"))
     print_css = css.split("@media print", 1)[1]
     kept = re.search(
-        r"pre,\s*blockquote,\s*table,\s*figure\s*\{([^}]*)\}",
+        r"blockquote,\s*table,\s*figure\s*\{([^}]*)\}",
         print_css,
         re.S,
     )
     assert kept and "page-break-inside: avoid" in kept.group(1)
-    opted = re.search(
-        r"pre\.page-split,\s*blockquote\.page-split,\s*table\.page-split,\s*"
-        r"figure\.page-split\s*\{([^}]*)\}",
+    assert not re.search(
+        r"pre,\s*blockquote,\s*table,\s*figure\s*\{[^}]*page-break-inside:\s*avoid",
         print_css,
         re.S,
     )
-    assert opted, "print CSS has no .page-split opt-in"
-    body = opted.group(1)
-    assert "page-break-inside: auto" in body
-    assert "break-inside: auto" in body
-    assert print_css.index("page-break-inside: avoid") < print_css.index("pre.page-split")
+    listing = re.search(r"(?<![.\w-])pre\s*\{([^}]*)\}", print_css, re.S)
+    assert listing, "print CSS has no pre rule"
+    assert "break-inside: auto" in listing.group(1)
+    assert "page-break-inside: auto" in listing.group(1)
+    split = re.search(r"\.page-split\s*\{([^}]*)\}", print_css, re.S)
+    assert split, "print CSS has no .page-split rule"
+    assert "break-before: page" in split.group(1)
+    assert "page-break-before: always" in split.group(1)
 
 
 def test_the_control_is_hidden_in_print():

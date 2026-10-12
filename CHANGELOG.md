@@ -9,6 +9,11 @@ and the closed epics in `.beads/issues.jsonl` are the readable index.
 How the version gets bumped is written down in
 [AGENTS.md](AGENTS.md#cutting-a-release), not here.
 
+## 1.10.0
+
+- **`.page-split` starts a new page.** Put it on a heading or a code fence instead of `style="break-before: page"`. A listing does not need a wrapping div. 1.9.0 used the class to let a block continue, which left authors writing the style attribute the class was supposed to replace. Regenerate to pick it up.
+- **A printed listing may continue.** Quotes, tables, and figures still stay in one piece. A listing stays with the text above it and continues onto the next page, so a long one does not jump ahead of its heading.
+
 ## 1.9.0
 
 - **`.page-split` lets one printed block continue.** Listings, quotes, tables, and figures still stay in one piece, so a block taller than the room left on the page moves to the next sheet. Add the class when that block should start where it falls and continue. Regenerate to pick it up.
