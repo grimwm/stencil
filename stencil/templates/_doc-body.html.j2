@@ -39,12 +39,12 @@ $if(has-facts)$
        does not use. They were a stacked column and a badge beside the title;
        the badge read as a UI chip on a document that has no other chrome.
 
-       Separators are their own elements rather than ::before content, so each
-       one can stay with the fact it follows while the free space sits between
-       the facts. Each is conditional on something actually preceding
-       it AND on the item it precedes existing -- a separator emitted on
-       'something came before' alone strands one whenever the next fact is
-       absent, which is the bug this shape prevents.
+       The separator between Issued and Due is its own element, and it is the
+       only one. Those two sit together, so the dot has a fact on each side.
+       Points is pushed to the right by the stylesheet and gets no dot: one
+       there is left on the issued date whenever Due is absent, with the gap
+       where the next fact should be. A separator is still conditional on
+       something actually preceding it AND on the item it precedes existing.
 
        The separator's spaces are non-breaking and sit inside the separator's
        own span. It is its own flex item, so ordinary spaces collapse away at
@@ -55,7 +55,7 @@ $if(has-facts)$
 
        One line on purpose: a newline between these collapses to a word space
        that lands on one side of a separator only. #}
-    <div class="doc-facts">$if(date-label)$<span class="doc-fact doc-issued"><span class="doc-label">Issued&#160;</span><time datetime="$date-iso$">$date-label$</time></span>$endif$$if(due-label)$$if(sep-before-due)$<span class="doc-fact-sep" aria-hidden="true">&#160;&middot;&#160;</span>$endif$<span class="doc-fact doc-due"><span class="doc-label">Due&#160;</span><time datetime="$due-iso$">$due-label$</time></span>$endif$$if(points-label)$$if(sep-before-points)$<span class="doc-fact-sep" aria-hidden="true">&#160;&middot;&#160;</span>$endif$<span class="doc-fact doc-points"><span class="doc-label">Points&#160;</span>$points-label$</span>$endif$</div>
+    <div class="doc-facts">$if(date-label)$<span class="doc-fact doc-issued"><span class="doc-label">Issued&#160;</span><time datetime="$date-iso$">$date-label$</time></span>$endif$$if(due-label)$$if(sep-before-due)$<span class="doc-fact-sep" aria-hidden="true">&#160;&middot;&#160;</span>$endif$<span class="doc-fact doc-due"><span class="doc-label">Due&#160;</span><time datetime="$due-iso$">$due-label$</time></span>$endif$$if(points-label)$<span class="doc-fact doc-points"><span class="doc-label">Points&#160;</span>$points-label$</span>$endif$</div>
 $endif$
   </div>
 $endif$

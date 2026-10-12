@@ -481,10 +481,11 @@ function Meta(meta)
   -- it.
   meta["has-facts"] = (has_date or has_due or has_points) or nil
 
-  -- Separators, emitted as their own elements so each stays with the fact
-  -- it follows instead of taking a share of the free space. Each one asks
-  -- "is anything in front of me?", which is several keys OR'd together and so
-  -- cannot be done in a pandoc template.
+  -- sep-before-due is the document facts line: Issued and Due sit together,
+  -- and the dot belongs between them. Points is pushed to the right and the
+  -- document template does not ask for a separator in front of it.
+  -- sep-before-points is the deck byline, which is one inline run, so the
+  -- dot there really does have a fact on each side.
   meta["sep-before-due"] = has_date or nil
   meta["sep-before-points"] = (has_date or has_due) or nil
 

@@ -1116,18 +1116,15 @@
       }
     }
 
-    /* Issued, Due and Points on one line. The free space sits between the
-       facts, and each middot stays with the fact it follows. space-between on
-       every child, including the separator, parks that dot in the middle of
-       the gap: Issued on the left, Points on the right, and a middot floating
-       between them.
+    /* Issued and Due stay together on the left. Points, when anything
+       precedes it, takes the right. The only middot is the one between Issued
+       and Due, two facts that actually touch.
 
-       margin-left: auto on every fact after the first splits that free space
-       among the facts. The separator is the next flex item after the fact it
-       belongs to, so it travels with that fact instead of taking a share.
-
-       flex: 1 with min-width: 0 so a long author shortens this group instead
-       of pushing it off the page. */
+       A middot before Points does not survive that split. The free space
+       opens after Issued, so the dot is left sitting on the issued date with
+       nothing beside it. The gap is the separation; the dot is not emitted
+       there. Pushing every fact after the first does the same thing to Due,
+       which is why only Points is pushed. */
     .doc-facts {
       min-width: 0;
       /* display: flex is load-bearing beyond layout. Its children blockify,
@@ -1143,14 +1140,14 @@
       gap: 0.35rem 0;
     }
 
-    .doc-fact ~ .doc-fact {
+    .doc-points:not(:first-child) {
       margin-left: auto;
     }
 
     /* After the rule above, not beside the other narrow-header resets. That
        block is earlier in the file, and the same selector later would win. */
     @media (max-width: 40rem) {
-      .doc-fact ~ .doc-fact {
+      .doc-points:not(:first-child) {
         margin-left: 0;
       }
     }

@@ -9,6 +9,10 @@ and the closed epics in `.beads/issues.jsonl` are the readable index.
 How the version gets bumped is written down in
 [AGENTS.md](AGENTS.md#cutting-a-release), not here.
 
+## 1.7.2
+
+- **The header middot no longer trails the issued date.** Issued and Due stay together, with a dot between them. Points sits on the right with no dot of its own, so a document that has an issued date and a point total does not read "Issued Oct 12 ·" with nothing beside the dot. Regenerate to pick it up.
+
 ## 1.7.1
 
 - **The header middot stays with the fact it follows.** Issued on the left and Points on the right no longer have the separator floating in the gap between them. Regenerate to pick it up.

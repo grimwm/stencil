@@ -497,4 +497,5 @@ def test_the_facts_line_reaches_the_pdf_as_words(to_pdf):
     # manufacture the very separation this is meant to prove is present.
     text = re.sub(r"[ \t\u00a0]+", " ", text_of(pdf))
 
-    assert "Issued Sep 05 · Due Sep 12 · 23:59 · Points 50 pts" in text, text[:400]
+    assert "Issued Sep 05 · Due Sep 12 · 23:59" in text, text[:400]
+    assert "Points 50 pts" in text, text[:400]
