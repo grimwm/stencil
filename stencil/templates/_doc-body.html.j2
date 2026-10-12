@@ -1,12 +1,12 @@
 {# Document header: a two-column grid. Identity sits left, context right, and
-   the byline spans both beneath them, so the width earns its keep instead of
-   stacking five short lines down the page.
+   the rule, the write-in lines and the byline each span both beneath them, so
+   the width earns its keep instead of stacking five short lines down the page.
 
-   Source order is identity, byline, context -- deliberately not the visual
-   order. Grid placement puts context back up on row one, which lets the author
-   follow the subtitle for a screen reader and for pdftotext without moving
-   anything on screen. On a narrow viewport the columns collapse and the header
-   stacks in this source order -- see _page-style.css.j2.
+   Source order is identity, rule, blanks, byline, context -- deliberately not
+   the visual order. Grid placement puts context back up on row one, which lets
+   the author follow the subtitle for a screen reader and for pdftotext without
+   moving anything on screen. On a narrow viewport the columns collapse and the
+   header stacks in this source order -- see _page-style.css.j2.
 
    `has-context`, `has-byline` and `has-dates` come from
    frontmatter-filter.lua, which is also what guarantees a blank key reads as
@@ -23,12 +23,18 @@ $if(title)$
 
          Styling stays on .doc-title, the header, and .doc-name only cancels
          the user-agent h1 so nothing moves: the heading inherits the size,
-         weight and family it was already rendering at. #}
+         weight and family it was already rendering at. The accent rule is
+         .doc-rule, not this h1. The heading stylesheet underlines every h1,
+         and that line would stop at the title column, short of the program. #}
       <h1 class="doc-name">$title$</h1>
 $if(subtitle)$
       <div class="doc-subtitle">$subtitle$</div>
 $endif$
     </div>
+  <div class="doc-rule" aria-hidden="true"></div>
+$if(blanks)$
+  <div class="doc-blanks">$for(blanks)$<span class="doc-blank"><span class="doc-label">$blanks$</span><span class="doc-blank-line" aria-hidden="true">&#160;</span></span>$endfor$</div>
+$endif$
 $if(has-byline)$
   <div class="doc-byline">
 $if(author)$

@@ -185,6 +185,44 @@ local function text_of(value)
   return text
 end
 
+--- `blanks:` as a list of labels, or nil when it asks for none.
+---
+--- A YAML sequence is already a list. A single string is one label: left as
+--- inlines, `$for$` would walk the words. An empty key is the same as leaving
+--- it out. Defined after text_of, which it calls: a local is not in scope
+--- above its own declaration.
+local function blank_labels(value)
+  if value == nil then
+    return nil
+  end
+  local items = pandoc.List()
+  local function push(item)
+    -- pandoc.utils.type, not .t. A MetaList's .t is not the string "MetaList",
+    -- and missing that folded Name and Date into one label.
+    if pandoc.utils.type(item) == "Inlines" then
+      if text_of(item) ~= nil then
+        items:insert(item)
+      end
+      return
+    end
+    local text = text_of(item)
+    if text ~= nil then
+      items:insert(pandoc.MetaInlines({ pandoc.Str(text) }))
+    end
+  end
+  if pandoc.utils.type(value) == "List" then
+    for _, item in ipairs(value) do
+      push(item)
+    end
+  else
+    push(value)
+  end
+  if #items == 0 then
+    return nil
+  end
+  return pandoc.MetaList(items)
+end
+
 --- One run of inlines, with a soft break kept as a newline. stringify turns
 --- that break into a space, which is how a literal block's lines were lost.
 local function inlines_to_text(inlines)
@@ -404,6 +442,8 @@ function Meta(meta)
       meta[key] = nil
     end
   end
+
+  meta.blanks = blank_labels(meta.blanks)
 
   -- Plain-text twins for the one place markup cannot go: <title>.
   --

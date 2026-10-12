@@ -9,6 +9,11 @@ and the closed epics in `.beads/issues.jsonl` are the readable index.
 How the version gets bumped is written down in
 [AGENTS.md](AGENTS.md#cutting-a-release), not here.
 
+## 1.8.0
+
+- **`blanks:` draws write-in lines in the document header.** A list of labels, such as Name and Date, becomes a labelled line under the title rule. A deck ignores the key. Regenerate to pick it up.
+- **The title rule runs under the program and term.** It is one line across the header, under the title row. The heading's own underline no longer stops at the title column.
+
 ## 1.7.2
 
 - **The header middot no longer trails the issued date.** Issued and Due stay together, with a dot between them. Points sits on the right with no dot of its own, so a document that has an issued date and a point total does not read "Issued Oct 12 ·" with nothing beside the dot. Regenerate to pick it up.

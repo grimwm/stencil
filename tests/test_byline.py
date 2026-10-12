@@ -165,7 +165,7 @@ def test_the_author_precedes_the_context_in_source_order(render_soup):
         for el in header.find_all(True, recursive=False)
         if el.get("class")
     ]
-    assert classes == ["doc-identity", "doc-byline", "doc-context"]
+    assert classes == ["doc-identity", "doc-rule", "doc-byline", "doc-context"]
 
 
 def test_the_header_row_wrapper_is_gone(render_soup):
@@ -226,3 +226,39 @@ def test_the_separators_hide_the_middot_without_hiding_the_gap(render_soup):
         "whitespace-separated words; the accessibility tree would be handed "
         f"{accessible!r}"
     )
+
+
+def test_blanks_are_labelled_write_in_lines(render_soup):
+    soup = render_soup(
+        "doc",
+        "blanks.md",
+        text=document('title: "T"\nblanks:\n  - Name\n  - Date\n'),
+    )
+    header = header_of(soup)
+    labels = [
+        " ".join(el.get_text().split())
+        for el in header.select(".doc-blank .doc-label")
+    ]
+    assert labels == ["Name", "Date"]
+    assert len(header.select(".doc-blank-line")) == 2
+    assert header.select_one(".doc-rule") is not None
+
+
+def test_one_blank_is_one_line(render_soup):
+    soup = render_soup(
+        "doc",
+        "blanks.md",
+        text=document('title: "T"\nblanks: Name\n'),
+    )
+    blanks = header_of(soup).select(".doc-blank")
+    assert len(blanks) == 1
+    assert " ".join(blanks[0].select_one(".doc-label").get_text().split()) == "Name"
+
+
+def test_an_empty_blanks_key_renders_nothing(render_soup):
+    soup = render_soup(
+        "doc",
+        "blanks.md",
+        text=document('title: "T"\nblanks:\n'),
+    )
+    assert header_of(soup).select_one(".doc-blanks") is None

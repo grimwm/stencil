@@ -156,6 +156,7 @@ the pipeline reads, and what each one does on each side:
 | --------------- | ----------------------------------------------- | ----------------------------------------------------------- |
 | `title`         | Page header, and the browser tab                | Title slide, and the browser tab                            |
 | `subtitle`      | Under the title                                 | Under the title on the title slide                          |
+| `blanks`        | Write-in lines under the title rule             | Ignored                                                     |
 | `brand`         | Top right, above `program`                      | Above the title on the title slide                          |
 | `brand-alt`     | Alt text; **required** when `brand` is an image | Same                                                        |
 | `cover`         | Ignored                                         | Figure on the title slide (image path)                      |
@@ -205,16 +206,28 @@ Names are joined with `·`. The byline is part of the title header, so a file wi
 `title` gets no header at all — same rule a deck follows for its title slide. Leaving a key blank is
 the same as leaving it out: `program:` with nothing after it renders nothing, not an empty line.
 
+`blanks` is a list of labels, or one label. Each becomes a line to write on, under the title rule
+and above the byline. A deck ignores the key.
+
+```markdown
+---
+title: "Midterm"
+blanks:
+  - Name
+  - Date
+---
+```
+
 #### Where a document puts them
 
-A document's header is two rows, each with identity on the left and context on the right, so a file
-that sets everything costs two lines rather than five:
+A document's header puts the title on the left and the program on the right, with one rule under
+both. Write-in lines, when `blanks` is set, sit under that rule, and the byline under those:
 
 ```text
-Sprint Report                          CS 425/499 · 001
-Points: 50                                 Spring 2026
-Ada Lovelace · Grace Hopper                 2026-09-05
-────────────────────────────────────────────────────
+Sprint Report                          CS 425 · Fall 2026
+────────────────────────────────────────────────────────
+Name ________________       Date ________________
+Ada Lovelace                 Issued Sep 05      Points 50
 ```
 
 Below roughly 640px the two columns collapse into one left-aligned stack. A deck has the width to

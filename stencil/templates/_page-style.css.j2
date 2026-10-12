@@ -180,20 +180,25 @@
       font-size: 2.2rem;
       font-weight: 700;
       margin-bottom: 1.5rem;
-      padding-bottom: 0.5rem;
-      border-bottom: 2px solid var(--accent);
     }
 
     /* The title's h1 carries no styling of its own -- .doc-title above is
        where the type is set. This cancels the user-agent h1 so adding the
        element changed nothing visible: without it, an h1 brings its own
-       2em size and block margins and the header grows. */
+       2em size and block margins and the header grows.
+
+       border and padding are cancelled too. The heading block below draws an
+       accent rule under every h1, and this h1 only occupies the title column,
+       so that rule stops short of the program and term. .doc-rule is the line
+       under the whole title row. */
     .doc-name {
       font-family: inherit;
       font-size: inherit;
       font-weight: inherit;
       line-height: inherit;
       margin: 0;
+      padding-bottom: 0;
+      border-bottom: 0;
     }
 
     /* Subordinate to the title, the way .deck-subtitle is on a title slide.
@@ -211,11 +216,12 @@
     }
 
 
-    /* The header's two rows, as a grid rather than two flex rows.
+    /* The header's rows, as a grid rather than stacked flex rows.
 
        Grid because source order and visual order have to differ: the byline is
-       written second so the author follows the subtitle for a screen reader
-       and for pdftotext, and placement puts the context back up on row one.
+       written after the rule and the write-in lines so the author follows the
+       subtitle for a screen reader and for pdftotext, and placement puts the
+       context back up on row one.
        align-items: baseline so the course sits on the title's baseline rather
        than floating at the top of a two-line identity block.
 
@@ -247,6 +253,48 @@
       grid-row: 1;
     }
 
+    /* Under the title and under the program. One grid item, so the column gap
+       cannot break the line the way a border on each cell would. aria-hidden
+       in the template: the line is paint, and a screen reader already has the
+       title. */
+    .doc-rule {
+      grid-column: 1 / -1;
+      grid-row: 2;
+      box-sizing: content-box;
+      height: 0;
+      border-bottom: 2px solid var(--accent);
+    }
+
+    /* Write-in lines. A list of labels from `blanks:`, each with a rule to
+       write on. They take the full header width, under the title rule and
+       above the byline. */
+    .doc-blanks {
+      grid-column: 1 / -1;
+      grid-row: 3;
+      display: flex;
+      flex-wrap: wrap;
+      align-items: flex-end;
+      gap: 0.75rem 2rem;
+      margin-top: 0.35rem;
+      font-size: 1rem;
+      font-weight: 400;
+      color: var(--text);
+    }
+
+    .doc-blank {
+      display: flex;
+      flex: 1 1 14rem;
+      align-items: flex-end;
+      gap: 0.5rem;
+      min-width: 0;
+    }
+
+    .doc-blank-line {
+      flex: 1 1 auto;
+      border-bottom: 1px solid currentColor;
+      min-height: 1.35rem;
+    }
+
     /* Two stacked lines, not two columns: authors above, facts below.
 
        An author list is the reason. Side by side, six names squeeze the facts
@@ -256,7 +304,7 @@
        own. */
     .doc-byline {
       grid-column: 1 / -1;
-      grid-row: 2;
+      grid-row: 4;
       margin-top: 0.6rem;
       display: flex;
       flex-direction: column;
@@ -371,6 +419,8 @@
         grid-template-columns: 1fr;
       }
       .doc-identity,
+      .doc-rule,
+      .doc-blanks,
       .doc-context,
       .doc-byline {
         grid-column: 1;
