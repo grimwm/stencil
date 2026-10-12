@@ -798,6 +798,11 @@
         margin: 1in;
       }
 
+      /* A document's `footer:` adds its own @page margin boxes, in a <style>
+         the frontmatter filter writes for that document alone. The 1in margin
+         above is the room those boxes sit in. This sheet cannot name them:
+         which slots are on, and what the title says, differ per document. */
+
       /* One type scale, two media. Every size above is in rem, and a rem is
          the root font size -- so print rescales the root once and the whole
          scale follows, instead of restating each size in pt and inverting the

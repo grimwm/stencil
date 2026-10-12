@@ -185,6 +185,190 @@ local function text_of(value)
   return text
 end
 
+--- A CSS string literal's contents. The result is still wrapped in quotes by
+--- the caller. Control characters, quotes and the characters that would close
+--- the surrounding `<style>` element are written as hex escapes; everything
+--- else, including UTF-8, is copied through.
+local function css_string(text)
+  return (text:gsub("[%c\\\"<>&]", function(ch)
+    return string.format("\\%X ", string.byte(ch))
+  end))
+end
+
+local FOOTER_BOX_STYLE = table.concat({
+  "font-family:var(--font-serif);",
+  "font-size:9pt;",
+  "color:var(--text);",
+}, "")
+
+local function footer_box(content)
+  return "content:" .. content .. ";" .. FOOTER_BOX_STYLE
+end
+
+local function footer_rule(page, box, content)
+  return page .. "{" .. box .. "{" .. footer_box(content) .. "}}"
+end
+
+--- One `pageno` value: a scalar (`center`, `of`) or a list of those (`[center, of]`).
+---
+--- Bare `pageno` passes nil and means a plain number on the outside edge.
+--- Returns place ("outside" or "center") and format ("number" or "of").
+local function pageno_options(value)
+  local place, format = "outside", "number"
+  if value == nil then
+    return place, format
+  end
+  if pandoc.utils.type(value) ~= "List" and text_of(value) == nil then
+    return place, format
+  end
+  local flags = {}
+  if pandoc.utils.type(value) == "List" then
+    for _, item in ipairs(value) do
+      local flag = text_of(item)
+      if flag ~= nil then
+        table.insert(flags, flag)
+      end
+    end
+  else
+    table.insert(flags, text_of(value))
+  end
+  local saw_place, saw_format = false, false
+  for _, flag in ipairs(flags) do
+    if flag == "center" then
+      if saw_place then
+        error("footer: pageno sets center more than once.")
+      end
+      saw_place = true
+      place = "center"
+    elseif flag == "of" then
+      if saw_format then
+        error("footer: pageno sets of more than once.")
+      end
+      saw_format = true
+      format = "of"
+    else
+      error(
+        "footer: pageno: " .. flag .. " is not a page-number option. "
+        .. "Use center, of, or both."
+      )
+    end
+  end
+  return place, format
+end
+
+--- The print stylesheet for `footer:`, or nil when the key asks for nothing.
+---
+--- Odd pages (CSS :right) put the title on the left and the page number on
+--- the right. Even pages (:left) swap them. `pageno: center` pins the number
+--- in the middle of every page instead, and the title still swaps. `of`
+--- prints the total, "4 of 7". A title value replaces the document title.
+local function footer_css(meta)
+  local value = meta.footer
+  if value == nil then
+    return nil
+  end
+  local entries = {}
+  local kind = pandoc.utils.type(value)
+  if kind == "List" then
+    for _, item in ipairs(value) do
+      table.insert(entries, item)
+    end
+  elseif text_of(value) == nil then
+    -- `footer:` with nothing after it, the same as leaving the key out.
+    return nil
+  else
+    table.insert(entries, value)
+  end
+  if #entries == 0 then
+    return nil
+  end
+
+  local want_pageno = false
+  local pageno_value = nil
+  local want_title = false
+  local title_override = nil
+
+  for _, item in ipairs(entries) do
+    local item_kind = pandoc.utils.type(item)
+    local name, entry_value
+    -- Pandoc 3.10 reports a MetaMap as "table"; earlier releases say "Map".
+    if item_kind == "Map" or item_kind == "table" then
+      local count = 0
+      for key, entry in pairs(item) do
+        count = count + 1
+        name, entry_value = key, entry
+      end
+      if count ~= 1 then
+        error("footer: each entry is one name, or one name and its value.")
+      end
+    else
+      name = text_of(item)
+      if name == nil then
+        error("footer: an entry is empty.")
+      end
+    end
+
+    if name == "pageno" then
+      if want_pageno then
+        error("footer: pageno is set twice.")
+      end
+      want_pageno = true
+      pageno_value = entry_value
+    elseif name == "title" then
+      if want_title then
+        error("footer: title is set twice.")
+      end
+      want_title = true
+      title_override = entry_value
+    else
+      error("footer: " .. name .. " is not a footer entry. Use pageno or title.")
+    end
+  end
+
+  local rules = {}
+  if want_pageno then
+    local place, format = pageno_options(pageno_value)
+    local content = "counter(page)"
+    if format == "of" then
+      content = 'counter(page) " of " counter(pages)'
+    end
+    if place == "center" then
+      table.insert(rules, footer_rule("@page", "@bottom-center", content))
+    else
+      table.insert(rules, footer_rule("@page :right", "@bottom-right", content))
+      table.insert(rules, footer_rule("@page :left", "@bottom-left", content))
+    end
+  end
+
+  if want_title then
+    local title = text_of(title_override)
+    if title == nil then
+      title = text_of(meta.title)
+    end
+    if title == nil then
+      error(
+        "footer: title is set, and this document has no title. "
+        .. 'Give title a string, as in title: "Midterm".'
+      )
+    end
+    local quoted = '"' .. css_string(title) .. '"'
+    table.insert(rules, footer_rule("@page :right", "@bottom-left", quoted))
+    table.insert(rules, footer_rule("@page :left", "@bottom-right", quoted))
+  end
+
+  if #rules == 0 then
+    return nil
+  end
+  local html = table.concat({
+    '<style class="doc-footer">',
+    "@media print{",
+    table.concat(rules),
+    "}",
+    "</style>",
+  }, "")
+  return pandoc.MetaBlocks({ pandoc.RawBlock("html", html) })
+end
+
 --- `blanks:` as a list of labels, or nil when it asks for none.
 ---
 --- A YAML sequence is already a list. A single string is one label: left as
@@ -622,6 +806,14 @@ function Meta(meta)
   -- would sit in a pane whose `display` is `none` and a select-all would miss
   -- it.
   meta["ai-prompt-html"] = prompt_html(meta.ai_prompt)
+
+  -- `footer:` is print chrome: a title and a page number in the page margin.
+  -- The rules cannot live in _page-style.css.j2, which is one sheet for every
+  -- document this package generates. Which slots are on, and what the title
+  -- says, are this document's. A deck template never prints `footer-css`, so
+  -- the key is a no-op there, the same way `blanks` is.
+  meta["footer-css"] = footer_css(meta)
+  meta.footer = nil
 
   return meta
 end

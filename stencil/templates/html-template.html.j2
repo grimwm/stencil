@@ -15,6 +15,9 @@
   <style>
 {% include '_page-style.css.j2' %}
   </style>
+$if(footer-css)$
+$footer-css$
+$endif$
 </head>
 <body>
   {# Mount point for the theme control. A div rather than nothing so the

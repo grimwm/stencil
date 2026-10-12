@@ -9,6 +9,10 @@ and the closed epics in `.beads/issues.jsonl` are the readable index.
 How the version gets bumped is written down in
 [AGENTS.md](AGENTS.md#cutting-a-release), not here.
 
+## 1.11.0
+
+- **`footer:` prints a title and a page number in the page margin.** On an odd page the title is on the left and the number on the right; even pages swap them. `title: "A new name"` prints that instead of the document title. `pageno: center` centers the number, `pageno: of` prints `4 of 7`, and `pageno: [center, of]` does both. A deck ignores the key. Regenerate to pick it up.
+
 ## 1.10.0
 
 - **`.page-split` starts a new page.** Put it on a heading or a code fence instead of `style="break-before: page"`. A listing does not need a wrapping div. 1.9.0 used the class to let a block continue, which left authors writing the style attribute the class was supposed to replace. Regenerate to pick it up.

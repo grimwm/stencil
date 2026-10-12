@@ -157,6 +157,7 @@ the pipeline reads, and what each one does on each side:
 | `title`         | Page header, and the browser tab                | Title slide, and the browser tab                            |
 | `subtitle`      | Under the title                                 | Under the title on the title slide                          |
 | `blanks`        | Write-in lines under the title rule             | Ignored                                                     |
+| `footer`        | Title and page number in the page margin        | Ignored                                                     |
 | `brand`         | Top right, above `program`                      | Above the title on the title slide                          |
 | `brand-alt`     | Alt text; **required** when `brand` is an image | Same                                                        |
 | `cover`         | Ignored                                         | Figure on the title slide (image path)                      |
@@ -216,6 +217,45 @@ blanks:
   - Name
   - Date
 ---
+```
+
+`footer` is a list of what to print in the page margin. A deck ignores it. On an odd page the
+title sits on the left and the page number on the right; even pages swap them, so the number stays
+on the outside edge.
+
+```markdown
+---
+title: "Midterm"
+footer:
+  - pageno
+  - title
+---
+```
+
+`title` with no value prints the document title. A string prints that instead:
+
+```markdown
+footer:
+  - title: "CS 234 Midterm"
+```
+
+`pageno` with no value prints the number. `center` puts it in the middle of every page, and the
+title still swaps sides. `of` prints the total as well, `4 of 7`. One option is a scalar; both
+are a list:
+
+```markdown
+footer:
+  - pageno: center
+```
+
+```markdown
+footer:
+  - pageno: of
+```
+
+```markdown
+footer:
+  - pageno: [center, of]
 ```
 
 #### Where a document puts them
