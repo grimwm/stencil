@@ -9,6 +9,10 @@ and the closed epics in `.beads/issues.jsonl` are the readable index.
 How the version gets bumped is written down in
 [AGENTS.md](AGENTS.md#cutting-a-release), not here.
 
+## 1.7.0
+
+- **`stencil update` offers the newest release tag.** Every other command does the same check after this install has been idle for an hour. A source checkout is left alone. `STENCIL_NO_UPDATE_CHECK=1` skips the automatic check.
+
 ## 1.6.0
 
 - **The build targets are `doc`, `slide`, and `pdf`.** 1.5.0 called the
