@@ -39,9 +39,9 @@ $if(has-facts)$
        does not use. They were a stacked column and a badge beside the title;
        the badge read as a UI chip on a document that has no other chrome.
 
-       Separators are their own elements rather than ::before content, so the
-       flex row can space them evenly instead of hanging each one off the item
-       that follows it. Each is conditional on something actually preceding
+       Separators are their own elements rather than ::before content, so each
+       one can stay with the fact it follows while the free space sits between
+       the facts. Each is conditional on something actually preceding
        it AND on the item it precedes existing -- a separator emitted on
        'something came before' alone strands one whenever the next fact is
        absent, which is the bug this shape prevents.

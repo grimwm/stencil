@@ -481,8 +481,8 @@ function Meta(meta)
   -- it.
   meta["has-facts"] = (has_date or has_due or has_points) or nil
 
-  -- Separators, emitted as their own elements so the flex row can space them
-  -- evenly rather than hanging them off whichever item follows. Each one asks
+  -- Separators, emitted as their own elements so each stays with the fact
+  -- it follows instead of taking a share of the free space. Each one asks
   -- "is anything in front of me?", which is several keys OR'd together and so
   -- cannot be done in a pandoc template.
   meta["sep-before-due"] = has_date or nil

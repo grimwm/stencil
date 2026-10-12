@@ -1116,11 +1116,15 @@
       }
     }
 
-    /* Issued, Due and Points on one line, spread across whatever horizontal
-       space the author leaves. space-between rather than a fixed gap: the
-       point is to use the width, and the separators are real elements so they
-       are spaced with everything else rather than hugging the item after
-       them.
+    /* Issued, Due and Points on one line. The free space sits between the
+       facts, and each middot stays with the fact it follows. space-between on
+       every child, including the separator, parks that dot in the middle of
+       the gap: Issued on the left, Points on the right, and a middot floating
+       between them.
+
+       margin-left: auto on every fact after the first splits that free space
+       among the facts. The separator is the next flex item after the fact it
+       belongs to, so it travels with that fact instead of taking a share.
 
        flex: 1 with min-width: 0 so a long author shortens this group instead
        of pushing it off the page. */
@@ -1135,8 +1139,20 @@
       display: flex;
       flex-wrap: wrap;
       align-items: baseline;
-      justify-content: space-between;
-      gap: 0.35rem 0.5rem;
+      justify-content: flex-start;
+      gap: 0.35rem 0;
+    }
+
+    .doc-fact ~ .doc-fact {
+      margin-left: auto;
+    }
+
+    /* After the rule above, not beside the other narrow-header resets. That
+       block is earlier in the file, and the same selector later would win. */
+    @media (max-width: 40rem) {
+      .doc-fact ~ .doc-fact {
+        margin-left: 0;
+      }
     }
 
     .doc-fact {
