@@ -629,6 +629,12 @@
       width: 100%;
       border-collapse: collapse;
       table-layout: fixed;
+      /* A following paragraph has no top margin of its own -- Bootstrap sets
+         that to 0 -- so without this the next question sits on the border.
+         1rem is the gap a paragraph already leaves under itself. A heading's
+         larger top margin still wins where the two meet, and a side-by-side
+         table zeros this below. */
+      margin-bottom: 1rem;
     }
 
     /* Disable fixed layout for tables with 6+ columns */

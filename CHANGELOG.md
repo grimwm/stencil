@@ -9,6 +9,10 @@ and the closed epics in `.beads/issues.jsonl` are the readable index.
 How the version gets bumped is written down in
 [AGENTS.md](AGENTS.md#cutting-a-release), not here.
 
+## 1.12.0
+
+- **A table leaves a gap before whatever follows it.** A paragraph has no top margin, so a question under a table was sitting on the border, on screen and in print. The gap is the same `1rem` a paragraph already leaves under itself. Regenerate to pick it up.
+
 ## 1.11.0
 
 - **`footer:` prints a title and a page number in the page margin.** On an odd page the title is on the left and the number on the right; even pages swap them. `title: "A new name"` prints that instead of the document title. `pageno: center` centers the number, `pageno: of` prints `4 of 7`, and `pageno: [center, of]` does both. A deck ignores the key. Regenerate to pick it up.

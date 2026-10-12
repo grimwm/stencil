@@ -454,6 +454,27 @@ def test_page_split_starts_a_new_page_and_a_listing_may_continue():
     assert "page-break-before: always" in split.group(1)
 
 
+def test_a_table_leaves_the_gap_a_paragraph_already_does():
+    """A question after a table was sitting on the border.
+
+    Bootstrap gives a paragraph no top margin, and the table had none below,
+    so the two margins had nothing to collapse into a gap. 1rem is what a
+    paragraph already leaves under itself.
+    """
+    css = strip_comments(source("_page-style.css.j2"))
+    block = re.search(
+        r"(?<![.\w-])table\s*\{([^}]*table-layout:\s*fixed[^}]*)\}",
+        css,
+        re.S,
+    )
+    assert block, "no table layout rule"
+    assert "margin-bottom: 1rem" in block.group(1)
+    side_by_side = re.search(r"\.side-by-side table\s*\{([^}]*)\}", css, re.S)
+    assert side_by_side and "margin: 0" in side_by_side.group(1), (
+        "side-by-side tables would inherit the gap and stop sitting flush"
+    )
+
+
 def test_the_control_is_hidden_in_print():
     css = strip_comments(source("_page-style.css.j2"))
     print_blocks = re.findall(r"@media print[^{]*\{(.*?)\n    \}", css, re.S)
