@@ -126,3 +126,53 @@ def test_a_title_with_no_document_title_fails(render):
     )
     assert result.returncode != 0, result.stderr
     assert "no title" in result.stderr
+
+
+def test_pageno_set_twice_fails(render):
+    result, output = render(
+        "doc",
+        "twice.md",
+        text=document('title: "Midterm"\nfooter:\n  - pageno\n  - pageno: center\n'),
+        output="twice.html",
+    )
+    assert result.returncode != 0, result.stderr
+    assert "pageno is set twice" in result.stderr
+    assert not output.exists()
+
+
+def test_title_set_twice_fails(render):
+    result, output = render(
+        "doc",
+        "twicetitle.md",
+        text=document(
+            'title: "Midterm"\nfooter:\n  - title\n  - title: "CS 234 Midterm"\n'
+        ),
+        output="twicetitle.html",
+    )
+    assert result.returncode != 0, result.stderr
+    assert "title is set twice" in result.stderr
+    assert not output.exists()
+
+
+def test_center_repeated_in_one_pageno_fails(render):
+    result, output = render(
+        "doc",
+        "twicecenter.md",
+        text=document('title: "Midterm"\nfooter:\n  - pageno: [center, center]\n'),
+        output="twicecenter.html",
+    )
+    assert result.returncode != 0, result.stderr
+    assert "sets center more than once" in result.stderr
+    assert not output.exists()
+
+
+def test_of_repeated_in_one_pageno_fails(render):
+    result, output = render(
+        "doc",
+        "twiceof.md",
+        text=document('title: "Midterm"\nfooter:\n  - pageno: [of, of]\n'),
+        output="twiceof.html",
+    )
+    assert result.returncode != 0, result.stderr
+    assert "sets of more than once" in result.stderr
+    assert not output.exists()
