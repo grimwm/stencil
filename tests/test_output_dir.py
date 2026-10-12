@@ -121,25 +121,46 @@ def test_the_generated_compose_file_is_valid_yaml(elsewhere):
             )
 
 
-def check_access_directory(text: str) -> str:
-    """The directory the generated check-access service is told to search.
+def check_access_pages(text: str) -> list[str]:
+    """The HTML paths the generated check-access recipe names.
 
-    Read off the parsed service rather than grepped out of the script, because
-    stn-s5b moved the script into pipeline.py and the directory became its
-    argument. Asserting the argument is also the stronger assertion: the script
-    builds its file:// URL from this one path, so there is no second place for
-    it to disagree with -- which is exactly how check-access came to search
-    /out while asking Chromium for file:///workspace//out/... and could not
-    pass at all for a package with an output_dir.
+    A directory argument used to be baked into the service, and the script
+    globbed ``*.html`` there. That missed every page in a subdirectory and
+    could not honour ``D=``. The recipe now names each page, under ``$(OUT)``,
+    the same way check-pdf names its PDFs.
     """
-    service = yaml.safe_load(text)["services"]["check-access"]
-    return service["entrypoint"][-1]
+    line = next(l for l in text.splitlines() if "compose_once,check-access)" in l)
+    return [w for w in line.split() if w.startswith("$(OUT)/") and ".html" in w]
 
 
 def test_check_access_looks_in_the_output_directory(elsewhere):
-    """The silent one. It loops over a glob, and a glob that matches nothing
-    leaves $failed at 0 -- which exits 0 and reads exactly like passing."""
-    assert check_access_directory(compose(elsewhere)) == "/out"
+    """The silent one. A glob of the package root matches nothing when the
+    pages were written under /out, and a glob that matches nothing used to
+    exit 0."""
+    pages = check_access_pages(makefile(elsewhere))
+    assert pages, "check-access names no pages"
+    assert all(p.startswith("$(OUT)/") for p in pages), pages
+
+
+def test_check_access_names_a_nested_page_and_honours_d(demo_config, generate_package):
+    """A page in a subdirectory is named, and D= selects it.
+
+    The old recipe globbed the package root, so exams/midterm.html was never
+    opened and D=exams/midterm.md changed nothing.
+    """
+    config = demo_config
+    config["packages"]["demo"]["docs"] = ["exams/midterm.md", "Guide.md"]
+    config["packages"]["demo"]["slides"] = ["lessons/Deck.md"]
+    package = generate_package(config)
+    line = next(
+        l for l in makefile(package).splitlines() if "compose_once,check-access)" in l
+    )
+    assert "$(OUT)/exams/midterm$(OUTPUT_SUFFIX).html" in line
+    assert "$(OUT)/Guide$(OUTPUT_SUFFIX).html" in line
+    assert "$(OUT)/lessons/Deck$(OUTPUT_SUFFIX).html" in line
+    assert "_stencil_wanted" in line
+    assert "_stencil_d_check" in line
+    assert "*.html" not in line
 
 
 def test_check_access_fails_when_it_checks_nothing(elsewhere):
@@ -211,7 +232,11 @@ def test_a_package_without_output_dir_is_unchanged(doc_package):
     assert "OUT := ." in text
     assert "OUT_HOST := ." in text
     assert ":/out:z" not in compose(package), "an unused second mount was added"
-    assert check_access_directory(compose(package)) == "/workspace"
+    pages = check_access_pages(text)
+    assert "$(OUT)/Guide$(OUTPUT_SUFFIX).html" in pages
+    assert "$(OUT)/Deck$(OUTPUT_SUFFIX).html" in pages
+    service = yaml.safe_load(compose(package))["services"]["check-access"]
+    assert service["entrypoint"][-1] == "check-access"
 
 
 def test_output_dir_is_resolved_against_the_config_not_the_cwd(tmp_path, demo_config):
@@ -616,7 +641,7 @@ def test_a_list_valued_output_dir_is_refused_by_the_cli_without_a_traceback(tmp_
 #     Failed to convert /out/document.html:
 #       net::ERR_FILE_NOT_FOUND at file:///workspace//out/document.html
 #
-# That is the SAME defect check_access_directory's docstring records for the
+# That is the SAME defect check_access_pages's docstring records for the
 # sibling service, in the sibling service, found the same way and fixed the same
 # way: one path, built from the argument, rather than two that have to agree.
 # It shipped because every test in this file reads text. This one runs.

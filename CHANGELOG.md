@@ -9,6 +9,10 @@ and the closed epics in `.beads/issues.jsonl` are the readable index.
 How the version gets bumped is written down in
 [AGENTS.md](AGENTS.md#cutting-a-release), not here.
 
+## 1.13.0
+
+- **`make check-access` checks every generated page, and `D=` limits it to one.** It was globbing HTML in the package root, so a page in a subdirectory was never opened and `D=exams/midterm.md` changed nothing. It now names each page the way `check-pdf` names its PDFs. Regenerate to pick it up.
+
 ## 1.12.0
 
 - **A table leaves a gap before whatever follows it.** A paragraph has no top margin, so a question under a table was sitting on the border, on screen and in print. The gap is the same `1rem` a paragraph already leaves under itself. Regenerate to pick it up.

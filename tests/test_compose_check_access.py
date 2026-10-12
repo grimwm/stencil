@@ -39,9 +39,9 @@ the bug is decoration:
 - Reintroducing ``file:///workspace/$f`` in ``CHECK_ACCESS_SCRIPT`` fails both
   cases below with the shipped error verbatim --
   ``net::ERR_FILE_NOT_FOUND at file:///workspace//out/document.html``.
-- Passing ``/workspace`` to the service in both layouts (dropping the
-  ``has_package_output_dir`` arm on the argument) fails the output_dir case
-  with ``check-access found no HTML to check``.
+- Running the service with no page argument fails both layouts with
+  ``check-access found no HTML to check``. The makefile is what names the
+  pages; a directory baked into the entrypoint is the bug this replaced.
 - Dropping the ``build:`` stanza and clearing the tag locally, which is what a
   contributor's machine looks like, fails both: the image the file names does
   not exist and nothing built it.
@@ -281,7 +281,9 @@ def test_the_service_checks_products_beside_their_sources(
         "the doc service reported success and the page is not in the package"
     )
 
-    checked = run("run", "--rm", "-T", "check-access", timeout=1800)
+    checked = run(
+        "run", "--rm", "-T", "check-access", f"./{RENDERED}", timeout=1800
+    )
     output = checked.stdout + checked.stderr
 
     assert "ERR_FILE_NOT_FOUND" not in output, (
@@ -356,7 +358,9 @@ def test_the_service_checks_an_output_directory(
         "test and the case below would pass for the wrong reason"
     )
 
-    checked = run("run", "--rm", "-T", "check-access", timeout=1800)
+    checked = run(
+        "run", "--rm", "-T", "check-access", f"/out/{RENDERED}", timeout=1800
+    )
     output = checked.stdout + checked.stderr
 
     # The exact shape of the shipped defect, and the first thing to look at

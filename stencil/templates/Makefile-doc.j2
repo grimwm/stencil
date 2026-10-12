@@ -295,9 +295,13 @@ endif
 {% endfor %}
 	@echo "Generated PDFs$(if $(WITH), with features: $(WITH),)"
 
-check-access: ## Check HTML accessibility (WCAG 2.1 AA)
+# The pages are named, the same way check-pdf names its PDFs. A glob of the
+# package root misses every page in a subdirectory, and it cannot honour D=.
+# $(OUTPUT_SUFFIX) has to be here: `make check-access WITH=hidden` checks the
+# -hidden HTML, not the plain file beside it.
+check-access: ## Check HTML accessibility (WCAG 2.1 AA; D=file.md checks one file)
 	$(STENCIL_COMPOSE) build check-access
-	$(call compose_once,check-access)
+	$(_stencil_d_check)$(call compose_once,check-access){% for md in docs + slides %} $(if $(call _stencil_wanted,{{ md }} {{ md | replace('.md', '') }}), $(OUT)/{{ md | replace('.md', '') }}$(OUTPUT_SUFFIX).html ){% endfor %}
 
 # Depends on pdf for the same reason check-access does not need to depend on
 # doc: there is a file it is meaningless without. veraPDF exits 0 on an empty

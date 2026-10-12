@@ -223,7 +223,7 @@ def one_page(pdf_workspace, tmp_path_factory):
 def test_the_script_passes_over_products_beside_their_sources(one_page):
     """The default layout: no output_dir, products land in the package."""
     result = pipeline.check_access(
-        workdir=one_page, directory="/workspace", timeout=900
+        workdir=one_page, files=["document.html"], timeout=900
     )
     assert result.returncode == 0, (
         f"check-access failed\nstdout: {result.stdout[-3000:]}\n"
@@ -248,7 +248,7 @@ def test_the_script_passes_over_an_output_directory(one_page, tmp_path_factory):
     """
     result = pipeline.check_access(
         workdir=tmp_path_factory.mktemp("sources"),
-        directory="/out",
+        files=["/out/document.html"],
         out_dir=one_page,
         timeout=900,
     )
@@ -269,7 +269,7 @@ def test_the_script_fails_when_it_finds_nothing(tmp_path_factory):
     exactly like success -- so moving the output somewhere the loop does not
     look would report a clean bill of health having opened no file."""
     result = pipeline.check_access(
-        workdir=tmp_path_factory.mktemp("empty"), directory="/workspace", timeout=300
+        workdir=tmp_path_factory.mktemp("empty"), files=[], timeout=300
     )
     assert result.returncode != 0, (
         "check-access reported success having checked nothing:\n" + result.stdout

@@ -556,7 +556,7 @@ convention rather than stencil's.
 | `doc`          | Generate all HTML (add `WITH=hidden` for extras; `D=file.md` builds one file)                                     |
 | `slide`        | Generate HTML slide decks only (`D=file.md` builds one deck)                                                      |
 | `pdf`          | Print the generated HTML to PDF/UA-1 files (`D=file.md` prints one file)                                          |
-| `check-access` | Check the generated HTML against WCAG 2.1 AA (pa11y)                                                              |
+| `check-access` | Check the generated HTML against WCAG 2.1 AA (pa11y); `D=` checks the file it names                               |
 | `check-pdf`    | Check the generated PDFs for PDF/UA-1 conformance (veraPDF); `D=` checks the file it names                        |
 | `format-md`    | Format markdown files with prettier                                                                               |
 | `pkg`          | `zip` packages: the submission archive; `doc` packages with `package_sources`: the combined PDF. Absent otherwise |

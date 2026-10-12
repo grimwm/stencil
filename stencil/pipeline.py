@@ -139,11 +139,23 @@ exit $failed
 # rather than an approximation of it. tests/test_check_access.py runs it inside
 # the browser image, over both layouts.
 #
-# Nothing after this line is cwd-relative: $directory arrives absolute in both
-# layouts and the file:// URL is built from it, which is the property the rest of
-# this comment block already argues for. Do not add a relative path below without
-# revisiting this.
+# The makefile names each page. A top-level glob misses every page in a
+# subdirectory -- exams/midterm.html never ran -- and it cannot honour D=.
+# Paths may be relative to the package directory (`./exams/midterm.html`) or
+# absolute (`/out/exams/midterm.html`). They are made absolute BEFORE the cd:
+# pa11y is launched from the tools tree, outside the mount, and a relative
+# file:// would be read from there.
 CHECK_ACCESS_SCRIPT = (
+    """\
+resolved=$(mktemp)
+trap 'rm -f "$resolved"' EXIT
+for raw in "$@"; do
+  case "$raw" in
+    /*) printf '%s\\n' "$raw" ;;
+    *) printf '%s\\n' "$PWD/$raw" ;;
+  esac
+done > "$resolved"
+"""
     f"""\
 cd {BROWSER_TOOLS_DIR} || {{
   echo "check-access: {BROWSER_TOOLS_DIR} is not there, so this cannot move out" >&2
@@ -153,11 +165,16 @@ cd {BROWSER_TOOLS_DIR} || {{
 }}
 """
     """\
-directory=${1:?check-access needs a directory to search}
 failed=0
 checked=0
-for f in "$directory"/*.html; do
-  [ -f "$f" ] || continue
+while IFS= read -r f; do
+  [ -n "$f" ] || continue
+  if [ ! -f "$f" ]; then
+    echo "check-access expected $f and it is not there." >&2
+    echo "Run 'make doc' first." >&2
+    failed=1
+    continue
+  fi
   # Basename, because $f carries a directory prefix. Comparing the full path
   # would stop skipping the templates and pa11y would report on stencil's own
   # scaffolding.
@@ -172,15 +189,14 @@ for f in "$directory"/*.html; do
     pa11y --config "/opt/pa11y-$theme.json" --standard WCAG2AA \\
       "file://$f" || failed=1
   done
-done
-# Zero files checked is a build error, not a pass. The loop is over a glob, and
-# a glob that matches nothing leaves the body unrun and $failed at 0 -- which
+done < "$resolved"
+# Zero files checked is a build error, not a pass. No arguments, or arguments
+# that name nothing, leave $failed at 0 when the loop body never runs -- which
 # exits 0 and reads exactly like success. That is the same silent pass veraPDF
-# has when handed no files, and moving the output somewhere this loop does not
-# look is precisely how it would happen.
+# has when handed no files.
 if [ "$checked" -eq 0 ]; then
   echo "check-access found no HTML to check." >&2
-  echo "Run 'make doc' first. A glob that matches nothing exits 0, so this" >&2
+  echo "Run 'make doc' first. Checking nothing exits 0, so this" >&2
   echo "would otherwise have reported success having checked nothing at all." >&2
   exit 1
 fi
@@ -768,13 +784,13 @@ def html_to_pdf(
 def check_access(
     *,
     workdir: Path,
-    directory: str = "/workspace",
+    files: list[str],
     out_dir: Path | None = None,
     tag: str | None = None,
     runtime: str | None = None,
     timeout: float | None = None,
 ) -> subprocess.CompletedProcess:
-    """Run the generated check-access service's script over a directory.
+    """Run the generated check-access service's script over ``files``.
 
     The counterpart to ``verapdf`` above, and it exists for the same reason:
     same image, same script, same mounts as the compose service, so a test
@@ -782,8 +798,9 @@ def check_access(
 
     ``out_dir`` mounts a second directory at /out, which is what a package with
     an ``output_dir`` gets -- its products are a sibling of the sources, and a
-    sibling is ``..`` away, which escapes a bind mount. Pass ``directory``
-    ``/out`` to search it.
+    sibling is ``..`` away, which escapes a bind mount. A page there is named
+    ``/out/<file>.html``. A page beside its source is a path relative to
+    ``/workspace``, which is the working directory this starts in.
     """
     tag = tag or browser_image_tag()
     runtime = runtime or container_runtime()
@@ -807,10 +824,10 @@ def check_access(
             tag,
             "-c",
             CHECK_ACCESS_SCRIPT,
-            # $0 for the script, then the directory as $1 -- exactly the two
-            # arguments the compose service passes.
+            # $0 for the script, then the pages -- exactly the arguments the
+            # makefile appends to `compose run check-access`.
             "check-access",
-            directory,
+            *files,
         ],
         capture_output=True,
         text=True,

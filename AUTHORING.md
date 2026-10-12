@@ -1237,7 +1237,8 @@ make check-pdf      # the PDF, at PDF/UA-1  (builds it first)
 **Two checks, because there are two standards.** `make check-access` runs pa11y against every built
 HTML file at WCAG 2.1 AA, in **both** themes — it clicks the theme control the way a reader would,
 because a colour that only fails in dark is still a failure. It catches a missing diagram caption, a
-contrast problem, or a heading level skipped on the way down.
+contrast problem, or a heading level skipped on the way down. `D=file.md` checks that one page, the
+same way `make doc` builds one file, including a page that lives in a subdirectory.
 
 `make check-pdf` runs veraPDF against the PDFs at PDF/UA-1 (ISO 14289-1), and it depends on
 `make pdf`, so it builds what it is about to check. The two standards disagree about figures: an

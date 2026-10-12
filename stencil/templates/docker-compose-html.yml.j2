@@ -172,10 +172,9 @@
       - -c
       - |
 {{ check_access_script | replace('$', '$$') | indent(8, first=True) }}
-      # $$0 for the script itself, then the directory to search as $$1. It is
-      # absolute in both layouts, and the file:// URL is built from it, so
-      # there is one path here rather than two that have to agree.
+      # $$0 for the script itself. The makefile appends each page. A directory
+      # baked in here is what made D= a no-op and hid every nested page: the
+      # script globbed that one directory and never saw the arguments.
       - check-access
-      - {% if has_package_output_dir %}/out{% else %}/workspace{% endif %}
 
     restart: "no"

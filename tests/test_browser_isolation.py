@@ -233,7 +233,9 @@ def test_check_access_ignores_a_workspace_puppeteerrc(tmp_path, rendered_page):
     """
     workdir = _mount(tmp_path, rendered_page)
 
-    result = pipeline.check_access(workdir=workdir, timeout=300)
+    result = pipeline.check_access(
+        workdir=workdir, files=["document.html"], timeout=300
+    )
 
     assert result.returncode == 0, (
         f"check-access exited {result.returncode}\n"
@@ -333,7 +335,7 @@ def test_check_access_refuses_when_it_cannot_leave_the_mount(tmp_path, rendered_
     workdir = _mount(tmp_path, rendered_page, config=False)
 
     result = pipeline.check_access(
-        workdir=workdir, tag=pipeline.NODE_IMAGE, timeout=120
+        workdir=workdir, files=["document.html"], tag=pipeline.NODE_IMAGE, timeout=120
     )
 
     assert result.returncode != 0, (
