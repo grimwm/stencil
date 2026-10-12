@@ -10,6 +10,7 @@ Usage:
     stencil [--config <path>] show [-p <pkg>] [-k <dotted-path>]
     stencil help [COMMAND]                        # Same as -h / --help; optional COMMAND for subcommand help
     stencil version                               # Print the installed version
+    stencil update [--yes]                        # Install the newest release tag, if newer
 """
 
 import argparse
@@ -37,7 +38,7 @@ from jinja2 import (
 )
 from jinja2.exceptions import TemplateNotFound
 
-from . import __version__, assets, pipeline
+from . import __version__, assets, pipeline, update_check
 from .capabilities import (
     Capability,
     builtin_capabilities,
@@ -5658,10 +5659,27 @@ def _main():
 
     sub.add_parser("version", help="Print the installed stencil version")
 
+    update_p = sub.add_parser(
+        "update",
+        help="Check the newest release tag and offer to install it",
+    )
+    update_p.add_argument(
+        "--yes",
+        action="store_true",
+        help="Install the newer release without prompting",
+    )
+
     help_p = sub.add_parser("help", help="Show help (optionally for a subcommand)")
     help_p.add_argument("topic", nargs="?", help="Subcommand to show help for")
 
     args = parser.parse_args()
+
+    # Before the config is touched. `update` always looks; every other command
+    # looks only after an hour unused. Neither one needs a project.
+    if args.command == "update":
+        sys.exit(update_check.command(yes=getattr(args, "yes", False)))
+
+    update_check.on_startup()
 
     # Answered before the config is touched: the question is usually asked
     # because an install is suspect, and that is no time to demand a project.

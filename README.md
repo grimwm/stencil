@@ -38,6 +38,7 @@ stencil [--config PATH] COMMAND [OPTIONS]
 | `install` | Update `.gitignore` with stencil-managed entries  |
 | `help`    | Show help (optionally for a specific command)     |
 | `version` | Print the installed stencil version               |
+| `update`  | Offer to install the newest release tag           |
 
 **Examples:**
 
@@ -48,7 +49,15 @@ stencil gen --all                 # generate all packages
 stencil gen mypackage --dry-run   # preview without writing
 stencil install                   # update .gitignore
 stencil --config other.yaml list  # use alternate config file
+stencil update                    # install the newest release tag
 ```
+
+`stencil update` compares this install with the highest `vX.Y.Z` tag on
+GitHub and asks before installing it. `--yes` skips the question. Every other
+command does the same comparison, but only when this install has not been run
+for at least an hour; a non-interactive run prints the notice instead of
+asking. `STENCIL_NO_UPDATE_CHECK=1` turns that automatic check off. A source
+checkout is left alone.
 
 ## Configuration
 

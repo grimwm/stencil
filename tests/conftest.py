@@ -24,6 +24,11 @@ from filelock import FileLock
 
 import stencil
 
+# The hourly update check shells out to git. Tests that invoke the CLI must
+# not do that and must not prompt. tests/test_update_check.py calls the check
+# with a fake fetcher and disabled=False, so this does not cover it up.
+os.environ.setdefault("STENCIL_NO_UPDATE_CHECK", "1")
+
 FIXTURES = Path(__file__).parent / "fixtures"
 
 # --- the tests must be testing THIS checkout (stn-2et) ---------------------

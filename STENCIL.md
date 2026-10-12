@@ -280,8 +280,9 @@ Two consequences worth being deliberate about:
 - `stencil gen` and `stencil gen --dry-run` both run whatever is on that path. `--dry-run` writes
   nothing to the output tree and still renders every template, so it is not a safe way to inspect an
   untrusted config; the render's output also lands in the preview, and therefore in any CI log.
-- `stencil clean`, `stencil install`, `stencil list` and `stencil version` execute nothing from the
-  config at all. Those are the ones that are safe to point at a config you have not read.
+- `stencil clean`, `stencil install`, `stencil list`, `stencil version` and `stencil update` execute
+  nothing from the config at all. Those are the ones that are safe to point at a config you have not
+  read. `update` does install a newer stencil into the current environment when you accept.
 
 None of this is a defect to be fixed — overriding a template *is* the extension mechanism, and a
 template that could not run code could not generate anything. It is a reason to give a
