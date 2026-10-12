@@ -9,6 +9,10 @@ and the closed epics in `.beads/issues.jsonl` are the readable index.
 How the version gets bumped is written down in
 [AGENTS.md](AGENTS.md#cutting-a-release), not here.
 
+## 1.9.0
+
+- **`.page-split` lets one printed block continue.** Listings, quotes, tables, and figures still stay in one piece, so a block taller than the room left on the page moves to the next sheet. Add the class when that block should start where it falls and continue. Regenerate to pick it up.
+
 ## 1.8.0
 
 - **`blanks:` draws write-in lines in the document header.** A list of labels, such as Name and Date, becomes a labelled line under the title rule. A deck ignores the key. Regenerate to pick it up.

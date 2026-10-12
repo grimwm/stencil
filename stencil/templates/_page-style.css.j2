@@ -828,6 +828,18 @@
         page-break-inside: avoid;
       }
 
+      /* The rule above keeps a listing, quote, table, or figure in one piece,
+         and a block taller than the room left on the page moves to the next
+         sheet rather than splitting. `.page-split` is the opt-in: that one
+         block starts where it falls and continues. */
+      pre.page-split,
+      blockquote.page-split,
+      table.page-split,
+      figure.page-split {
+        page-break-inside: auto;
+        break-inside: auto;
+      }
+
       pre {
         font-size: 0.92rem;
       }

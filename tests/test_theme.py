@@ -423,6 +423,35 @@ def test_the_glyph_is_hidden_and_the_label_carries_the_name():
     )
 
 
+def test_a_printed_block_stays_intact_unless_the_author_opts_in():
+    """Listings, quotes, tables, and figures do not split across a printed page.
+
+    A block taller than the room left on the page would otherwise start where
+    it falls and continue, which is what an author wants for one long listing
+    and not for every listing. `.page-split` is that opt-in, and it has to
+    beat the element rule or the class does nothing.
+    """
+    css = strip_comments(source("_page-style.css.j2"))
+    print_css = css.split("@media print", 1)[1]
+    kept = re.search(
+        r"pre,\s*blockquote,\s*table,\s*figure\s*\{([^}]*)\}",
+        print_css,
+        re.S,
+    )
+    assert kept and "page-break-inside: avoid" in kept.group(1)
+    opted = re.search(
+        r"pre\.page-split,\s*blockquote\.page-split,\s*table\.page-split,\s*"
+        r"figure\.page-split\s*\{([^}]*)\}",
+        print_css,
+        re.S,
+    )
+    assert opted, "print CSS has no .page-split opt-in"
+    body = opted.group(1)
+    assert "page-break-inside: auto" in body
+    assert "break-inside: auto" in body
+    assert print_css.index("page-break-inside: avoid") < print_css.index("pre.page-split")
+
+
 def test_the_control_is_hidden_in_print():
     css = strip_comments(source("_page-style.css.j2"))
     print_blocks = re.findall(r"@media print[^{]*\{(.*?)\n    \}", css, re.S)

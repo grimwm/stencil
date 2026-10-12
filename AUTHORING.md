@@ -686,6 +686,17 @@ page cannot scroll, so a line that only scrolled would be cut off at the box's e
 for a line with no spaces in it too, such as a pasted URL. A ```` ```text ```` fence is therefore
 safe to use as an answer box: however long the answer typed into it, the PDF carries all of it.
 
+A printed listing, quote, table, or figure stays in one piece. One taller than the room left on
+the page moves to the next page rather than splitting. Add `page-split` when that block should
+start where it is and continue:
+
+````markdown
+```{.html .page-split}
+```
+````
+
+The same class works on a quote, a table, or a figure.
+
 ### Diagrams
 
 Mermaid blocks are rendered client-side and automatically wrapped in a `<figure>`. Always give a
