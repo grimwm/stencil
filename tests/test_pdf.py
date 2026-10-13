@@ -297,7 +297,7 @@ def test_the_document_pdf_header_extracts_as_words(header_pdf):
     text = spaced(header_pdf.pages[0].extract_text())
 
     assert "Author Ada Lovelace · Grace Hopper" in text, header_line(text, "Author")
-    assert "Issued Sep 05 · Due Sep 12 · 23:59 · Points 50 pts" in text, (
+    assert "Issued Sep 05 · Due Sep 12 · 23:59 Points 50 pts" in text, (
         header_line(text, "Issued")
     )
     assert "CS 425.001 · Fall 2026" in text, header_line(text, "425")

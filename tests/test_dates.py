@@ -241,6 +241,15 @@ def facts(soup) -> list[str]:
     return [" ".join(c.get_text().split()) for c in row.find_all(recursive=False)]
 
 
+# The gap before Points. 1.7.2 dropped the DOT there on purpose -- Points is
+# pushed to the right and a dot left the issued date reading as if something
+# followed it -- but it dropped the space with it, and the column gap on
+# .doc-facts is 0, so the header extracted as "23:59Points". The separator
+# element is still emitted, carrying only a non-breaking space, which `facts()`
+# normalizes away to an empty string.
+GAP = ""
+
+
 def test_the_facts_row_joins_issued_due_and_points(render_soup):
     soup = render_soup(
         "doc",
@@ -253,7 +262,7 @@ def test_the_facts_row_joins_issued_due_and_points(render_soup):
         "Issued Sep 01",
         "·",
         "Due Sep 12 · 23:59",
-        "·",
+        GAP,
         "Points 50 pts",
     ]
 
@@ -265,9 +274,9 @@ def test_the_facts_row_joins_issued_due_and_points(render_soup):
         ('due: 2026-09-12\n', ["Due Sep 12"]),
         ('points: 50\n', ["Points 50 pts"]),
         ('date: 2026-09-01\npoints: 50\n',
-         ["Issued Sep 01", "·", "Points 50 pts"]),
+         ["Issued Sep 01", GAP, "Points 50 pts"]),
         ('due: 2026-09-12\npoints: 50\n',
-         ["Due Sep 12", "·", "Points 50 pts"]),
+         ["Due Sep 12", GAP, "Points 50 pts"]),
     ],
 )
 def test_no_combination_strands_a_separator(render_soup, front_matter, expected):
@@ -299,7 +308,9 @@ def test_the_header_extracts_as_words_not_a_run_on(render_soup):
     )
     header = " ".join(soup.select_one("header.doc-title").get_text().split())
     assert "Author Ada Lovelace · Grace Hopper" in header
-    assert "Issued Sep 01 · Due Sep 12 · 23:59 · Points 50 pts" in header
+    assert "Issued Sep 01 · Due Sep 12 · 23:59 Points 50 pts" in header
     # Nothing anywhere in the header is jammed against a separator or a label.
-    for jammed in ["·D", "·P", "·I", "AuthorA"]:
+    # "59Points" is the 1.7.2 regression: Points carries no dot, so the only
+    # thing keeping it off the previous fact is the space the separator holds.
+    for jammed in ["·D", "·P", "·I", "AuthorA", "59Points"]:
         assert jammed not in header, f"{jammed!r} is jammed in: {header}"

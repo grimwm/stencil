@@ -361,3 +361,114 @@ def test_whitespace_and_tilde_and_package_sources_are_covered():
         }}},
     )
     assert context["package_sources"] == ["htdocs"]
+
+
+# ---------------------------------------------------------------------------
+# stn-bka: the stamp is a generated file, and all three consumers of that fact
+# were blind to it.
+#
+# The Makefile writes `.stencil-<name>.stamp` per hook, in the package
+# directory. `package_entries` did not name it, and that function feeds the
+# managed .gitignore section, `clean`, and the per-package manifest -- so git
+# offered the stamps to the author as untracked, `clean` left them behind, and
+# the manifest did not record them. Found in cs425, which had worked around it
+# with a hand-written ignore entry outside the stencil markers.
+#
+# WHY THESE ASSERT ON THE STAMP AND NOT ON THE HOOK'S `outputs`: the outputs
+# are the AUTHOR'S files. cs425's figures are committed sources that a
+# generator happens to write. Putting them in the managed section would ignore
+# a repository's own tracked files, and handing them to `clean` would delete
+# them. The last test here is the guard on that boundary.
+
+
+STAMPED = [{"run": "sh gen.sh", "outputs": "figures/*.txt", "inputs": "gen.sh"}]
+
+
+def test_the_stamp_is_a_generated_file(demo_config):
+    """get_generated_files feeds both the managed .gitignore section and
+    `clean`. This is the assertion both of those inherit."""
+    from stencil.generate import get_generated_files
+
+    config = demo_config
+    config["packages"]["demo"]["pre_build"] = STAMPED
+
+    # demo_config declares `output_dir: out`, so every entry carries it
+    # (stn-jl3). Asserting on the unprefixed path would pass against a
+    # section that ignores nothing stencil writes.
+    assert "out/demo/.stencil-pre-build-0.stamp" in get_generated_files(config)
+
+
+def test_a_named_hooks_stamp_follows_its_name(demo_config):
+    """The default name is positional; a named hook is what consumers write.
+    If these two ever disagree, the Makefile writes one path and git ignores
+    another."""
+    from stencil.generate import get_generated_files
+
+    config = demo_config
+    config["packages"]["demo"]["pre_build"] = [dict(STAMPED[0], name="figures-cqa")]
+
+    assert "out/demo/.stencil-figures-cqa.stamp" in get_generated_files(config)
+
+
+def test_the_template_and_the_entry_spell_the_stamp_the_same_way(demo_config):
+    """One spelling, two readers. The bug was that `.stencil-<name>.stamp`
+    lived only in Makefile-doc.j2, so nothing else could see it."""
+    from stencil.generate import get_template_context
+
+    context = get_template_context("demo", demo_config | {
+        "packages": {"demo": {"package_type": "doc", "docs": ["g.md"],
+                              "pre_build": [dict(STAMPED[0], name="figs")]}},
+    })
+    assert context["pre_build"][0]["stamp"] == ".stencil-figs.stamp"
+
+
+def test_the_manifest_records_the_stamp(demo_config, generate_package):
+    """A manifest-driven clean can only remove what the manifest names."""
+    import json
+
+    from stencil.generate import MANIFEST_NAME
+
+    config = demo_config
+    config["packages"]["demo"]["pre_build"] = [dict(STAMPED[0], name="figs")]
+    package = generate_package(config)
+
+    manifest = json.loads((package / MANIFEST_NAME).read_text())
+    assert ".stencil-figs.stamp" in manifest["entries"]
+
+
+def test_the_hooks_outputs_are_not_claimed_as_generated(demo_config):
+    """The boundary. `outputs` names the author's files -- cs425's figures are
+    committed sources -- so they must stay out of the managed .gitignore
+    section and out of `clean`. Only the stamp is stencil's."""
+    from stencil.generate import get_generated_files
+
+    config = demo_config
+    config["packages"]["demo"]["pre_build"] = STAMPED
+
+    entries = get_generated_files(config)
+    assert not [e for e in entries if "figures/" in e], entries
+
+
+def test_clean_removes_the_stamp_and_leaves_the_outputs(hooked):
+    """End to end, through the real CLI, because this is the pair that
+    matters: the stamp is stencil's bookkeeping and must go, the files the
+    hook produced are the author's and must not.
+
+    A `clean` that removed the outputs would delete cs425's committed figures,
+    which is a worse bug than the one being fixed.
+    """
+    from test_cli import run_cli
+
+    config_dir = hooked.parent.parent
+    assert (config_dir / ".config.yaml").is_file(), "setup: no config to clean from"
+
+    assert "GENERATOR-RAN" in run_make(hooked).stdout, "setup: the hook did not run"
+    stamp = hooked / ".stencil-pre-build-0.stamp"
+    figure = hooked / "figures" / "f1.txt"
+    assert stamp.is_file() and figure.is_file(), "setup: nothing was produced"
+
+    result = run_cli("clean", "demo", cwd=config_dir)
+    assert result.returncode == 0, result.stderr
+
+    assert not stamp.exists(), "clean left the hook's stamp behind"
+    assert figure.is_file(), "clean deleted a file the hook produced"
