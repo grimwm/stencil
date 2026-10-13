@@ -294,10 +294,26 @@ def test_every_byline_label_ends_in_a_non_breaking_space():
     characters does.
     """
     body = (TEMPLATES / "_doc-body.html.j2").read_text()
+    # SCOPED TO THE BYLINE, which is the subject of the rule above. 1.8.0's
+    # write-in lines reuse `doc-label` for a DIFFERENT thing: `$blanks$` is an
+    # author-supplied variable, so the template cannot put a literal `&#160;`
+    # inside it, and the gap it needs is on the sibling `doc-blank-line` span
+    # instead. Sweeping every `doc-label` in the file collected that span as a
+    # fifth label and failed on the count -- a false red that said nothing
+    # about the PDF text layer this test exists to protect.
+    #
+    # The two divs are matched separately rather than as one span of the file:
+    # neither nests a div, so a non-greedy `</div>` stops in the right place,
+    # and anything added between them cannot drift into the sample.
+    byline_divs = re.findall(r'<div class="doc-(?:meta|facts)">.*?</div>', body, re.S)
+    assert len(byline_divs) == 2, (
+        f"expected the doc-meta and doc-facts divs, found {len(byline_divs)}; "
+        "a rename here would otherwise make this test assert nothing"
+    )
     # re.S because pandoc templates are hand-wrapped and a label could be split
     # across lines; a pattern that quietly matched none of them, or two of the
     # four, would make this assert nothing.
-    labels = re.findall(r'<span class="doc-label">(.*?)</span>', body, re.S)
+    labels = re.findall(r'<span class="doc-label">(.*?)</span>', "".join(byline_divs), re.S)
     assert len(labels) == 4, (
         f"expected the four byline labels, found {len(labels)}: {labels}"
     )
