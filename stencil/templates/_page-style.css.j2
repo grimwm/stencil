@@ -595,9 +595,12 @@
       accent-color: var(--accent);
     }
 
-    /* Code: mono font */
+    /* Code: mono font, with its programming ligatures off. JetBrains Mono
+       draws != as a slashed equals and <= as the math symbol; a handout
+       teaching someone to type the operator has to show the two keys. */
     code, pre {
       font-family: var(--font-mono);
+      font-variant-ligatures: none;
     }
 
     pre {
