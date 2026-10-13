@@ -11,6 +11,7 @@ How the version gets bumped is written down in
 
 ## 1.15.0
 
+- **The printed header no longer jams `Points` against the fact before it.** 1.7.2 dropped the middot there deliberately, but dropped the space with it, and the facts row has no column gap: `pdftotext` and a copy-paste both read `23:59Points 50 pts`, and below 40rem it ran together on screen too. The dot stays gone; the space is back, on the same condition, so a lone points total still leads with nothing. A deck byline is unaffected. Regenerate to pick it up.
 - **A `pre_build` stamp is a generated file.** The Makefile writes `.stencil-<name>.stamp` per hook, but nothing else knew it existed: git offered the stamps to the author as untracked, `clean` left them behind, and the per-package manifest did not record them. The stamp name now lives on the normalized step, so the template and `package_entries` read one spelling. A hook's `outputs` are still the author's files and are deliberately untouched by both the managed section and `clean`. Run `stencil install` and regenerate to pick it up.
 
 ## 1.14.0
