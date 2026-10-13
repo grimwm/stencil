@@ -9,6 +9,10 @@ and the closed epics in `.beads/issues.jsonl` are the readable index.
 How the version gets bumped is written down in
 [AGENTS.md](AGENTS.md#cutting-a-release), not here.
 
+## 1.14.0
+
+- **Code shows the characters you typed.** The code face's programming ligatures are off, so `!=`, `<=`, `>=`, `===`, `&&` and `||` print as their keys rather than as a slashed equals, the math symbols, or joined glyphs. Math is MathML in its own face and is unaffected. Regenerate to pick it up.
+
 ## 1.13.0
 
 - **`make check-access` checks every generated page, and `D=` limits it to one.** It was globbing HTML in the package root, so a page in a subdirectory was never opened and `D=exams/midterm.md` changed nothing. It now names each page the way `check-pdf` names its PDFs. Regenerate to pick it up.
