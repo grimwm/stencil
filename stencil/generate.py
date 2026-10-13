@@ -878,6 +878,15 @@ def get_template_context(
                 "outputs": outputs,
                 "inputs": inputs,
                 "name": name,
+                # The stamp is a GENERATED FILE, so it is named here rather
+                # than only in Makefile-doc.j2 (stn-bka). package_entries
+                # reads this key, which is what puts the stamp into the
+                # managed .gitignore section, into `clean`, and into the
+                # manifest; the template reads the same key for the Make
+                # variable it assigns. Spelling `.stencil-<name>.stamp` in
+                # the template alone is how it came to be written by every
+                # build and seen by none of the three.
+                "stamp": f".stencil-{name}.stamp",
             }
         )
     # Where this package's build products go, relative to the package
@@ -4061,6 +4070,24 @@ def package_entries(
         brand_image = brand_image_path(context.get("config_brand"))
         if brand_image:
             entries.add(Path(brand_image).name)
+
+    # Each pre_build hook's stamp. The generated Makefile writes one per hook
+    # in the package directory, so it is this package's output exactly the way
+    # a rendered template is, and all three consumers of this function were
+    # blind to it (stn-bka): git offered the stamps as untracked, `clean` left
+    # them, and the manifest did not record them.
+    #
+    # Read from the normalized step rather than rebuilt from the name here.
+    # Deriving `.stencil-<name>.stamp` in this function as well as in
+    # Makefile-doc.j2 is the drift this docstring already names twice; the
+    # normalization in get_template_context is the one place that spells it.
+    #
+    # NOT the hook's `outputs`. Those are the author's files -- figures a
+    # generator wrote, committed on purpose -- and naming them here would put
+    # a repository's own committed sources into the managed .gitignore section
+    # and hand them to `clean`.
+    for step in context.get("pre_build", []):
+        entries.add(step["stamp"])
 
     # docs and slides generate .html files from .md files, and `make pdf`
     # prints each of those to a .pdf beside it (glob for feature variants)

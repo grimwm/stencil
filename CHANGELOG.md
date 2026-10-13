@@ -9,6 +9,10 @@ and the closed epics in `.beads/issues.jsonl` are the readable index.
 How the version gets bumped is written down in
 [AGENTS.md](AGENTS.md#cutting-a-release), not here.
 
+## 1.15.0
+
+- **A `pre_build` stamp is a generated file.** The Makefile writes `.stencil-<name>.stamp` per hook, but nothing else knew it existed: git offered the stamps to the author as untracked, `clean` left them behind, and the per-package manifest did not record them. The stamp name now lives on the normalized step, so the template and `package_entries` read one spelling. A hook's `outputs` are still the author's files and are deliberately untouched by both the managed section and `clean`. Run `stencil install` and regenerate to pick it up.
+
 ## 1.14.0
 
 - **Code shows the characters you typed.** The code face's programming ligatures are off, so `!=`, `<=`, `>=`, `===`, `&&` and `||` print as their keys rather than as a slashed equals, the math symbols, or joined glyphs. Math is MathML in its own face and is unaffected. Regenerate to pick it up.

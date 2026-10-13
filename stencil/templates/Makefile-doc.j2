@@ -191,7 +191,7 @@ OUTPUT_SUFFIX := $(if $(WITH),$(addprefix -,$(subst $(comma),-,$(WITH))),)
 # Failure stops the build. A document built from stale figures is the defect
 # being fixed, so a hook that cannot run must not be a warning.
 {% for step in pre_build %}
-{{ step.name | upper | replace('-', '_') }}_STAMP := .stencil-{{ step.name }}.stamp
+{{ step.name | upper | replace('-', '_') }}_STAMP := {{ step.stamp }}
 
 .PHONY: {{ step.name }}
 {{ step.name }}:
