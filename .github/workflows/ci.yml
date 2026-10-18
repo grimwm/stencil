@@ -30,7 +30,7 @@ jobs:
       matrix:
         python-version: ["3.10", "3.11", "3.12", "3.13"]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       # The tracker export lives on the beads-export branch (foundry-tqd), not
       # main; tests/test_export_hygiene.py scans that copy.
@@ -51,7 +51,7 @@ jobs:
     name: pytest (containers)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       # The tracker export lives on the beads-export branch (foundry-tqd), not
       # main; tests/test_export_hygiene.py scans that copy.
@@ -122,7 +122,7 @@ jobs:
     name: pre-commit
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       # The tracker export lives on the beads-export branch (foundry-tqd), not
       # main; tests/test_export_hygiene.py scans that copy.
